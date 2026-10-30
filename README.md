@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 202 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.0.1 (versionCode 2) |
+| **Version** | 1.0.2 (versionCode 3) |
 
 ---
 
@@ -19,7 +19,7 @@ Cut a person or object out of a photo, then put it on a colour, a gradient, a bl
 
 - **Auto** — one tap. Finds the background from the border, floods it out, and snaps the edge back at full resolution. Objects standing in the background (a chair, a plant, a second person) stay — see [Objects inside the background](#objects-inside-the-background).
 - **Wand** — tap any colour to knock it out (tolerance adjustable).
-- **Erase / Restore** — paint with a finger, brush size up to 140 px.
+- **Erase / Restore / Keep** — paint with a finger, brush size up to 140 px. **Keep** protects an object so nothing can remove it.
 - **Edge Grow / Shrink / Smooth** — fix a halo or a ragged cut.
 - **Subject controls** — size, position, opacity, flip, white outline, drop shadow.
 - **Canvas sizes** — original, 1:1, 4:5, 9:16, 16:9.
@@ -101,6 +101,18 @@ And once the background is gone, the new one goes behind **every** object, not j
 
 ![switch](screenshots/11-refine-english.jpg)
 
+### The Keep brush — the guaranteed one
+
+Automatic removal is a guess. *Keep* is not. Paint over anything with the Keep tool and it is locked: the flood cannot cross it, Auto cannot take it, Grow/Shrink/Invert/Smooth all respect it. It survives even at maximum tolerance.
+
+| Keep selected, painted over the object | Auto at tolerance 110 — object survives, everything else gone |
+|---|---|
+| ![keep](screenshots/14-keep-tool.jpg) | ![kept](screenshots/15-keep-new-background.jpg) |
+
+What you paint stays, halo included — so paint tight. If you painted too much, switch to **Erase** and go over the extra: erasing clears the protection as well as the pixels. Keep strokes are part of the undo history, so `Undo` takes the protection back too.
+
+**How to use it for your case:** Keep the object → Auto → the object and its own edges are untouched → *Background* → pick a colour, gradient or photo. The new background goes behind the object.
+
 Honest limitation: a soft out-of-focus highlight and a soft-edged object look identical to a pixel test. With the switch **on**, an out-of-focus highlight in the background is kept, because the app would rather keep an object than delete one. Tap it away with the Wand — that is what the Wand is for.
 
 ### Smaller fixes
@@ -124,7 +136,7 @@ Verified in headless Chrome: load → auto → wand → erase → undo → redo 
 
 Download [`GlassCut.apk`](GlassCut.apk) on the phone, tap it, allow "install unknown apps" for your browser or file manager once. Android 7.0 (API 24) or newer.
 
-Same signing key as 1.0.0, so 1.0.1 installs straight over it — no uninstall needed. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate:
+Same signing key as 1.0.0/1.0.1, so 1.0.2 installs straight over it — no uninstall needed. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate:
 
 ```
 c8a55acee2eecab868c2986c25f8016fb041a418d08ce944fa9d44b03d35b01f
