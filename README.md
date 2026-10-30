@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 202 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.0.0 (versionCode 1) |
+| **Version** | 1.0.1 (versionCode 2) |
 
 ---
 
@@ -17,7 +17,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 
 Cut a person or object out of a photo, then put it on a colour, a gradient, a blurred version of the original, or another photo of your own.
 
-- **Auto** — one tap. Finds the background from the border, floods it out, and snaps the edge back at full resolution.
+- **Auto** — one tap. Finds the background from the border, floods it out, and snaps the edge back at full resolution. Objects standing in the background (a chair, a plant, a second person) stay — see [Objects inside the background](#objects-inside-the-background).
 - **Wand** — tap any colour to knock it out (tolerance adjustable).
 - **Erase / Restore** — paint with a finger, brush size up to 140 px.
 - **Edge Grow / Shrink / Smooth** — fix a halo or a ragged cut.
@@ -80,6 +80,29 @@ Opaque pixel coverage on the same test photo: **70 % → 31 %**, with the subjec
 |---|---|
 | ![before](screenshots/before-01-old-cutout.jpg) | ![cutout](screenshots/03-cutout.jpg) |
 
+## Objects inside the background
+
+The first version kept only the **largest** blob and threw away every other island it found. On a photo with a plant, a stool and a ball, the plant survived and everything else vanished — the exact thing a background remover must not do.
+
+1.0.1 keeps them. Two changes:
+
+1. **A second flood pass at 1.7× tolerance**, seeded from the background that was already removed. Shadowed patches, bokeh rims and other off-shade pieces of the *same* background get absorbed, because they sit within reach of a background colour.
+2. **A smarter island rule.** Under the new *Objects bachao* switch (on by default) an island is only dropped when it is a speck (under 0.15% of the photo) or when its average colour is within 1.15× tolerance of a background colour — i.e. it really is leftover background. Anything else survives, whatever its size or position.
+
+| 1.0.0 — only the plant survived | 1.0.1 — everything survived |
+|---|---|
+| ![lost](screenshots/before-03-objects-lost.jpg) | ![kept](screenshots/12-objects-kept.jpg) |
+
+And once the background is gone, the new one goes behind **every** object, not just the main subject:
+
+![new background](screenshots/13-objects-new-background.jpg)
+
+**The switch.** *Refine → Objects bachao*. Leave it on and the app keeps everything that isn't background; turn it off for the old behaviour, where only the main subject is kept. Turn it off for portraits where you only want the person and the bokeh behind them can go. The switch lives in the Refine sheet, so the top bar and the dock are unchanged.
+
+![switch](screenshots/11-refine-english.jpg)
+
+Honest limitation: a soft out-of-focus highlight and a soft-edged object look identical to a pixel test. With the switch **on**, an out-of-focus highlight in the background is kept, because the app would rather keep an object than delete one. Tap it away with the Wand — that is what the Wand is for.
+
 ### Smaller fixes
 
 - **Undo/redo could corrupt state** — the edge-smooth pass read from the live mask while writing to it.
@@ -90,9 +113,10 @@ Opaque pixel coverage on the same test photo: **70 % → 31 %**, with the subjec
 - **Language toggle ate whitespace** — text nodes were replaced with trimmed strings, shifting the layout on every switch. Only the words are swapped now.
 - **Pointer capture was never released**, so a stroke could stick after leaving the canvas; `pointerleave` now ends it.
 - **Memory** — undo history trimmed to 15 full-resolution masks.
+- **Objects in the background were deleted** — the island filter kept only the biggest blob. Fixed in 1.0.1, see above.
 - **Safe areas** — the page reads `--sat` / `--sab` CSS variables, which the Android shell feeds from real window insets, so the header clears a notch and the dock clears the gesture bar.
 
-Verified in headless Chrome: load → auto → wand → erase → undo → redo → reset → re-cut → save, with zero console errors, and the saved file checked on disk.
+Verified in headless Chrome: load → auto → wand → erase → undo → redo → reset → re-cut → save → language switch → close, with zero console errors, and the saved file checked on disk.
 
 ---
 
@@ -100,7 +124,7 @@ Verified in headless Chrome: load → auto → wand → erase → undo → redo 
 
 Download [`GlassCut.apk`](GlassCut.apk) on the phone, tap it, allow "install unknown apps" for your browser or file manager once. Android 7.0 (API 24) or newer.
 
-Signed with a self-signed 2048-bit RSA key, v1+v2+v3 signatures, validity 30 years. SHA-256 of the certificate:
+Same signing key as 1.0.0, so 1.0.1 installs straight over it — no uninstall needed. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate:
 
 ```
 c8a55acee2eecab868c2986c25f8016fb041a418d08ce944fa9d44b03d35b01f

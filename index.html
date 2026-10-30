@@ -171,7 +171,9 @@ input[type=range]::-moz-range-thumb{width:26px;height:26px;border:0;border-radiu
    <button class="tile" id="bRst"><svg class="i"><use href="#i-reset"/></svg>Reset</button>
    <button class="tile" id="bCmp"><svg class="i"><use href="#i-eye"/></svg>Hold: Original</button>
   </div>
-  <div class="sub">Tip</div><div style="font-size:13px;opacity:.85;line-height:1.45">Bacha hua background Wand se hatao, kinare Erase aur Restore se theek karo. Kinare kharab dikhein to Shrink ya Smooth try karo.</div>
+  <div class="sub">Objects</div>
+  <div class="lrow"><span>Objects bachao</span><button class="swt" id="tKeep" role="switch" aria-checked="true"><i></i></button></div>
+  <div class="sub">Tip</div><div style="font-size:13px;opacity:.85;line-height:1.45">Bacha hua background Wand se hatao, kinare Erase aur Restore se theek karo. Kinare kharab dikhein to Shrink ya Smooth try karo. Objects bachao ON rehne se background ke andar pade objects bhi bache rehte hain.</div>
  </div></section>
 
  <section class="sheet glass" id="shOpt"><div class="grab"><i></i></div><div class="sc">
@@ -205,13 +207,13 @@ const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],mk=
 const cv=$('#cv'),cx=cv.getContext('2d'),stage=$('#stage'),win=$('#win'),root=document.documentElement.style;
 const fgc=mk(),fgx=fgc.getContext('2d'),origc=mk(),sm=mk(),tmp=mk(),outc=mk(),bgb=mk();
 let W=0,H=0,CW=0,CH=0,od=null,fgi=null,mask=null,mask0=null,undo=[],redo=[],mode='erase',bg={t:'none'},bgImg=null;
-let tol=40,feather=2,brush=36,ratio='0',fmt='png',showOrig=false,drawing=false,last=null,raf=0,fastReq=false,rt=0,tt=0;
+let tol=40,feather=2,brush=36,keepObj=1,ratio='0',fmt='png',showOrig=false,drawing=false,last=null,raf=0,fastReq=false,rt=0,tt=0;
 let mver=0,fgKey='',outKey='',softM=null,softKey='',bgKey='',ovUrl=null;
 const P={s:100,x:0,y:0,f:1,sh:0,line:0,bl:8,op:100};
 const COLORS=['#ffffff','#f2f2f7','#000000','#ff453a','#ff9f0a','#ffd60a','#32d74b','#64d2ff','#0a84ff','#5e5ce6','#bf5af2','#ff375f'];
 const GRADS=[['#ff9a9e','#fad0c4'],['#a18cd1','#fbc2eb'],['#43e97b','#38f9d7'],['#4facfe','#00f2fe'],['#fa709a','#fee140'],['#0f2027','#2c5364'],['#f093fb','#f5576c'],['#667eea','#764ba2']];
 let lang='hi';
-const EN={'Photo choose karo':'Choose a photo','Background hatao ya naya background lagao. Sab kuch aapke phone me hi hota hai.':'Remove a background or add a new one. Everything happens on your device.','Photo chuno':'Pick photo','Apni photo':'My photo','Photo ko long-press karke save karo':'Long-press the photo to save it','Band karo':'Close','Bacha hua background Wand se hatao, kinare Erase aur Restore se theek karo. Kinare kharab dikhein to Shrink ya Smooth try karo.':'Remove leftover background with Wand, then clean the edges with Erase and Restore. If edges look rough, try Shrink or Smooth.','Pehle photo choose karo':'Choose a photo first','Auto dabao ya Wand / Erase use karo':'Tap Auto, or use Wand / Erase','Photo par tap karo, same color hat jayega':'Tap the photo to remove similar color','Ungli se mitao':'Erase with your finger','Ungli se wapas lao':'Restore with your finger','Background lag gaya':'Background applied','Photo load nahi hui':'Could not load the photo','Background clear nahi hai, Wand try karo':'Background is not clear, try Wand','Kuch nahi hata. Tolerance badhao ya Wand use karo':'Nothing removed. Increase tolerance or use Wand','Ho gaya! Erase / Restore se saaf karo':'Done! Clean up with Erase / Restore','Reset ho gaya':'Reset done','Undo ke liye kuch nahi':'Nothing to undo','Redo ke liye kuch nahi':'Nothing to redo','Save nahi hua':'Save failed','Save ho gaya':'Saved'};
+const EN={'Photo choose karo':'Choose a photo','Background hatao ya naya background lagao. Sab kuch aapke phone me hi hota hai.':'Remove a background or add a new one. Everything happens on your device.','Photo chuno':'Pick photo','Apni photo':'My photo','Photo ko long-press karke save karo':'Long-press the photo to save it','Band karo':'Close','Bacha hua background Wand se hatao, kinare Erase aur Restore se theek karo. Kinare kharab dikhein to Shrink ya Smooth try karo. Objects bachao ON rehne se background ke andar pade objects bhi bache rehte hain.':'Remove leftover background with Wand, then clean the edges with Erase and Restore. If edges look rough, try Shrink or Smooth.','Pehle photo choose karo':'Choose a photo first','Auto dabao ya Wand / Erase use karo':'Tap Auto, or use Wand / Erase','Photo par tap karo, same color hat jayega':'Tap the photo to remove similar color','Ungli se mitao':'Erase with your finger','Ungli se wapas lao':'Restore with your finger','Background lag gaya':'Background applied','Photo load nahi hui':'Could not load the photo','Background clear nahi hai, Wand try karo':'Background is not clear, try Wand','Kuch nahi hata. Tolerance badhao ya Wand use karo':'Nothing removed. Increase tolerance or use Wand','Ho gaya! Erase / Restore se saaf karo':'Done! Clean up with Erase / Restore','Reset ho gaya':'Reset done','Undo ke liye kuch nahi':'Nothing to undo','Redo ke liye kuch nahi':'Nothing to redo','Save nahi hua':'Save failed','Save ho gaya':'Saved','Objects bachao':'Keep objects','Objects bachaye jayenge':'Objects will be kept','Sirf main object rahega':'Main object only'};
 const tr=s=>lang==='en'&&EN[s]?EN[s]:s;
 const toast=m=>{const t=$('#toast');t.textContent=tr(m);t.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('show'),2300)};
 const need=f=>(...a)=>{if(!od){toast('Pehle photo choose karo');return}f(...a)};
@@ -261,6 +263,7 @@ const applyLang=(l,init)=>{lang=l;const w=document.createTreeWalker(document.bod
 seg('langs',v=>applyLang(v));
 try{const sl=localStorage.getItem('gc-lang');if(sl)applyLang(sl,true)}catch(_){}
 sw('tFlip',v=>{P.f=v?-1:1;sched(false)});sw('tSh',v=>{P.sh=v?1:0;sched(false)});
+sw('tKeep',v=>{keepObj=v?1:0;toast(v?'Objects bachaye jayenge':'Sirf main object rahega')});
 
 /* background swatches */
 const noSw=()=>$$('.sw').forEach(s=>s.classList.remove('on'));
@@ -364,7 +367,15 @@ const cutout=()=>{const f=4,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.ro
  for(let k=0;k<seeds.length;k++)add(seeds[k]);
  while(sp){const i=st[--sp];bg[i]=1;const x=i%nw;
   if(x>0)add(i-1);if(x<nw-1)add(i+1);if(i>=nw)add(i-nw);if(i<N-nw)add(i+nw)}
- /* drop leftover islands: keep only the biggest foreground blob (the subject) */
+ /* doosra pass: background ke shade-off hisse (shadow, bokeh rim) bhi le lo,
+    par asli object tak mat jao - uska rang har bg colour se kaafi door hota hai */
+ const tb=tol*1.7,t2b=tb*tb,vis2=new Uint8Array(N),st2=new Int32Array(N);let gp=0;
+ const ok2=i=>{const p=i*4;for(let k=0;k<refs.length;k++){const c=refs[k],a=sd[p]-c[0],b=sd[p+1]-c[1],d=sd[p+2]-c[2];if(a*a+b*b+d*d<=t2b)return true}return false};
+ for(let i=0;i<N;i++)if(bg[i]){vis2[i]=1;st2[gp++]=i}
+ while(gp){const i=st2[--gp],x=i%nw;
+  const grow=k=>{if(!vis2[k]&&ok2(k)){vis2[k]=1;bg[k]=1;st2[gp++]=k}};
+  if(x>0)grow(i-1);if(x<nw-1)grow(i+1);if(i>=nw)grow(i-nw);if(i<N-nw)grow(i+nw)}
+ /* island cleanup: background ke andar pade objects bache rahein */
  const lab=new Int32Array(N).fill(-1),q3=new Int32Array(N),sz=[];
  for(let i=0;i<N;i++){if(bg[i]||lab[i]>=0)continue;
   const id=sz.length;let h=0,t=0;lab[i]=id;q3[t++]=i;let n2=0;
@@ -372,8 +383,21 @@ const cutout=()=>{const f=4,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.ro
    const push=k=>{if(k>=0&&k<N&&!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=k}};
    if(x>0)push(j-1);if(x<nw-1)push(j+1);push(j-nw);push(j+nw)}
   sz.push(n2)}
- if(sz.length>1){let big=0;for(let k=1;k<sz.length;k++)if(sz[k]>sz[big])big=k;
-  for(let i=0;i<N;i++)if(lab[i]>=0&&lab[i]!==big&&sz[lab[i]]<sz[big]*0.5)bg[i]=1}
+ if(sz.length>1){
+  const total=nw*nh,drop=new Uint8Array(sz.length);
+  const sr=new Float64Array(sz.length),sg=new Float64Array(sz.length),sb=new Float64Array(sz.length);
+  for(let i=0;i<N;i++){const id=lab[i];if(id<0)continue;const p=i*4;sr[id]+=sd[p];sg[id]+=sd[p+1];sb[id]+=sd[p+2]}
+  let big=0;for(let k=1;k<sz.length;k++)if(sz[k]>sz[big])big=k;
+  for(let k=0;k<sz.length;k++){
+   if(k===big)continue;
+   const fr=sz[k]/total,n3=sz[k],mr=sr[k]/n3,mg=sg[k]/n3,mb=sb[k]/n3;
+   let dm=1e9;
+   for(let j=0;j<refs.length;j++){const c=refs[j],a=mr-c[0],b2=mg-c[1],c2=mb-c[2],d=Math.sqrt(a*a+b2*b2+c2*c2);if(d<dm)dm=d}
+   /* keepObj: sirf specks, background-jaisi haze aur soft bokeh hatti hai, asli object rehta hai.
+      warna: sirf sabse bada blob rehta hai (purana behaviour). */
+   drop[k]=keepObj?((fr<0.0015||dm<tol*1.15)?1:0):(sz[k]<sz[big]*0.5?1:0)}
+  for(let i=0;i<N;i++){const id=lab[i];if(id>=0&&drop[id])bg[i]=1}
+ }
  const M=W*H,seen=new Uint8Array(M),q=new Int32Array(M),lev=new Uint8Array(M);
  const step=Math.max(5,Math.round(5+tol*0.22)),s2=step*step,K=7;
  const near=(i,j)=>{const p=i*4,r=j*4,a=od[p]-od[r],b=od[p+1]-od[r+1],c=od[p+2]-od[r+2];return a*a+b*b+c*c<=s2};
@@ -459,7 +483,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
  if(a==='photo'){$('#fMain').click();return}
  if(!od){toast('Pehle photo choose karo');return}
  if(a==='auto')auto();else if(a==='bg')showSheet($('#shBg'));else if(a==='refine')showSheet($('#shRef'));else if(a==='save')save()};
-window.GlassCut={version:'1.0.0'};
+window.GlassCut={version:'1.0.1'};
 })();
 </script>
 </body>
