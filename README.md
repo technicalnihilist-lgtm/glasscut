@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 202 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.0.2 (versionCode 3) |
+| **Version** | 1.0.3 (versionCode 4) |
 
 ---
 
@@ -17,7 +17,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 
 Cut a person or object out of a photo, then put it on a colour, a gradient, a blurred version of the original, or another photo of your own.
 
-- **Auto** — one tap. Finds the background from the border, floods it out, and snaps the edge back at full resolution. Objects standing in the background (a chair, a plant, a second person) stay — see [Objects inside the background](#objects-inside-the-background).
+- **Auto runs by itself** — pick a photo and the background is already gone; open Background and choose. The Auto button is there if you want to run it again after changing tolerance. Finds the background from the border, floods it out, and snaps the edge back at full resolution. Objects standing in the background (a chair, a plant, a second person) stay — see [Objects inside the background](#objects-inside-the-background).
 - **Wand** — tap any colour to knock it out (tolerance adjustable).
 - **Erase / Restore / Keep** — paint with a finger, brush size up to 140 px. **Keep** protects an object so nothing can remove it.
 - **Edge Grow / Shrink / Smooth** — fix a halo or a ragged cut.
@@ -101,6 +101,22 @@ And once the background is gone, the new one goes behind **every** object, not j
 
 ![switch](screenshots/11-refine-english.jpg)
 
+## Background change is automatic
+
+The complaint that started 1.0.3: *pick an image, change its background, and leave the person exactly as they are.* Two things were in the way.
+
+**Auto did not run on its own.** You had to press Auto before the Background sheet did anything — until then the new background was painted *behind an opaque photo*, so nothing appeared to change. Now the cutout runs the moment a photo loads. Pick photo → background already gone → open Background → pick a colour, gradient, blur or your own image. One tap, and the person is untouched.
+
+![auto on load](screenshots/12-auto-on-load.jpg)
+
+**The edge was being eaten.** The final edge-snapping pass could creep 7 px into the subject at a soft boundary, which is what chewed hair and left a white halo around faces. It is now capped at 3 px with a tighter colour step, and the coarse pass runs at half resolution instead of a quarter.
+
+| before 1.0.3 — halo, chewed edge | 1.0.3 — clean edge |
+|---|---|
+| ![halo](screenshots/before-01-old-cutout.jpg) | ![clean](screenshots/03-cutout.jpg) |
+
+**What still needs a hand.** If the subject's hair or clothing is almost the same colour as the background, no colour-based flood can tell them apart — that is a job for the **Keep** brush: paint the hair once, press Auto, done. Honest limit, not a bug.
+
 ### The Keep brush — the guaranteed one
 
 Automatic removal is a guess. *Keep* is not. Paint over anything with the Keep tool and it is locked: the flood cannot cross it, Auto cannot take it, Grow/Shrink/Invert/Smooth all respect it. It survives even at maximum tolerance.
@@ -136,7 +152,7 @@ Verified in headless Chrome: load → auto → wand → erase → undo → redo 
 
 Download [`GlassCut.apk`](GlassCut.apk) on the phone, tap it, allow "install unknown apps" for your browser or file manager once. Android 7.0 (API 24) or newer.
 
-Same signing key as 1.0.0/1.0.1, so 1.0.2 installs straight over it — no uninstall needed. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate:
+Same signing key as every earlier build, so it installs straight over them — no uninstall needed. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate:
 
 ```
 c8a55acee2eecab868c2986c25f8016fb041a418d08ce944fa9d44b03d35b01f
