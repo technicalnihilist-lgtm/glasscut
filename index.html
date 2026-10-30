@@ -146,11 +146,12 @@ input[type=range]::-moz-range-thumb{width:26px;height:26px;border:0;border-radiu
   <div class="rowsw" id="cols"></div>
   <div class="sub">Gradients</div>
   <div class="rowsw" id="grads"></div>
-  <div class="tiles" style="grid-template-columns:repeat(2,1fr)">
+  <div class="tiles" style="grid-template-columns:repeat(3,1fr)">
    <button class="tile" id="bBgImg"><svg class="i"><use href="#i-photo"/></svg>Apni photo</button>
    <button class="tile" id="cBlur"><svg class="i"><use href="#i-drop"/></svg>Blur original</button>
+   <button class="tile" id="cBlue"><svg class="i"><use href="#i-spark"/></svg>Blue blur</button>
   </div>
-  <div class="rl"><span>Blur Amount</span><b id="sBlv"></b></div><input type="range" id="sBl" min="1" max="20" value="8">
+  <div class="rl"><span>Blur Amount</span><b id="sBlv"></b></div><input type="range" id="sBl" min="1" max="60" value="8">
   <div class="sub">Canvas size</div>
   <div class="seg glass" id="ratios" style="--n:5;--i:0"><i class="thumb"></i><button class="sg on" data-v="0">Original</button><button class="sg" data-v="1:1">1:1</button><button class="sg" data-v="4:5">4:5</button><button class="sg" data-v="9:16">9:16</button><button class="sg" data-v="16:9">16:9</button></div>
   <div class="sub">Subject</div>
@@ -215,7 +216,7 @@ const P={s:100,x:0,y:0,f:1,sh:0,line:0,bl:8,op:100};
 const COLORS=['#ffffff','#f2f2f7','#000000','#ff453a','#ff9f0a','#ffd60a','#32d74b','#64d2ff','#0a84ff','#5e5ce6','#bf5af2','#ff375f'];
 const GRADS=[['#ff9a9e','#fad0c4'],['#a18cd1','#fbc2eb'],['#43e97b','#38f9d7'],['#4facfe','#00f2fe'],['#fa709a','#fee140'],['#0f2027','#2c5364'],['#f093fb','#f5576c'],['#667eea','#764ba2']];
 let lang='hi';
-const EN={'Photo choose karo':'Choose a photo','Background hatao ya naya background lagao. Sab kuch aapke phone me hi hota hai.':'Remove a background or add a new one. Everything happens on your device.','Photo chuno':'Pick photo','Apni photo':'My photo','Photo ko long-press karke save karo':'Long-press the photo to save it','Band karo':'Close','Bacha hua background Wand se hatao, kinare Erase aur Restore se theek karo. Kinare kharab dikhein to Shrink ya Smooth try karo. Objects bachao ON rehne se background ke andar pade objects bhi bache rehte hain.':'Remove leftover background with Wand, then clean the edges with Erase and Restore. If edges look rough, try Shrink or Smooth.','Pehle photo choose karo':'Choose a photo first','Auto dabao ya Wand / Erase use karo':'Tap Auto, or use Wand / Erase','Photo par tap karo, same color hat jayega':'Tap the photo to remove similar color','Ungli se mitao':'Erase with your finger','Ungli se wapas lao':'Restore with your finger','Background lag gaya':'Background applied','Photo load nahi hui':'Could not load the photo','Background clear nahi hai, Wand try karo':'Background is not clear, try Wand','Kuch nahi hata. Tolerance badhao ya Wand use karo':'Nothing removed. Increase tolerance or use Wand','Ho gaya! Erase / Restore se saaf karo':'Done! Clean up with Erase / Restore','Reset ho gaya':'Reset done','Undo ke liye kuch nahi':'Nothing to undo','Redo ke liye kuch nahi':'Nothing to redo','Save nahi hua':'Save failed','Save ho gaya':'Saved','Objects bachao':'Keep objects','Object par ungli phero, wo kabhi nahi hatega':'Paint over the object, it will never be removed','Objects bachaye jayenge':'Objects will be kept','Sirf main object rahega':'Main object only'};
+const EN={'Photo choose karo':'Choose a photo','Background hatao ya naya background lagao. Sab kuch aapke phone me hi hota hai.':'Remove a background or add a new one. Everything happens on your device.','Photo chuno':'Pick photo','Apni photo':'My photo','Photo ko long-press karke save karo':'Long-press the photo to save it','Band karo':'Close','Bacha hua background Wand se hatao, kinare Erase aur Restore se theek karo. Kinare kharab dikhein to Shrink ya Smooth try karo. Objects bachao ON rehne se background ke andar pade objects bhi bache rehte hain.':'Remove leftover background with Wand, then clean the edges with Erase and Restore. If edges look rough, try Shrink or Smooth.','Pehle photo choose karo':'Choose a photo first','Auto dabao ya Wand / Erase use karo':'Tap Auto, or use Wand / Erase','Photo par tap karo, same color hat jayega':'Tap the photo to remove similar color','Ungli se mitao':'Erase with your finger','Ungli se wapas lao':'Restore with your finger','Background lag gaya':'Background applied','Photo load nahi hui':'Could not load the photo','Background clear nahi hai, Wand try karo':'Background is not clear, try Wand','Kuch nahi hata. Tolerance badhao ya Wand use karo':'Nothing removed. Increase tolerance or use Wand','Ho gaya! Erase / Restore se saaf karo':'Done! Clean up with Erase / Restore','Reset ho gaya':'Reset done','Undo ke liye kuch nahi':'Nothing to undo','Redo ke liye kuch nahi':'Nothing to redo','Save nahi hua':'Save failed','Save ho gaya':'Saved','Objects bachao':'Keep objects','Blur lag gaya':'Blur applied','Blue blur lag gaya - sirf insaan dikhega':'Blue blur applied - only the person shows','Object par ungli phero, wo kabhi nahi hatega':'Paint over the object, it will never be removed','Objects bachaye jayenge':'Objects will be kept','Sirf main object rahega':'Main object only'};
 const tr=s=>lang==='en'&&EN[s]?EN[s]:s;
 const toast=m=>{const t=$('#toast');t.textContent=tr(m);t.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('show'),2300)};
 const need=f=>(...a)=>{if(!od){toast('Pehle photo choose karo');return}f(...a)};
@@ -274,7 +275,13 @@ const noSw=()=>$$('.sw').forEach(s=>s.classList.remove('on'));
  $('#grads').innerHTML=GRADS.map((g,i)=>`<button class="sw" data-t="grad" data-v="${i}" style="background:linear-gradient(135deg,${g[0]},${g[1]})"></button>`).join('')})();
 document.addEventListener('click',e=>{const b=e.target.closest('button.sw');if(!b)return;noSw();b.classList.add('on');bg={t:b.dataset.t,v:b.dataset.v};render()});
 $('#cCol').oninput=function(){noSw();this.parentElement.classList.add('on');bg={t:'color',v:this.value};render()};
-$('#cBlur').onclick=need(()=>{noSw();bg={t:'blur'};render()});
+$('#cBlur').onclick=need(()=>{noSw();bg={t:'blur'};bgKey='';render();toast('Blur lag gaya')});
+$('#cBlue').onclick=need(()=>{noSw();const r=$('#sBl');r.value=48;r.dispatchEvent(new Event('input',{bubbles:true}));
+ bg={t:'bluetint'};bgKey='';
+ /* portrait mode: sirf insaan, background ka koi tukda nahi */
+ keepObj=0;const kk=$('#tKeep');if(kk)kk.setAttribute('aria-checked','false');
+ push();mask=mask0.slice();mver++;try{cutout()}catch(_){}
+ render();toast('Blue blur lag gaya - sirf insaan dikhega')});
 $('#bBgImg').onclick=()=>$('#fBg').click();
 $('#fBg').onchange=e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
  loadImg(f,im=>{bgImg=im;bg={t:'img'};bgKey='';noSw();render();toast('Background lag gaya')})};
@@ -318,10 +325,11 @@ const layer=fast=>{const soft=!fast&&feather>0,key=mver+(soft?'s'+feather:'h');i
  const d=fgi.data;for(let i=0,n=W*H;i<n;i++)d[i*4+3]=m[i];fgx.putImageData(fgi,0,0);fgKey=key};
 const xf=()=>[Math.min(CW/W,CH/H)*P.s/100,CW/2+P.x/100*CW,CH/2+P.y/100*CH];
 const cover=(c,im,iw,ih,w,h)=>{const k=Math.max(w/iw,h/ih),dw=iw*k,dh=ih*k;c.drawImage(im,(w-dw)/2,(h-dh)/2,dw,dh)};
-const blurBg=()=>{const k=CW+'|'+CH+'|'+P.bl;if(bgKey===k)return;
+const blurBg=()=>{const blue=bg.t==='bluetint',k=CW+'|'+CH+'|'+P.bl+'|'+(blue?1:0);if(bgKey===k)return;
  bgKey=k;const f=2+P.bl*1.6,sw=Math.max(2,CW/f|0),sh=Math.max(2,CH/f|0);sm.width=sw;sm.height=sh;
  const sx=sm.getContext('2d');sx.clearRect(0,0,sw,sh);cover(sx,origc,W,H,sw,sh);
- bgb.width=CW;bgb.height=CH;const bx=bgb.getContext('2d');bx.imageSmoothingEnabled=true;bx.imageSmoothingQuality='high';bx.clearRect(0,0,CW,CH);bx.drawImage(sm,0,0,CW,CH)};
+ bgb.width=CW;bgb.height=CH;const bx=bgb.getContext('2d');bx.imageSmoothingEnabled=true;bx.imageSmoothingQuality='high';bx.clearRect(0,0,CW,CH);bx.drawImage(sm,0,0,CW,CH);
+ if(blue){bx.globalAlpha=0.72;bx.fillStyle='#0a5cff';bx.fillRect(0,0,CW,CH);bx.globalAlpha=1}};
 const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
  if(src!==fgc){cx.save();cx.translate(t[1],t[2]);cx.scale(sx,t[0]);cx.drawImage(src,-W/2,-H/2);cx.restore();return}
  const tc=tmp.getContext('2d');tc.setTransform(1,0,0,1,0,0);tc.clearRect(0,0,CW,CH);tc.save();tc.translate(t[1],t[2]);tc.scale(sx,t[0]);tc.translate(-W/2,-H/2);
@@ -334,7 +342,7 @@ function render(fast){if(!od)return;layer(fast);cx.setTransform(1,0,0,1,0,0);cx.
  if(bg.t==='color'){cx.fillStyle=bg.v;cx.fillRect(0,0,CW,CH)}
  else if(bg.t==='grad'){const g=GRADS[bg.v],gr=cx.createLinearGradient(0,0,CW,CH);gr.addColorStop(0,g[0]);gr.addColorStop(1,g[1]);cx.fillStyle=gr;cx.fillRect(0,0,CW,CH)}
  else if(bg.t==='img'&&bgImg)cover(cx,bgImg,bgImg.naturalWidth,bgImg.naturalHeight,CW,CH);
- else if(bg.t==='blur'){blurBg();cx.drawImage(bgb,0,0)}
+ else if(bg.t==='blur'||bg.t==='bluetint'){blurBg();cx.drawImage(bgb,0,0)}
  if(showOrig){cx.clearRect(0,0,CW,CH);drawSubj(origc,fast);return}
  drawSubj(fgc,fast)}
 const sched=fast=>{if(fast)fastReq=true;if(!raf)raf=requestAnimationFrame(()=>{raf=0;const f=fastReq;fastReq=false;render(f)})};
@@ -489,7 +497,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
  if(a==='photo'){$('#fMain').click();return}
  if(!od){toast('Pehle photo choose karo');return}
  if(a==='auto')auto();else if(a==='bg')showSheet($('#shBg'));else if(a==='refine')showSheet($('#shRef'));else if(a==='save')save()};
-window.GlassCut={version:'1.0.3'};
+window.GlassCut={version:'1.0.4'};
 })();
 </script>
 </body>

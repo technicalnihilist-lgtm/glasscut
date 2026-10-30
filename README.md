@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 202 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.0.3 (versionCode 4) |
+| **Version** | 1.0.4 (versionCode 5) |
 
 ---
 
@@ -100,6 +100,24 @@ And once the background is gone, the new one goes behind **every** object, not j
 **The switch.** *Refine → Objects bachao*. Leave it on and the app keeps everything that isn't background; turn it off for the old behaviour, where only the main subject is kept. Turn it off for portraits where you only want the person and the bokeh behind them can go. The switch lives in the Refine sheet, so the top bar and the dock are unchanged.
 
 ![switch](screenshots/11-refine-english.jpg)
+
+## Blue blur — one tap, only the person
+
+The quickest result in the app, and the one that survives a bad cutout.
+
+**Background → Blue blur.** It does three things at once:
+
+1. Sets the blur amount to 48 — a 1/79 downscale, so the original background becomes an unreadable wash.
+2. Lays a strong blue tint (`#0a5cff` at 72%) over it.
+3. Switches to subject-only mode and re-cuts, so leftover background islands are dropped instead of floating in the blue.
+
+| Background sheet | Result |
+|---|---|
+| ![sheet](screenshots/16-blue-blur-sheet.jpg) | ![blue](screenshots/17-blue-blur-result.jpg) |
+
+The Blur Amount slider now goes to **60** instead of 20, so "Blur original" can also be pushed until nothing is recognisable — without the blue.
+
+Save works the same as always: PNG, JPG or WEBP into `Pictures/GlassCut`.
 
 ## Background change is automatic
 
