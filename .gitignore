@@ -1,0 +1,7 @@
+build/
+*.jks
+*.keystore
+jdk/
+sdk/
+tmp/
+hs_err*.log
