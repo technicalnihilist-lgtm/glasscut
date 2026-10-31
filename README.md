@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 202 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.0.4 (versionCode 5) |
+| **Version** | 1.0.5 (versionCode 6) |
 
 ---
 
@@ -101,6 +101,22 @@ And once the background is gone, the new one goes behind **every** object, not j
 
 ![switch](screenshots/11-refine-english.jpg)
 
+## 3D tilt, depth and 4D motion
+
+Three new sliders under **Options → 3D & Depth**. All three are baked into the saved file, not just the preview.
+
+| Control | What it actually does |
+|---|---|
+| **Depth** 0–100 | Subject scales up to +7%, the drop shadow deepens and moves, and a radial vignette darkens the background. This is what makes the person read as a separate layer instead of a sticker. |
+| **3D Tilt** −30…+30 | A perspective shear around the subject's own centre — a vertical-axis rotation, `cos` on the horizontal scale plus a `sin` shear, so it reads as 3D rather than as a skew. |
+| **4D Motion** 0–100 | Live parallax. The subject layer and the background move in opposite directions. Driven by `deviceorientation` when the phone reports it, otherwise a slow automatic sway. Runs at ~16 fps so it costs nothing while you edit. |
+
+| 3D & Depth controls | Result with depth 78, tilt 20, motion 60 |
+|---|---|
+| ![controls](screenshots/19-3d-depth-controls.jpg) | ![depth](screenshots/20-depth-effect.jpg) |
+
+Save captures whatever the effect is showing at that moment, so the exported PNG/JPG has the tilt, shadow and vignette in it.
+
 ## Blue blur — one tap, only the person
 
 The quickest result in the app, and the one that survives a bad cutout.
@@ -170,10 +186,10 @@ Verified in headless Chrome: load → auto → wand → erase → undo → redo 
 
 Download [`GlassCut.apk`](GlassCut.apk) on the phone, tap it, allow "install unknown apps" for your browser or file manager once. Android 7.0 (API 24) or newer.
 
-Same signing key as every earlier build, so it installs straight over them — no uninstall needed. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate:
+**This build has a new signing key** (the previous keystore was lost when the build sandbox was reset), so Android will refuse to install it over 1.0.4 — uninstall the old app once, then install. Certificate SHA-256 for 1.0.5 and later — no uninstall needed. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate:
 
 ```
-c8a55acee2eecab868c2986c25f8016fb041a418d08ce944fa9d44b03d35b01f
+a54d690d0191310ddefcbaefda073402eee96018f8e34b42ba6b04e4b81b069d
 ```
 
 ## Build it yourself
