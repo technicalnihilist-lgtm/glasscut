@@ -6,10 +6,10 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 
 | | |
 |---|---|
-| **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 202 KB, Android 7.0+ |
+| **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 206 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.0.5 (versionCode 6) |
+| **Version** | 1.1.7 (versionCode 7) |
 
 ---
 
@@ -186,10 +186,10 @@ Verified in headless Chrome: load → auto → wand → erase → undo → redo 
 
 Download [`GlassCut.apk`](GlassCut.apk) on the phone, tap it, allow "install unknown apps" for your browser or file manager once. Android 7.0 (API 24) or newer.
 
-**This build has a new signing key** (the previous keystore was lost when the build sandbox was reset), so Android will refuse to install it over 1.0.4 — uninstall the old app once, then install. Certificate SHA-256 for 1.0.5 and later — no uninstall needed. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate:
+**This build has a new signing key** (the keystore was lost again when the build sandbox was reset on 1 Nov 2026), so Android will refuse to install it over 1.1.6 or earlier — uninstall the old app once, then install. Certificate SHA-256 for 1.1.7 and later — no uninstall needed after this one. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate:
 
 ```
-a54d690d0191310ddefcbaefda073402eee96018f8e34b42ba6b04e4b81b069d
+6b75ef837103ce4c54660a8ac027f6a278517e0c2bcad1ae38fc1924a569bb5e
 ```
 
 ## Build it yourself

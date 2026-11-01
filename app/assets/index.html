@@ -379,12 +379,17 @@ const qr=()=>{sched(true);clearTimeout(rt);rt=setTimeout(()=>render(false),160)}
 const push=()=>{redo=[];undo.push([mask.slice(),keepMask.slice()]);if(undo.length>10)undo.shift()};
 /* keep mask ka respect: jo object protect kiya gaya hai wo kabhi na hate */
 const enforce=()=>{if(!keepMask)return;for(let i=0;i<mask.length;i++)if(keepMask[i])mask[i]=255};
-const flood=(seeds,refs,t)=>{const vis=new Uint8Array(W*H),st=new Int32Array(W*H),t2=t*t;let sp=0,cnt=0;
+/* scratch buffers: ek hi pair of arrays har wand tap me reuse hota hai (generation
+   stamp se reset free), pehle har tap par 5 bytes/pixel naya garbage banta tha */
+let FL=null;
+const flood=(seeds,refs,t)=>{const M=W*H;
+ if(!FL||FL.n!==M){FL={n:M,vis:new Int32Array(M),st:new Int32Array(M),g:0}}
+ const vis=FL.vis,st=FL.st,g=++FL.g,t2=t*t;let sp=0,cnt=0;
  const ok=i=>{if(keepMask&&keepMask[i])return false;const p=i*4;for(let k=0;k<refs.length;k++){const c=refs[k],a=od[p]-c[0],b=od[p+1]-c[1],d=od[p+2]-c[2];if(a*a+b*b+d*d<=t2)return true}return false};
- const add=j=>{if(!vis[j]){vis[j]=1;if(ok(j))st[sp++]=j}};
+ const add=j=>{if(vis[j]!==g){vis[j]=g;if(ok(j))st[sp++]=j}};
  for(let k=0;k<seeds.length;k++)add(seeds[k]);
  while(sp){const i=st[--sp],x=i%W;if(mask[i]){mask[i]=0;cnt++}
-  if(x>0)add(i-1);if(x<W-1)add(i+1);if(i>=W)add(i-W);if(i<W*H-W)add(i+W)}
+  if(x>0)add(i-1);if(x<W-1)add(i+1);if(i>=W)add(i-W);if(i<M-W)add(i+W)}
  mver++;return cnt};
 /* coarse-to-fine cutout: flood a downscaled copy, then snap the edge back at full res */
 const boxDown=(src,w,h,nw,nh)=>{const out=new Uint8ClampedArray(nw*nh*4),sx=w/nw,sy=h/nh;
@@ -394,43 +399,49 @@ const boxDown=(src,w,h,nw,nh)=>{const out=new Uint8ClampedArray(nw*nh*4),sx=w/nw
    for(let yy=y0;yy<y1;yy++)for(let xx=x0;xx<x1;xx++){const p=(yy*w+xx)*4;r+=src[p];g+=src[p+1];b+=src[p+2];n++}
    const q=(y*nw+x)*4;out[q]=r/n;out[q+1]=g/n;out[q+2]=b/n;out[q+3]=255}}
  return out};
-const cutout=()=>{const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.round(H/f)),N=nw*nh;
+/* scratch buffers for the coarse-to-fine pass: per-photo-size reuse, generation stamped */
+let CC=null;
+const cutout=()=>{const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.round(H/f)),N=nw*nh,M=W*H;
  const sd=boxDown(od,W,H,nw,nh);
  const bucket={},seeds=[];let n=0;
  const take=(px,py)=>{const i=py*nw+px,p=i*4,k=(sd[p]>>5)<<6|(sd[p+1]>>5)<<3|(sd[p+2]>>5),e=bucket[k]||(bucket[k]={n:0,r:0,g:0,b:0});e.n++;e.r+=sd[p];e.g+=sd[p+1];e.b+=sd[p+2];seeds.push(i);n++};
  for(let x=0;x<nw;x++){take(x,0);take(x,nh-1)}for(let y=0;y<nh;y++){take(0,y);take(nw-1,y)}
  const refs=Object.values(bucket).filter(e=>e.n>=n*.04).sort((a,c)=>c.n-a.n).slice(0,4).map(e=>[e.r/e.n,e.g/e.n,e.b/e.n]);
  if(!refs.length)return -1;
- const t2=tol*tol,vis=new Uint8Array(N),st=new Int32Array(N),bg=new Uint8Array(N);let sp=0;
+ if(!CC||CC.n!==N||CC.m!==M){CC={n:N,m:M,vis:new Int32Array(N),st:new Int32Array(N),vis2:new Int32Array(N),
+  st2:new Int32Array(N),lab:new Int32Array(N),q3:new Int32Array(N),bg:new Uint8Array(N),
+  seen:new Int32Array(M),q:new Int32Array(M),lev:new Uint8Array(M),g:0}}
+ const C=CC,gen=++C.g;
+ const vis=C.vis,st=C.st,bg=C.bg.fill(0),vis2=C.vis2,st2=C.st2,lab=C.lab.fill(-1),q3=C.q3;
+ const t2=tol*tol;let sp=0;
  const ok=i=>{const p=i*4;for(let k=0;k<refs.length;k++){const c=refs[k],a=sd[p]-c[0],b=sd[p+1]-c[1],d=sd[p+2]-c[2];if(a*a+b*b+d*d<=t2)return true}return false};
- const add=j=>{if(!vis[j]){vis[j]=1;if(ok(j))st[sp++]=j}};
+ const add=j=>{if(vis[j]!==gen){vis[j]=gen;if(ok(j))st[sp++]=j}};
  for(let k=0;k<seeds.length;k++)add(seeds[k]);
  while(sp){const i=st[--sp];bg[i]=1;const x=i%nw;
   if(x>0)add(i-1);if(x<nw-1)add(i+1);if(i>=nw)add(i-nw);if(i<N-nw)add(i+nw)}
  /* doosra pass: background ke shade-off hisse (shadow, bokeh rim) bhi le lo,
     par asli object tak mat jao - uska rang har bg colour se kaafi door hota hai */
- const tb=tol*(keepObj?1.35:1.7),t2b=tb*tb,vis2=new Uint8Array(N),st2=new Int32Array(N);let gp=0;
+ const tb=tol*(keepObj?1.35:1.7),t2b=tb*tb;let gp=0;
  const ok2=i=>{const p=i*4;for(let k=0;k<refs.length;k++){const c=refs[k],a=sd[p]-c[0],b=sd[p+1]-c[1],d=sd[p+2]-c[2];if(a*a+b*b+d*d<=t2b)return true}return false};
- for(let i=0;i<N;i++)if(bg[i]){vis2[i]=1;st2[gp++]=i}
+ for(let i=0;i<N;i++)if(bg[i]){vis2[i]=gen;st2[gp++]=i}
  while(gp){const i=st2[--gp],x=i%nw;
-  const grow=k=>{if(!vis2[k]&&ok2(k)){vis2[k]=1;bg[k]=1;st2[gp++]=k}};
+  const grow=k=>{if(vis2[k]!==gen&&ok2(k)){vis2[k]=gen;bg[k]=1;st2[gp++]=k}};
   if(x>0)grow(i-1);if(x<nw-1)grow(i+1);if(i>=nw)grow(i-nw);if(i<N-nw)grow(i+nw)}
- /* island cleanup: background ke andar pade objects bache rahein */
- const lab=new Int32Array(N).fill(-1),q3=new Int32Array(N),sz=[];
+ /* island cleanup: background ke andar pade objects bache rahein.
+    island ke rang ka jod labelling ke andar hi ho jata hai (alag full scan nahi) */
+ const sz=[],sr=[],sgr=[],sbr=[];
  for(let i=0;i<N;i++){if(bg[i]||lab[i]>=0)continue;
-  const id=sz.length;let h=0,t=0;lab[i]=id;q3[t++]=i;let n2=0;
-  while(h<t){const j=q3[h++];n2++;const x=j%nw;
-   const push=k=>{if(k>=0&&k<N&&!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=k}};
+  const id=sz.length;let h=0,t=0;lab[i]=id;q3[t++]=i;let n2=0,r0=0,g0=0,b0=0;
+  while(h<t){const j=q3[h++];n2++;const p=j*4;r0+=sd[p];g0+=sd[p+1];b0+=sd[p+2];const x=j%nw;
+   const push=k=>{if(k>=0&&k<N&&!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=k}}
    if(x>0)push(j-1);if(x<nw-1)push(j+1);push(j-nw);push(j+nw)}
-  sz.push(n2)}
+  sz.push(n2);sr.push(r0);sgr.push(g0);sbr.push(b0)}
  if(sz.length>1){
-  const total=nw*nh,drop=new Uint8Array(sz.length);
-  const sr=new Float64Array(sz.length),sg=new Float64Array(sz.length),sb=new Float64Array(sz.length);
-  for(let i=0;i<N;i++){const id=lab[i];if(id<0)continue;const p=i*4;sr[id]+=sd[p];sg[id]+=sd[p+1];sb[id]+=sd[p+2]}
+  const total=N,drop=new Uint8Array(sz.length);
   let big=0;for(let k=1;k<sz.length;k++)if(sz[k]>sz[big])big=k;
   for(let k=0;k<sz.length;k++){
    if(k===big)continue;
-   const fr=sz[k]/total,n3=sz[k],mr=sr[k]/n3,mg=sg[k]/n3,mb=sb[k]/n3;
+   const fr=sz[k]/total,n3=sz[k],mr=sr[k]/n3,mg=sgr[k]/n3,mb=sbr[k]/n3;
    let dm=1e9;
    for(let j=0;j<refs.length;j++){const c=refs[j],a=mr-c[0],b2=mg-c[1],c2=mb-c[2],d=Math.sqrt(a*a+b2*b2+c2*c2);if(d<dm)dm=d}
    /* keepObj: sirf specks, background-jaisi haze aur soft bokeh hatti hai, asli object rehta hai.
@@ -438,19 +449,25 @@ const cutout=()=>{const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.ro
    drop[k]=keepObj?((fr<0.0015||dm<tol*1.15)?1:0):(sz[k]<sz[big]*0.5?1:0)}
   for(let i=0;i<N;i++){const id=lab[i];if(id>=0&&drop[id])bg[i]=1}
  }
- const M=W*H,seen=new Uint8Array(M),q=new Int32Array(M),lev=new Uint8Array(M);
+ const seen=C.seen,q=C.q,lev=C.lev;
  const step=Math.max(4,Math.round(4+tol*0.15)),s2=step*step,K=3;
  const near=(i,j)=>{const p=i*4,r=j*4,a=od[p]-od[r],b=od[p+1]-od[r+1],c=od[p+2]-od[r+2];return a*a+b*b+c*c<=s2};
+ /* column lookup: pehle har pixel par ek integer division hota tha */
+ const xmap=new Int32Array(W);
+ for(let x=0;x<W;x++)xmap[x]=Math.min(nw-1,x*nw/W|0);
  let hd=0,sp2=0,cnt=0;
  for(let y=0;y<H;y++){const cy=Math.min(nh-1,y*nh/H|0),row=cy*nw;
-  for(let x=0;x<W;x++){const i=y*W+x;if(bg[row+(Math.min(nw-1,x*nw/W|0))]){seen[i]=1;q[sp2++]=i}}}
+  for(let x=0;x<W;x++){const i=y*W+x;if(bg[row+xmap[x]]){seen[i]=gen;lev[i]=0;q[sp2++]=i}}}
+ /* per-pixel closure allocation hata di: har pixel par ek naya function banta tha */
  while(hd<sp2){const i=q[hd++],l=lev[i];if(mask[i]){mask[i]=0;cnt++}
-  if(l>=K)continue;const x=i%W;
-  const push=j=>{if(!seen[j]&&near(j,i)){seen[j]=1;lev[j]=l+1;q[sp2++]=j}};
-  if(x>0)push(i-1);if(x<W-1)push(i+1);if(i>=W)push(i-W);if(i<M-W)push(i+W)}
+  if(l>=K)continue;const x=i%W,l1=l+1;let j;
+  if(x>0){j=i-1;if(seen[j]!==gen&&near(j,i)){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}
+  if(x<W-1){j=i+1;if(seen[j]!==gen&&near(j,i)){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}
+  if(i>=W){j=i-W;if(seen[j]!==gen&&near(j,i)){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}
+  if(i<M-W){j=i+W;if(seen[j]!==gen&&near(j,i)){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
  enforce();mver++;return cnt};
-const auto=(silent)=>{if(!od)return;push();const c=cutout();
- if(c<=0){undo.pop();redo=[];mver++;if(!silent)toast(c<0?'Background clear nahi hai, Wand try karo':'Kuch nahi hata. Tolerance badhao ya Wand use karo');return}
+const auto=(silent)=>{if(!od)return;const rd=redo;push();const c=cutout();
+ if(c<=0){undo.pop();redo=rd;mver++;if(!silent)toast(c<0?'Background clear nahi hai, Wand try karo':'Kuch nahi hata. Tolerance badhao ya Wand use karo');return}
  render();toast(silent?'Background hata diya - ab naya background chuno':'Ho gaya! Erase / Restore se saaf karo')};
 const wand=(x,y)=>{x=Math.min(W-1,Math.max(0,x|0));y=Math.min(H-1,Math.max(0,y|0));let r=0,g=0,b=0,n=0;
  for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const px=x+dx,py=y+dy;if(px>=0&&py>=0&&px<W&&py<H){const p=(py*W+px)*4;r+=od[p];g+=od[p+1];b+=od[p+2];n++}}
@@ -463,14 +480,19 @@ const stroke=(a,b,c,d,k)=>{const r=Math.max(2,brush*k/2),keep=mode==='keep',v=ke
 const pt=e=>{const r=cv.getBoundingClientRect(),t=xf();return[((e.clientX-r.left)*CW/r.width-t[1])/t[0]*P.f+W/2,((e.clientY-r.top)*CH/r.height-t[2])/t[0]+H/2,CW/r.width/t[0]]};
 const ring=$('#ring'),moveRing=e=>{ring.style.left=e.clientX+'px';ring.style.top=e.clientY+'px'};
 const ringSize=()=>{const r=cv.getBoundingClientRect(),t=xf();return Math.max(8,Math.round(brush*t[0]*(r.width/CW)))};
-cv.addEventListener('pointerdown',e=>{if(!od)return;e.preventDefault();const p=pt(e);
- if(mode==='wand'){if(p[0]<0||p[1]<0||p[0]>=W||p[1]>=H)return;push();if(!wand(p[0],p[1])){undo.pop();redo=[];toast('Kuch nahi hata. Tolerance badhao ya Wand use karo')}render();return}
- push();drawing=true;last=[p[0],p[1]];try{cv.setPointerCapture(e.pointerId)}catch(_){}
+let pid=null;
+cv.addEventListener('pointerdown',e=>{if(!od||drawing)return;e.preventDefault();const p=pt(e);
+ if(mode==='wand'){if(p[0]<0||p[1]<0||p[0]>=W||p[1]>=H)return;
+  const rd=redo;push();if(!wand(p[0],p[1])){undo.pop();redo=rd;mver++;toast('Kuch nahi hata. Tolerance badhao ya Wand use karo')}render();return}
+ push();drawing=true;pid=e.pointerId;last=[p[0],p[1]];try{cv.setPointerCapture(e.pointerId)}catch(_){}
  const rs=ringSize()+'px';ring.style.width=ring.style.height=rs;ring.style.display='block';moveRing(e);stroke(p[0],p[1],p[0],p[1],p[2])});
-cv.addEventListener('pointermove',e=>{if(!drawing)return;const p=pt(e);moveRing(e);stroke(last[0],last[1],p[0],p[1],p[2]);last=[p[0],p[1]]});
-const end=()=>{if(drawing){drawing=false;ring.style.display='none';enforce();render()}};
+cv.addEventListener('pointermove',e=>{if(!drawing||e.pointerId!==pid)return;const p=pt(e);moveRing(e);stroke(last[0],last[1],p[0],p[1],p[2]);last=[p[0],p[1]]});
+/* ek hi ungli ek waqt: doosri ungli ka pointer is stroke ko nahi todta */
+const end=e=>{if(!drawing)return;if(e&&e.pointerId!=null&&pid!=null&&e.pointerId!==pid)return;
+ drawing=false;pid=null;ring.style.display='none';enforce();render()};
 cv.addEventListener('pointerup',end);cv.addEventListener('pointercancel',end);
 cv.addEventListener('pointerleave',e=>{if(drawing&&!e.buttons)end()});
+window.addEventListener('blur',()=>{if(drawing)end()});
 
 const morph=g=>{push();const o=mask.slice(),m=g?Math.max:Math.min;
  for(let y=0;y<H;y++)for(let x=0;x<W;x++){const i=y*W+x;let v=o[i];if(x>0)v=m(v,o[i-1]);if(x<W-1)v=m(v,o[i+1]);if(y>0)v=m(v,o[i-W]);if(y<H-1)v=m(v,o[i+W]);mask[i]=v}enforce();mver++;render()};
@@ -524,7 +546,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
  if(a==='photo'){$('#fMain').click();return}
  if(!od){toast('Pehle photo choose karo');return}
  if(a==='auto')auto();else if(a==='bg')showSheet($('#shBg'));else if(a==='refine')showSheet($('#shRef'));else if(a==='save')save()};
-window.GlassCut={version:'1.0.5'};
+window.GlassCut={version:'1.1.7'};
 })();
 </script>
 </body>

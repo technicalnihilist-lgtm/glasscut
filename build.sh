@@ -18,6 +18,12 @@ KS=/scratch/work/glasscut-release.jks
 rm -rf "$BUILD"
 mkdir -p "$BUILD/gen" "$BUILD/classes" "$BUILD/dex"
 
+# version comes from the manifest: one source of truth, no drift between the
+# manifest and the aapt2 link flags
+VCODE=$(sed -n 's/.*android:versionCode="\([0-9]*\)".*/\1/p' "$APP/AndroidManifest.xml")
+VNAME=$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' "$APP/AndroidManifest.xml")
+echo "version $VNAME ($VCODE)"
+
 echo "[1/6] aapt2 compile"
 "$BT/aapt2" compile --dir "$APP/res" -o "$BUILD/res.zip"
 
@@ -31,8 +37,8 @@ echo "[2/6] aapt2 link"
   --java "$BUILD/gen" \
   --min-sdk-version 24 \
   --target-sdk-version 34 \
-  --version-code 6 \
-  --version-name 1.0.5 \
+  --version-code "$VCODE" \
+  --version-name "$VNAME" \
   --auto-add-overlay
 
 echo "[3/6] javac"
