@@ -201,12 +201,10 @@ public class MainActivity extends Activity {
             return;
         }
         if (requestCode == REQ_WRITE) {
-            if (resultCode == RESULT_OK) {
-                writeToGallery(pendingData, pendingName, pendingMime);
-            } else {
-                jsToast("Save nahi hua");
-            }
+            final String d = pendingData, n = pendingName, m = pendingMime;
             pendingData = pendingName = pendingMime = null;
+            if (resultCode == RESULT_OK) finishPendingSave(d, n, m);
+            else jsToast("Save nahi hua");
             return;
         }
         super.onActivityResult(requestCode, resultCode, data);
@@ -308,6 +306,31 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * A pending save is finished here, never on the caller's thread.
+     * The base64 payload is several megabytes for a 1400x1200 PNG; decoding it and
+     * writing it to MediaStore took long enough that doing it from
+     * onActivityResult / onRequestPermissionsResult (both on the UI thread) risked an
+     * ANR on a slow device. The bridge call itself already runs off the UI thread,
+     * so the permission path now matches it.
+     */
+    private void finishPendingSave(String data, String name, String mime) {
+        final String d = data, n = name, m = mime;
+        if (d == null) {
+            jsToast("Save nahi hua");
+            return;
+        }
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String r = writeToGallery(d, n, m);
+                if (r == null || r.startsWith("err")) jsToast("Save nahi hua");
+            }
+        }, "glasscut-save");
+        t.setPriority(Thread.NORM_PRIORITY - 1);
+        t.start();
+    }
+
     private void jsToast(final String msg) {
         runOnUiThread(new Runnable() {
             @Override
@@ -320,12 +343,10 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int req, String[] perms, int[] res) {
         if (req == REQ_WRITE) {
-            if (res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED) {
-                writeToGallery(pendingData, pendingName, pendingMime);
-            } else {
-                jsToast("Save nahi hua");
-            }
+            final String d = pendingData, n = pendingName, m = pendingMime;
             pendingData = pendingName = pendingMime = null;
+            if (res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED) finishPendingSave(d, n, m);
+            else jsToast("Save nahi hua");
         }
     }
 
@@ -340,6 +361,13 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        // an unanswered ValueCallback keeps the WebView's file input pending forever,
+        // and a pending base64 payload pins megabytes of memory in a dying activity
+        if (pendingFiles != null) {
+            try { pendingFiles.onReceiveValue(null); } catch (Exception ignored) { }
+            pendingFiles = null;
+        }
+        pendingData = pendingName = pendingMime = null;
         if (web != null) {
             web.destroy();
             web = null;

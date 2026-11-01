@@ -213,6 +213,9 @@ input[type=range]::-moz-range-thumb{width:26px;height:26px;border:0;border-radiu
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],mk=()=>document.createElement('canvas');
 const cv=$('#cv'),cx=cv.getContext('2d'),stage=$('#stage'),win=$('#win'),root=document.documentElement.style;
 const fgc=mk(),fgx=fgc.getContext('2d'),origc=mk(),sm=mk(),tmp=mk(),outc=mk(),bgb=mk();
+/* tmp / outc / bgb / sm ke context har render par dobara maange ja rahe the - ek hi
+   baar le lo, canvas ka size badalne se context mar nahi jata */
+const tcx=tmp.getContext('2d'),oxc=outc.getContext('2d'),bxc=bgb.getContext('2d'),smx=sm.getContext('2d');
 let W=0,H=0,CW=0,CH=0,od=null,fgi=null,mask=null,mask0=null,keepMask=null,undo=[],redo=[],mode='erase',bg={t:'none'},bgImg=null;
 let tol=40,feather=2,brush=36,keepObj=1,ratio='0',fmt='png',showOrig=false,drawing=false,last=null,raf=0,fastReq=false,rt=0,tt=0;
 let mver=0,fgKey='',outKey='',softM=null,softKey='',bgKey='',ovUrl=null;
@@ -371,15 +374,19 @@ let bgGradKey='',bgGrad=null,depGradKey='',depGrad=null;
 const cover=(c,im,iw,ih,w,h)=>{const k=Math.max(w/iw,h/ih),dw=iw*k,dh=ih*k;c.drawImage(im,(w-dw)/2,(h-dh)/2,dw,dh)};
 const blurBg=()=>{const blue=bg.t==='bluetint',k=CW+'|'+CH+'|'+P.bl+'|'+(blue?1:0);if(bgKey===k)return;
  bgKey=k;const f=2+P.bl*1.6,sw=Math.max(2,CW/f|0),sh=Math.max(2,CH/f|0);sm.width=sw;sm.height=sh;
- const sx=sm.getContext('2d');sx.clearRect(0,0,sw,sh);cover(sx,origc,W,H,sw,sh);
- bgb.width=CW;bgb.height=CH;const bx=bgb.getContext('2d');bx.imageSmoothingEnabled=true;bx.imageSmoothingQuality='high';bx.clearRect(0,0,CW,CH);bx.drawImage(sm,0,0,CW,CH);
+ const sx=smx;sx.clearRect(0,0,sw,sh);cover(sx,origc,W,H,sw,sh);
+ bgb.width=CW;bgb.height=CH;const bx=bxc;bx.imageSmoothingEnabled=true;bx.imageSmoothingQuality='high';bx.clearRect(0,0,CW,CH);bx.drawImage(sm,0,0,CW,CH);
  if(blue){bx.globalAlpha=0.72;bx.fillStyle='#0a5cff';bx.fillRect(0,0,CW,CH);bx.globalAlpha=1}};
 const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
  /* 3D tilt: ek halka shear, jo subject ko axis par ghuma hua dikhata hai */
  const th=P.tilt*Math.PI/180,cs3=Math.cos(th*0.85),sh3=Math.sin(th*0.5)*0.55;
- if(src!==fgc){cx.save();cx.translate(t[1],t[2]);cx.scale(sx,t[0]);cx.transform(cs3,sh3,0,1,0,0);cx.drawImage(src,-W/2,-H/2);cx.restore();return}
- const tc=tmp.getContext('2d');tc.setTransform(1,0,0,1,0,0);tc.clearRect(0,0,CW,CH);tc.save();tc.translate(t[1],t[2]);tc.scale(sx,t[0]);tc.transform(cs3,sh3,0,1,0,0);tc.translate(-W/2,-H/2);
- if(P.line>0){if(outKey!==fgKey){const ox=outc.getContext('2d');ox.setTransform(1,0,0,1,0,0);ox.globalCompositeOperation='copy';ox.drawImage(fgc,0,0);ox.globalCompositeOperation='source-in';ox.fillStyle='#fff';ox.fillRect(0,0,W,H);ox.globalCompositeOperation='source-over';outKey=fgKey}
+ /* outline / opacity / shadow / depth me se kuch bhi nahi hai to tmp canvas ek
+    bekaar full-canvas copy thi (clear + draw + wapas draw). us haalat me fgc ko
+    seedha cx par wahi transform de kar draw karna bilkul same pixels deta hai. */
+ if(src!==fgc||(P.line<=0&&P.op>=100&&!P.sh&&P.depth<=0)){
+  cx.save();cx.translate(t[1],t[2]);cx.scale(sx,t[0]);cx.transform(cs3,sh3,0,1,0,0);cx.drawImage(src,-W/2,-H/2);cx.restore();return}
+ const tc=tcx;tc.setTransform(1,0,0,1,0,0);tc.clearRect(0,0,CW,CH);tc.save();tc.translate(t[1],t[2]);tc.scale(sx,t[0]);tc.transform(cs3,sh3,0,1,0,0);tc.translate(-W/2,-H/2);
+ if(P.line>0){if(outKey!==fgKey){const ox=oxc;ox.setTransform(1,0,0,1,0,0);ox.globalCompositeOperation='copy';ox.drawImage(fgc,0,0);ox.globalCompositeOperation='source-in';ox.fillStyle='#fff';ox.fillRect(0,0,W,H);ox.globalCompositeOperation='source-over';outKey=fgKey}
   const r=P.line/t[0],n=fast?8:16;for(let a=0;a<n;a++)tc.drawImage(outc,Math.cos(a*2*Math.PI/n)*r,Math.sin(a*2*Math.PI/n)*r)}
  tc.drawImage(fgc,0,0);tc.restore();
  cx.save();cx.globalAlpha=P.op/100;
@@ -533,7 +540,14 @@ const stroke=(a,b,c,d,k)=>{const r=Math.max(2,brush*k/2),keep=mode==='keep',v=ke
 let cRect=null;
 const refreshRect=()=>{const r=cv.getBoundingClientRect();cRect={l:r.left,t:r.top,w:r.width,h:r.height};return cRect};
 const rect=()=>cRect||refreshRect();
-const pt=e=>{const r=rect(),t=xf();return[((e.clientX-r.l)*CW/r.w-t[1])/t[0]*P.f+W/2,((e.clientY-r.t)*CH/r.h-t[2])/t[0]+H/2,CW/r.w/t[0]]};
+const pt=e=>{const r=rect(),t=xf();
+ let ux=((e.clientX-r.l)*CW/r.w-t[1])/t[0]*P.f,uy=((e.clientY-r.t)*CH/r.h-t[2])/t[0];
+ /* drawSubj 3D tilt par ek shear (cs3,sh3) lagata hai. pehle pt() us shear ko ulta
+    nahi karta tha, is liye tilt chalte waqt erase/restore ungli se 40+ px door
+    lagta tha. tilt 0 par sh3=0 hai, to default behaviour bilkul wahi rehta hai. */
+ if(P.tilt){const th=P.tilt*Math.PI/180,cs3=Math.cos(th*0.85),sh3=Math.sin(th*0.5)*0.55;
+  if(sh3)ux=(ux-sh3*uy)/cs3}
+ return[ux+W/2,uy+H/2,CW/r.w/t[0]]};
 const ring=$('#ring'),moveRing=e=>{ring.style.left=e.clientX+'px';ring.style.top=e.clientY+'px'};
 const ringSize=()=>{const r=rect(),t=xf();return Math.max(8,Math.round(brush*t[0]*(r.w/CW)))};
 let pid=null,strokeRedo=null,strokeCh=0;
