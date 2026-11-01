@@ -313,7 +313,7 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
   mask0=new Uint8Array(W*H);for(let i=0;i<W*H;i++)mask0[i]=od[i*4+3];mask=mask0.slice();keepMask=new Uint8Array(W*H);keepDirty=false;
   /* purani photo ke scratch buffers chhod do: inka size pichhli photo ke hisaab se tha
      (wand flood 8 B/px, cutout ~20 B/px, feather blur 1 B/px) - warna wo bekaar padi rehti hain */
-  FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS.length=0;DIRT=null;hardFull=false;
+  FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS.length=0;DIRT=null;hardFull=false;MBUF=null;
   if(ovUrl){URL.revokeObjectURL(ovUrl);ovUrl=null}
   undo=[];redo=[];fgKey=outKey=softKey='';mver++;
   $('#empty').style.display='none';cv.style.display='block';setSize();render();
@@ -421,7 +421,15 @@ const qr=()=>{sched(true);clearTimeout(rt);rt=setTimeout(()=>render(false),160)}
    jo memory thodi zyada leta hai par kabhi galat mask nahi banata. */
 let keepDirty=false;
 const snap=()=>[mask.slice(),keepDirty?keepMask.slice():null];
-const restore=s=>{mask=s[0];keepDirty=!!s[1];keepMask=s[1]||new Uint8Array(W*H)};
+/* snapshot me keepMask tabhi hota hai jab keep tool se kuch paint hua ho. jab nahi
+   hota (aam haal) to undo/redo har press par 1.68 MB ka naya khaali array bana raha
+   tha. ab ek hi khaali buffer reuse hota hai - use fill(0) karke saaf kiya jata hai
+   (memset, koi allocation nahi). snapshots hamesha copy rakhte hain, is liye buffer
+   share hone se koi purana snapshot kharab nahi hota. */
+let KEMPTY=null;
+const restore=s=>{mask=s[0];keepDirty=!!s[1];
+ if(s[1])keepMask=s[1];
+ else{if(!KEMPTY||KEMPTY.length!==W*H)KEMPTY=new Uint8Array(W*H);else KEMPTY.fill(0);keepMask=KEMPTY}};
 const push=()=>{redo=[];undo.push(snap());if(undo.length>10)undo.shift()};
 /* keep mask ka respect: jo object protect kiya gaya hai wo kabhi na hate.
    keepMask khaali ho to poora W*H scan bachta hai (stroke release, Grow,
@@ -586,10 +594,25 @@ window.addEventListener('blur',()=>{if(drawing)end()});
 
 /* interior pixels ka bounds check har pixel par 4 baar hota tha; ab andar ka
    hissa bina check chalta hai aur sirf kinare wale pixels check karte hain */
-const morph=g=>{push();const o=mask.slice(),m=g?Math.max:Math.min;
+/* Edge Grow/Shrink har press par do cheezein kar raha tha jo zaroori nahi thi:
+   (a) mask ki poori 1.68 MB copy (mask.slice()), (b) har pixel par 5 Math.max /
+   Math.min builtin calls. ab copy ek scratch buffer me hoti hai (nayi photo par
+   chhod diya jata hai) aur andar ka hissa seedha compare karta hai. */
+let MBUF=null;
+const morph=g=>{push();
+ if(!MBUF||MBUF.length!==mask.length)MBUF=new Uint8Array(mask.length);
+ const o=MBUF,m=g?Math.max:Math.min;o.set(mask);
  if(W>2&&H>2){
-  for(let y=1;y<H-1;y++){const row=y*W;
-   for(let x=1;x<W-1;x++){const i=row+x;mask[i]=m(m(m(o[i],o[i-1]),m(o[i+1],o[i-W])),o[i+W])}}
+  if(g){
+   for(let y=1;y<H-1;y++){const row=y*W;
+    for(let x=1;x<W-1;x++){const i=row+x;let v=o[i],w;
+     w=o[i-1];if(w>v)v=w;w=o[i+1];if(w>v)v=w;w=o[i-W];if(w>v)v=w;w=o[i+W];if(w>v)v=w;
+     mask[i]=v}}
+  }else{
+   for(let y=1;y<H-1;y++){const row=y*W;
+    for(let x=1;x<W-1;x++){const i=row+x;let v=o[i],w;
+     w=o[i-1];if(w<v)v=w;w=o[i+1];if(w<v)v=w;w=o[i-W];if(w<v)v=w;w=o[i+W];if(w<v)v=w;
+     mask[i]=v}}}
   for(let x=1;x<W-1;x++){const i=x;mask[i]=m(m(o[i],o[i-1]),m(o[i+1],o[i+W]))}
   for(let x=1;x<W-1;x++){const i=(H-1)*W+x;mask[i]=m(m(o[i],o[i-1]),m(o[i+1],o[i-W]))}
   for(let y=1;y<H-1;y++){const row=y*W;let i=row;mask[i]=m(m(o[i],o[i+1]),m(o[i-W],o[i+W]));
@@ -623,11 +646,19 @@ document.addEventListener('keydown',e=>{
 const fallback=b=>{if(ovUrl)URL.revokeObjectURL(ovUrl);ovUrl=URL.createObjectURL(b);$('#ovImg').src=ovUrl;$('#ov').classList.add('show')};
 $('#ovX').onclick=()=>{$('#ov').classList.remove('show')};
 const toBlob=(c,m)=>new Promise(res=>{try{c.toBlob(res,m,.95)}catch(_){res(null)}});
+let jcv=null;
 const save=async()=>{
  if(!od){toast('Pehle photo choose karo');return}
+ /* slider ghumane ke baad ek fast (hard-edge) preview frame rAF me pending reh
+    jata hai. wo save ke full render ke baad chalta tha aur screen par hard edge
+    chhod deta tha jabki file soft-edge save hoti thi. ab wo frame cancel hota hai
+    taaki screen aur file ek hi render se aayein. */
+ if(raf){cancelAnimationFrame(raf);raf=0}fastReq=false;
  clearTimeout(rt);render(false);
  let src=cv;
- if(fmt==='jpeg'&&bg.t==='none'){const j=mk();j.width=CW;j.height=CH;const jx=j.getContext('2d');jx.fillStyle='#fff';jx.fillRect(0,0,CW,CH);jx.drawImage(cv,0,0);src=j}
+ if(fmt==='jpeg'&&bg.t==='none'){
+  if(!jcv)jcv=mk();
+  const j=jcv;j.width=CW;j.height=CH;const jx=j.getContext('2d');jx.fillStyle='#fff';jx.fillRect(0,0,CW,CH);jx.drawImage(cv,0,0);src=j}
  let mime='image/'+fmt,b=await toBlob(src,mime);
  if(!b&&fmt!=='png'){mime='image/png';b=await toBlob(src,mime)}
  if(!b){toast('Save nahi hua');return}
@@ -656,7 +687,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
  if(a==='photo'){$('#fMain').click();return}
  if(!od){toast('Pehle photo choose karo');return}
  if(a==='auto')auto();else if(a==='bg')showSheet($('#shBg'));else if(a==='refine')showSheet($('#shRef'));else if(a==='save')save()};
-window.GlassCut={version:'1.1.12'};
+window.GlassCut={version:'1.1.13'};
 })();
 </script>
 </body>
