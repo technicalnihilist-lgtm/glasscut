@@ -308,6 +308,10 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
   od=ox.getImageData(0,0,W,H).data;fgi=new ImageData(new Uint8ClampedArray(od),W,H);
   fgc.width=W;fgc.height=H;outc.width=W;outc.height=H;bgb.width=bgb.height=1;bgKey='';
   mask0=new Uint8Array(W*H);for(let i=0;i<W*H;i++)mask0[i]=od[i*4+3];mask=mask0.slice();keepMask=new Uint8Array(W*H);
+  /* purani photo ke scratch buffers chhod do: inka size pichhli photo ke hisaab se tha
+     (wand flood 8 B/px, cutout ~20 B/px, feather blur 1 B/px) - warna wo bekaar padi rehti hain */
+  FL=null;CC=null;softM=null;softKey='';
+  if(ovUrl){URL.revokeObjectURL(ovUrl);ovUrl=null}
   undo=[];redo=[];fgKey=outKey=softKey='';mver++;
   $('#empty').style.display='none';cv.style.display='block';setSize();render();
   setTimeout(()=>{try{auto(true)}catch(_){toast('Auto dabao ya Wand / Erase use karo')}},30)})};
@@ -337,9 +341,15 @@ const blur=(src,r)=>{const t=new Uint8Array(src.length),o=new Uint8Array(src.len
 const layer=fast=>{const soft=!fast&&feather>0,key=mver+(soft?'s'+feather:'h');if(key===fgKey)return;
  let m=mask;if(soft){const sk=mver+'|'+feather;if(softKey!==sk){softM=blur(mask,feather);softKey=sk}m=softM}
  const d=fgi.data;for(let i=0,n=W*H;i<n;i++)d[i*4+3]=m[i];fgx.putImageData(fgi,0,0);fgKey=key};
-const xf=()=>[Math.min(CW/W,CH/H)*P.s/100*(1+P.depth/100*0.07),
- CW/2+P.x/100*CW+mx*P.motion/100*CW*0.022,
- CH/2+P.y/100*CH+my*P.motion/100*CH*0.022];
+/* xf() ko har frame aur har pointermove par bulaya jata hai - ek hi array reuse hota
+   hai taaki per-frame garbage na bane (values turant padh li jati hain) */
+const XF=[0,0,0];
+const xf=()=>{const s=Math.min(CW/W,CH/H)*P.s/100*(1+P.depth/100*0.07);
+ XF[0]=s;XF[1]=CW/2+P.x/100*CW+mx*P.motion/100*CW*0.022;
+ XF[2]=CH/2+P.y/100*CH+my*P.motion/100*CH*0.022;return XF};
+/* background + depth gradients canvas size par depend karte hain, position par nahi -
+   isliye ek baar bana kar cache kar liye jate hain (pehle har render par naye bante the) */
+let bgGradKey='',bgGrad=null,depGradKey='',depGrad=null;
 const cover=(c,im,iw,ih,w,h)=>{const k=Math.max(w/iw,h/ih),dw=iw*k,dh=ih*k;c.drawImage(im,(w-dw)/2,(h-dh)/2,dw,dh)};
 const blurBg=()=>{const blue=bg.t==='bluetint',k=CW+'|'+CH+'|'+P.bl+'|'+(blue?1:0);if(bgKey===k)return;
  bgKey=k;const f=2+P.bl*1.6,sw=Math.max(2,CW/f|0),sh=Math.max(2,CH/f|0);sm.width=sw;sm.height=sh;
@@ -358,20 +368,24 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
  const dep=P.depth/100;
  if(P.sh||dep>0){cx.shadowColor='rgba(0,0,0,'+(0.45+dep*0.30).toFixed(2)+')';cx.shadowBlur=CW*(0.04+dep*0.07);cx.shadowOffsetY=CW*(0.015+dep*0.03);cx.shadowOffsetX=mx*dep*CW*0.012}
  cx.drawImage(tmp,0,0);cx.restore()};
-function render(fast){if(!od)return;layer(fast);cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1;cx.clearRect(0,0,CW,CH);
+function render(fast){if(!od)return;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1;cx.clearRect(0,0,CW,CH);
  const pm=P.motion/100,pox=-mx*pm*CW*0.010,poy=-my*pm*CH*0.010;
  cx.save();cx.translate(pox,poy);
  if(bg.t==='color'){cx.fillStyle=bg.v;cx.fillRect(0,0,CW,CH)}
- else if(bg.t==='grad'){const g=GRADS[bg.v],gr=cx.createLinearGradient(0,0,CW,CH);gr.addColorStop(0,g[0]);gr.addColorStop(1,g[1]);cx.fillStyle=gr;cx.fillRect(0,0,CW,CH)}
+ else if(bg.t==='grad'){const k=CW+'|'+CH+'|'+bg.v;
+  if(bgGradKey!==k){const g=GRADS[bg.v];bgGrad=cx.createLinearGradient(0,0,CW,CH);bgGrad.addColorStop(0,g[0]);bgGrad.addColorStop(1,g[1]);bgGradKey=k}
+  cx.fillStyle=bgGrad;cx.fillRect(0,0,CW,CH)}
  else if(bg.t==='img'&&bgImg)cover(cx,bgImg,bgImg.naturalWidth,bgImg.naturalHeight,CW,CH);
  else if(bg.t==='blur'||bg.t==='bluetint'){blurBg();cx.drawImage(bgb,0,0)}
  cx.restore();
  /* depth: background ko halka gehra karo taaki subject aage ubhre */
- if(P.depth>0){const vg=cx.createRadialGradient(CW/2,CH*0.42,Math.min(CW,CH)*0.18,CW/2,CH*0.42,Math.max(CW,CH)*0.72);
-  vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,'+(P.depth/100*0.42).toFixed(3)+')');
-  cx.fillStyle=vg;cx.fillRect(0,0,CW,CH)}
+ if(P.depth>0){const dk=CW+'|'+CH+'|'+P.depth;
+  if(depGradKey!==dk){const vg=cx.createRadialGradient(CW/2,CH*0.42,Math.min(CW,CH)*0.18,CW/2,CH*0.42,Math.max(CW,CH)*0.72);
+   vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,'+(P.depth/100*0.42).toFixed(3)+')');depGrad=vg;depGradKey=dk}
+  cx.fillStyle=depGrad;cx.fillRect(0,0,CW,CH)}
+ /* "Hold: Original" me foreground layer kisi kaam ki nahi - poora putImageData bachta hai */
  if(showOrig){cx.clearRect(0,0,CW,CH);drawSubj(origc,fast);return}
- drawSubj(fgc,fast)}
+ layer(fast);drawSubj(fgc,fast)}
 const sched=fast=>{if(fast)fastReq=true;if(!raf)raf=requestAnimationFrame(()=>{raf=0;const f=fastReq;fastReq=false;render(f)})};
 const qr=()=>{sched(true);clearTimeout(rt);rt=setTimeout(()=>render(false),160)};
 
@@ -525,6 +539,10 @@ const save=async()=>{
  let mime='image/'+fmt,b=await toBlob(src,mime);
  if(!b&&fmt!=='png'){mime='image/png';b=await toBlob(src,mime)}
  if(!b){toast('Save nahi hua');return}
+ /* kuch browsers maanga hua type nahi de paate aur chupchaap PNG lauta dete hain
+    (purana WebView / iOS). Tab naam aur bridge ka mime bhi PNG hona chahiye, warna
+    gallery me .webp naam ki PNG file jati hai aur wahan thumbnail nahi banta. */
+ const got=b.type&&/^image\/(png|jpeg|webp)$/.test(b.type)?b.type:mime;mime=got;
  const ext=mime==='image/jpeg'?'jpg':mime.split('/')[1],name='glasscut-'+Date.now()+'.'+ext;
  const br=AB();
  if(br&&br.saveImage){
