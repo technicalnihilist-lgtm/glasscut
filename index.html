@@ -310,7 +310,7 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
   mask0=new Uint8Array(W*H);for(let i=0;i<W*H;i++)mask0[i]=od[i*4+3];mask=mask0.slice();keepMask=new Uint8Array(W*H);
   /* purani photo ke scratch buffers chhod do: inka size pichhli photo ke hisaab se tha
      (wand flood 8 B/px, cutout ~20 B/px, feather blur 1 B/px) - warna wo bekaar padi rehti hain */
-  FL=null;CC=null;softM=null;softKey='';
+  FL=null;CC=null;BLS=null;softM=null;softKey='';
   if(ovUrl){URL.revokeObjectURL(ovUrl);ovUrl=null}
   undo=[];redo=[];fgKey=outKey=softKey='';mver++;
   $('#empty').style.display='none';cv.style.display='block';setSize();render();
@@ -328,11 +328,16 @@ const setSize=()=>{if(!od)return;
   if(r>=1){CW=M;CH=Math.max(1,Math.round(M/r))}else{CH=M;CW=Math.max(1,Math.round(M*r))}}
  CW=Math.max(1,Math.round(CW));CH=Math.max(1,Math.round(CH));
  cv.width=CW;cv.height=CH;tmp.width=CW;tmp.height=CH;bgKey='';fit()};
-const fit=()=>{if(!od)return;const s=Math.min((stage.clientWidth-4)/CW,(stage.clientHeight-4)/CH);cv.style.width=Math.floor(CW*s)+'px';cv.style.height=Math.floor(CH*s)+'px'};
+const fit=()=>{if(!od)return;const s=Math.min((stage.clientWidth-4)/CW,(stage.clientHeight-4)/CH);cv.style.width=Math.floor(CW*s)+'px';cv.style.height=Math.floor(CH*s)+'px';cRect=null};
 new ResizeObserver(fit).observe(stage);
 
 /* rendering */
-const blur=(src,r)=>{const t=new Uint8Array(src.length),o=new Uint8Array(src.length),n=2*r+1;let x,y,s,b;
+/* feather/smooth ka blur har call par do naye W*H buffers banata tha: edge-softness
+   slider ghumane par har step ~2*W*H byte garbage. ab ek hi jodi reuse hoti hai. */
+let BLS=null;
+const blur=(src,r)=>{const len=src.length;
+ if(!BLS||BLS.n!==len)BLS={n:len,t:new Uint8Array(len),o:new Uint8Array(len)};
+ const t=BLS.t,o=BLS.o,n=2*r+1;let x,y,s,b;
  for(y=0;y<H;y++){s=0;b=y*W;for(x=-r;x<=r;x++)s+=src[b+Math.min(W-1,Math.max(0,x))];
   for(x=0;x<W;x++){t[b+x]=s/n;s+=src[b+Math.min(W-1,x+r+1)]-src[b+Math.max(0,x-r)]}}
  for(x=0;x<W;x++){s=0;for(y=-r;y<=r;y++)s+=t[Math.min(H-1,Math.max(0,y))*W+x];
@@ -486,24 +491,40 @@ const auto=(silent)=>{if(!od)return;const rd=redo;push();const c=cutout();
 const wand=(x,y)=>{x=Math.min(W-1,Math.max(0,x|0));y=Math.min(H-1,Math.max(0,y|0));let r=0,g=0,b=0,n=0;
  for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const px=x+dx,py=y+dy;if(px>=0&&py>=0&&px<W&&py<H){const p=(py*W+px)*4;r+=od[p];g+=od[p+1];b+=od[p+2];n++}}
  return flood([y*W+x],[[r/n,g/n,b/n]],tol)};
-const stamp=(t,cx0,cy0,r,v)=>{const x0=Math.max(0,Math.floor(cx0-r)),x1=Math.min(W-1,Math.ceil(cx0+r)),y0=Math.max(0,Math.floor(cy0-r)),y1=Math.min(H-1,Math.ceil(cy0+r)),r2=r*r;
- for(let y=y0;y<=y1;y++){const dy=y-cy0;for(let x=x0;x<=x1;x++){const dx=x-cx0;if(dx*dx+dy*dy<=r2)t[y*W+x]=v}}};
-const stroke=(a,b,c,d,k)=>{const r=Math.max(2,brush*k/2),keep=mode==='keep',v=keep||mode!=='erase'?255:0,n=Math.max(1,Math.ceil(Math.hypot(c-a,d-b)/Math.max(1,r/3)));
- for(let i=0;i<=n;i++){const px=a+(c-a)*i/n,py=b+(d-b)*i/n;if(keep){stamp(keepMask,px,py,r,255);stamp(mask,px,py,r,255)}else{stamp(mask,px,py,r,v);if(v===0)stamp(keepMask,px,py,r,0)}}
- mver++;sched(true)};
-const pt=e=>{const r=cv.getBoundingClientRect(),t=xf();return[((e.clientX-r.left)*CW/r.width-t[1])/t[0]*P.f+W/2,((e.clientY-r.top)*CH/r.height-t[2])/t[0]+H/2,CW/r.width/t[0]]};
+const stamp=(t,cx0,cy0,r,v)=>{const x0=Math.max(0,Math.floor(cx0-r)),x1=Math.min(W-1,Math.ceil(cx0+r)),y0=Math.max(0,Math.floor(cy0-r)),y1=Math.min(H-1,Math.ceil(cy0+r)),r2=r*r;let ch=0;
+ for(let y=y0;y<=y1;y++){const dy=y-cy0;for(let x=x0;x<=x1;x++){const dx=x-cx0;if(dx*dx+dy*dy<=r2){const i=y*W+x;if(t[i]!==v){t[i]=v;ch++}}}}
+ return ch};
+const stroke=(a,b,c,d,k)=>{const r=Math.max(2,brush*k/2),keep=mode==='keep',v=keep||mode!=='erase'?255:0,n=Math.max(1,Math.ceil(Math.hypot(c-a,d-b)/Math.max(1,r/3)));let ch=0;
+ for(let i=0;i<=n;i++){const px=a+(c-a)*i/n,py=b+(d-b)*i/n;if(keep){ch+=stamp(keepMask,px,py,r,255);ch+=stamp(mask,px,py,r,255)}else{ch+=stamp(mask,px,py,r,v);if(v===0)ch+=stamp(keepMask,px,py,r,0)}}
+ mver++;sched(true);return ch};
+/* pt() har pointermove par chalta hai. getBoundingClientRect() har call par layout
+   force karta tha, isliye ab rect ek baar (stroke ke shuru me / resize par) naapa jata hai. */
+let cRect=null;
+const refreshRect=()=>{const r=cv.getBoundingClientRect();cRect={l:r.left,t:r.top,w:r.width,h:r.height};return cRect};
+const rect=()=>cRect||refreshRect();
+const pt=e=>{const r=rect(),t=xf();return[((e.clientX-r.l)*CW/r.w-t[1])/t[0]*P.f+W/2,((e.clientY-r.t)*CH/r.h-t[2])/t[0]+H/2,CW/r.w/t[0]]};
 const ring=$('#ring'),moveRing=e=>{ring.style.left=e.clientX+'px';ring.style.top=e.clientY+'px'};
-const ringSize=()=>{const r=cv.getBoundingClientRect(),t=xf();return Math.max(8,Math.round(brush*t[0]*(r.width/CW)))};
-let pid=null;
-cv.addEventListener('pointerdown',e=>{if(!od||drawing)return;e.preventDefault();const p=pt(e);
+const ringSize=()=>{const r=rect(),t=xf();return Math.max(8,Math.round(brush*t[0]*(r.w/CW)))};
+let pid=null,strokeRedo=null,strokeCh=0;
+cv.addEventListener('pointerdown',e=>{if(!od||drawing)return;e.preventDefault();refreshRect();const p=pt(e);
  if(mode==='wand'){if(p[0]<0||p[1]<0||p[0]>=W||p[1]>=H)return;
   const rd=redo;push();if(!wand(p[0],p[1])){undo.pop();redo=rd;mver++;toast('Kuch nahi hata. Tolerance badhao ya Wand use karo')}render();return}
- push();drawing=true;pid=e.pointerId;last=[p[0],p[1]];try{cv.setPointerCapture(e.pointerId)}catch(_){}
- const rs=ringSize()+'px';ring.style.width=ring.style.height=rs;ring.style.display='block';moveRing(e);stroke(p[0],p[1],p[0],p[1],p[2])});
-cv.addEventListener('pointermove',e=>{if(!drawing||e.pointerId!==pid)return;const p=pt(e);moveRing(e);stroke(last[0],last[1],p[0],p[1],p[2]);last=[p[0],p[1]]});
+ strokeRedo=redo;push();strokeCh=0;drawing=true;pid=e.pointerId;last=[p[0],p[1]];try{cv.setPointerCapture(e.pointerId)}catch(_){}
+ const rs=ringSize()+'px';ring.style.width=ring.style.height=rs;ring.style.display='block';moveRing(e);strokeCh+=stroke(p[0],p[1],p[0],p[1],p[2])});
+cv.addEventListener('pointermove',e=>{if(!drawing||e.pointerId!==pid)return;const p=pt(e);moveRing(e);strokeCh+=stroke(last[0],last[1],p[0],p[1],p[2]);last=[p[0],p[1]]});
 /* ek hi ungli ek waqt: doosri ungli ka pointer is stroke ko nahi todta */
 const end=e=>{if(!drawing)return;if(e&&e.pointerId!=null&&pid!=null&&e.pointerId!==pid)return;
- drawing=false;pid=null;ring.style.display='none';enforce();render()};
+ drawing=false;pid=null;ring.style.display='none';
+ /* jis stroke ne ek bhi pixel nahi badla (khaali jagah par tap, pehle se mitaya hua
+    hissa) wo undo history me jagah nahi lete - warna 10 aise tap asli history ko
+    dhak dete hain aur Undo kuch karta hua nahi lagta. */
+ if(strokeCh===0){undo.pop();redo=strokeRedo}else enforce();
+ strokeRedo=null;strokeCh=0;
+ /* stroke ke dauraan fast preview ke liye ek rAF pending reh jata hai; wo release ke
+    baad chal kar feather wale final frame ko hard-edge preview se overwrite kar deta
+    tha - screen aur save ki file alag dikhti thi. ab wo pending frame cancel hota hai
+    aur sirf ek full render bachta hai. */
+ if(raf){cancelAnimationFrame(raf);raf=0}fastReq=false;render()};
 cv.addEventListener('pointerup',end);cv.addEventListener('pointercancel',end);
 cv.addEventListener('pointerleave',e=>{if(drawing&&!e.buttons)end()});
 window.addEventListener('blur',()=>{if(drawing)end()});
@@ -520,6 +541,7 @@ const cmpOff=()=>{if(showOrig){showOrig=false;render()}};
 cmp.addEventListener('pointerdown',cmpOn);
 ['pointerup','pointerleave','pointercancel'].forEach(ev=>cmp.addEventListener(ev,cmpOff));
 cmp.oncontextmenu=e=>e.preventDefault();
+window.addEventListener('pointerup',cmpOff);window.addEventListener('blur',cmpOff);
 $('#bUndo').onclick=need(()=>{if(undo.length){redo.push([mask.slice(),keepMask.slice()]);const s0=undo.pop();mask=s0[0];keepMask=s0[1];mver++;render()}else toast('Undo ke liye kuch nahi')});
 $('#bRedo').onclick=need(()=>{if(redo.length){undo.push([mask.slice(),keepMask.slice()]);const s0=redo.pop();mask=s0[0];keepMask=s0[1];mver++;render()}else toast('Redo ke liye kuch nahi')});
 document.addEventListener('keydown',e=>{
@@ -564,7 +586,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
  if(a==='photo'){$('#fMain').click();return}
  if(!od){toast('Pehle photo choose karo');return}
  if(a==='auto')auto();else if(a==='bg')showSheet($('#shBg'));else if(a==='refine')showSheet($('#shRef'));else if(a==='save')save()};
-window.GlassCut={version:'1.1.7'};
+window.GlassCut={version:'1.1.9'};
 })();
 </script>
 </body>
