@@ -310,7 +310,7 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
   origc.width=W;origc.height=H;const ox=origc.getContext('2d');ox.drawImage(im,0,0,W,H);
   od=ox.getImageData(0,0,W,H).data;fgi=new ImageData(new Uint8ClampedArray(od),W,H);
   fgc.width=W;fgc.height=H;outc.width=W;outc.height=H;bgb.width=bgb.height=1;bgKey='';
-  mask0=new Uint8Array(W*H);for(let i=0;i<W*H;i++)mask0[i]=od[i*4+3];mask=mask0.slice();keepMask=new Uint8Array(W*H);
+  mask0=new Uint8Array(W*H);for(let i=0;i<W*H;i++)mask0[i]=od[i*4+3];mask=mask0.slice();keepMask=new Uint8Array(W*H);keepDirty=false;
   /* purani photo ke scratch buffers chhod do: inka size pichhli photo ke hisaab se tha
      (wand flood 8 B/px, cutout ~20 B/px, feather blur 1 B/px) - warna wo bekaar padi rehti hain */
   FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS.length=0;DIRT=null;hardFull=false;
@@ -415,9 +415,18 @@ const sched=fast=>{if(fast)fastReq=true;if(!raf)raf=requestAnimationFrame(()=>{r
 const qr=()=>{sched(true);clearTimeout(rt);rt=setTimeout(()=>render(false),160)};
 
 /* mask tools */
-const push=()=>{redo=[];undo.push([mask.slice(),keepMask.slice()]);if(undo.length>10)undo.shift()};
-/* keep mask ka respect: jo object protect kiya gaya hai wo kabhi na hate */
-const enforce=()=>{if(!keepMask)return;for(let i=0;i<mask.length;i++)if(keepMask[i])mask[i]=255};
+/* undo snapshot: keepMask par jab tak kuch paint nahi hua (aam haal) uski copy
+   bekaar hoti hai - 1400x1200 par har entry 3.36 MB ki jagah 1.68 MB.
+   keepDirty sirf jhootha-true ho sakta hai (erase keepMask saaf karta hai),
+   jo memory thodi zyada leta hai par kabhi galat mask nahi banata. */
+let keepDirty=false;
+const snap=()=>[mask.slice(),keepDirty?keepMask.slice():null];
+const restore=s=>{mask=s[0];keepDirty=!!s[1];keepMask=s[1]||new Uint8Array(W*H)};
+const push=()=>{redo=[];undo.push(snap());if(undo.length>10)undo.shift()};
+/* keep mask ka respect: jo object protect kiya gaya hai wo kabhi na hate.
+   keepMask khaali ho to poora W*H scan bachta hai (stroke release, Grow,
+   Shrink, Invert, Smooth, Reset, cutout - har jagah). */
+const enforce=()=>{if(!keepMask||!keepDirty)return;for(let i=0;i<mask.length;i++)if(keepMask[i])mask[i]=255};
 /* scratch buffers: ek hi pair of arrays har wand tap me reuse hota hai (generation
    stamp se reset free), pehle har tap par 5 bytes/pixel naya garbage banta tha */
 let FL=null;
@@ -532,6 +541,7 @@ const stamp2=(t1,v1,t2,v2,cx0,cy0,r)=>{
 const stroke=(a,b,c,d,k)=>{const r=Math.max(2,brush*k/2),keep=mode==='keep',v=keep||mode!=='erase'?255:0,n=Math.max(1,Math.ceil(Math.hypot(c-a,d-b)/Math.max(1,r/3)));let ch=0;
  for(let i=0;i<=n;i++){const px=a+(c-a)*i/n,py=b+(d-b)*i/n;
   if(keep)ch+=stamp2(keepMask,255,mask,255,px,py,r);
+  if(keep&&ch){keepDirty=true}
   else if(v===0)ch+=stamp2(mask,0,keepMask,0,px,py,r);
   else ch+=stamp2(mask,255,null,0,px,py,r)}
  mver++;sched(true);return ch};
@@ -574,8 +584,23 @@ cv.addEventListener('pointerup',end);cv.addEventListener('pointercancel',end);
 cv.addEventListener('pointerleave',e=>{if(drawing&&!e.buttons)end()});
 window.addEventListener('blur',()=>{if(drawing)end()});
 
+/* interior pixels ka bounds check har pixel par 4 baar hota tha; ab andar ka
+   hissa bina check chalta hai aur sirf kinare wale pixels check karte hain */
 const morph=g=>{push();const o=mask.slice(),m=g?Math.max:Math.min;
- for(let y=0;y<H;y++)for(let x=0;x<W;x++){const i=y*W+x;let v=o[i];if(x>0)v=m(v,o[i-1]);if(x<W-1)v=m(v,o[i+1]);if(y>0)v=m(v,o[i-W]);if(y<H-1)v=m(v,o[i+W]);mask[i]=v}enforce();mver++;render()};
+ if(W>2&&H>2){
+  for(let y=1;y<H-1;y++){const row=y*W;
+   for(let x=1;x<W-1;x++){const i=row+x;mask[i]=m(m(m(o[i],o[i-1]),m(o[i+1],o[i-W])),o[i+W])}}
+  for(let x=1;x<W-1;x++){const i=x;mask[i]=m(m(o[i],o[i-1]),m(o[i+1],o[i+W]))}
+  for(let x=1;x<W-1;x++){const i=(H-1)*W+x;mask[i]=m(m(o[i],o[i-1]),m(o[i+1],o[i-W]))}
+  for(let y=1;y<H-1;y++){const row=y*W;let i=row;mask[i]=m(m(o[i],o[i+1]),m(o[i-W],o[i+W]));
+   i=row+W-1;mask[i]=m(m(o[i],o[i-1]),m(o[i-W],o[i+W]))}
+  /* chaar kone (dono taraf se kinare hain) */
+  mask[0]=m(o[0],m(o[1],o[W]));
+  mask[W-1]=m(o[W-1],m(o[W-2],o[2*W-1]));
+  mask[(H-1)*W]=m(o[(H-1)*W],m(o[(H-2)*W],o[(H-1)*W+1]));
+  mask[H*W-1]=m(o[H*W-1],m(o[H*W-2],o[(H-2)*W+W-1]))
+ }else for(let y=0;y<H;y++)for(let x=0;x<W;x++){const i=y*W+x;let v=o[i];if(x>0)v=m(v,o[i-1]);if(x<W-1)v=m(v,o[i+1]);if(y>0)v=m(v,o[i-W]);if(y<H-1)v=m(v,o[i+W]);mask[i]=v}
+ enforce();mver++;render()};
 $('#bGrow').onclick=need(()=>morph(1));$('#bShr').onclick=need(()=>morph(0));
 $('#bInv').onclick=need(()=>{push();for(let i=0;i<mask.length;i++)mask[i]=255-mask[i];enforce();mver++;render()});
 $('#bSmo').onclick=need(()=>{push();const b=blur(mask,2);for(let i=0;i<mask.length;i++)mask[i]=Math.max(0,Math.min(255,(b[i]-128)*3+128));enforce();mver++;render()});
@@ -587,8 +612,8 @@ cmp.addEventListener('pointerdown',cmpOn);
 ['pointerup','pointerleave','pointercancel'].forEach(ev=>cmp.addEventListener(ev,cmpOff));
 cmp.oncontextmenu=e=>e.preventDefault();
 window.addEventListener('pointerup',cmpOff);window.addEventListener('blur',cmpOff);
-$('#bUndo').onclick=need(()=>{if(undo.length){redo.push([mask.slice(),keepMask.slice()]);const s0=undo.pop();mask=s0[0];keepMask=s0[1];mver++;render()}else toast('Undo ke liye kuch nahi')});
-$('#bRedo').onclick=need(()=>{if(redo.length){undo.push([mask.slice(),keepMask.slice()]);const s0=redo.pop();mask=s0[0];keepMask=s0[1];mver++;render()}else toast('Redo ke liye kuch nahi')});
+$('#bUndo').onclick=need(()=>{if(undo.length){redo.push(snap());restore(undo.pop());mver++;render()}else toast('Undo ke liye kuch nahi')});
+$('#bRedo').onclick=need(()=>{if(redo.length){undo.push(snap());restore(redo.pop());mver++;render()}else toast('Redo ke liye kuch nahi')});
 document.addEventListener('keydown',e=>{
  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'&&od){e.preventDefault();if(e.shiftKey)$('#bRedo').click();else $('#bUndo').click()}
  else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='y'&&od){e.preventDefault();$('#bRedo').click()}
@@ -631,7 +656,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
  if(a==='photo'){$('#fMain').click();return}
  if(!od){toast('Pehle photo choose karo');return}
  if(a==='auto')auto();else if(a==='bg')showSheet($('#shBg'));else if(a==='refine')showSheet($('#shRef'));else if(a==='save')save()};
-window.GlassCut={version:'1.1.10'};
+window.GlassCut={version:'1.1.12'};
 })();
 </script>
 </body>

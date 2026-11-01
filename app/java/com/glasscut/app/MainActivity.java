@@ -249,13 +249,52 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** base64 slice size: a multiple of 4 so every slice decodes on its own. */
+    private static final int B64_CHUNK = 16384;
+
+    /**
+     * Decodes a base64 payload straight into the output stream, 16 KB at a time.
+     *
+     * The old code called Base64.decode() on the whole payload first, so saving a
+     * 1400x1200 PNG held three copies of it at once: the base64 String, the
+     * multi-megabyte byte[] it decoded to, and the stream buffer - on top of the
+     * WebView heap that is still holding the canvas. Slicing the decode means the
+     * save only ever needs one 16 KB window (16 KB chars in, 12 KB out), which is
+     * what keeps a big save from turning into an OOM on a low-RAM device.
+     */
+    private static void writeBase64(String b64, OutputStream os) throws IOException {
+        final int n = b64.length();
+        int i = 0;
+        while (i < n) {
+            int end = Math.min(n, i + B64_CHUNK);
+            if (end < n) {
+                // A slice must hold a whole number of 4-char groups. Counting the
+                // real characters (not the bytes) keeps that true even if the
+                // payload ever carries line breaks, which would otherwise put a
+                // group boundary in the wrong place and make the slice undecodable.
+                int data = 0;
+                for (int k = i; k < end; k++) if (!ws(b64.charAt(k))) data++;
+                int rem = data & 3;
+                while (rem != 0 && end > i) {
+                    if (!ws(b64.charAt(--end))) rem = (rem + 3) & 3;
+                }
+                if (end <= i) end = Math.min(n, i + B64_CHUNK);
+            }
+            os.write(Base64.decode(b64.substring(i, end), Base64.DEFAULT));
+            i = end;
+        }
+    }
+
+    private static boolean ws(char c) {
+        return c == '\n' || c == '\r' || c == ' ' || c == '\t';
+    }
+
     private String writeToGallery(String dataUrl, String name, String mime) {
         try {
             if (dataUrl == null) return "err:empty";
             if (mime == null || mime.length() == 0) mime = "image/png";
             int comma = dataUrl.indexOf(',');
             String b64 = comma >= 0 ? dataUrl.substring(comma + 1) : dataUrl;
-            byte[] bytes = Base64.decode(b64, Base64.DEFAULT);
             if (name == null || name.length() == 0) name = "glasscut.png";
 
             if (Build.VERSION.SDK_INT >= 29) {
@@ -275,7 +314,7 @@ public class MainActivity extends Activity {
                     OutputStream os = cr.openOutputStream(uri);
                     if (os == null) throw new IOException("stream");
                     try {
-                        os.write(bytes);
+                        writeBase64(b64, os);
                         os.flush();
                     } finally {
                         try { os.close(); } catch (Exception ignored) { }
@@ -295,9 +334,12 @@ public class MainActivity extends Activity {
             if (!dir.exists() && !dir.mkdirs()) return "err:mkdir";
             File f = new File(dir, name);
             FileOutputStream fos = new FileOutputStream(f);
-            fos.write(bytes);
-            fos.flush();
-            fos.close();
+            try {
+                writeBase64(b64, fos);
+                fos.flush();
+            } finally {
+                try { fos.close(); } catch (Exception ignored) { }
+            }
             android.media.MediaScannerConnection.scanFile(this,
                     new String[]{f.getAbsolutePath()}, new String[]{mime}, null);
             return "ok:" + Uri.fromFile(f);
