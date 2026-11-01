@@ -367,10 +367,29 @@ public class MainActivity extends Activity {
             public void run() {
                 String r = writeToGallery(d, n, m);
                 if (r == null || r.startsWith("err")) jsToast("Save nahi hua");
+                else notifyPage();
             }
         }, "glasscut-save");
         t.setPriority(Thread.NORM_PRIORITY - 1);
         t.start();
+    }
+
+    /**
+     * The page keeps quiet while a save is waiting for a permission (the bridge
+     * answers "ok:pending"), because until the bytes actually land there is nothing
+     * true to say. This is the other half of that deal: tell the page the write
+     * really finished so it shows its own "Save ho gaya" exactly once.
+     */
+    private void notifyPage() {
+        if (web == null) return;
+        web.post(new Runnable() {
+            @Override
+            public void run() {
+                WebView w = web;
+                if (w == null) return;
+                w.evaluateJavascript("window.GlassCut&&GlassCut.saved&&GlassCut.saved();", null);
+            }
+        });
     }
 
     private void jsToast(final String msg) {

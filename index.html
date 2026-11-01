@@ -313,7 +313,10 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
   mask0=new Uint8Array(W*H);for(let i=0;i<W*H;i++)mask0[i]=od[i*4+3];mask=mask0.slice();keepMask=new Uint8Array(W*H);keepDirty=false;
   /* purani photo ke scratch buffers chhod do: inka size pichhli photo ke hisaab se tha
      (wand flood 8 B/px, cutout ~20 B/px, feather blur 1 B/px) - warna wo bekaar padi rehti hain */
-  FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS.length=0;DIRT=null;hardFull=false;MBUF=null;
+  FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS=null;DIRT=null;hardFull=false;MBUF=null;
+  /* island stats, undo ka khaali buffer aur JPEG flatten canvas bhi pichhli photo
+     ke size ke the (jcv CW*CH*4 = 1400x1200 par 6.7 MB) - nayi photo par chhod do */
+  ISL=null;KEMPTY=null;jcv=null;
   if(ovUrl){URL.revokeObjectURL(ovUrl);ovUrl=null}
   undo=[];redo=[];fgKey=outKey=softKey='';mver++;
   $('#empty').style.display='none';cv.style.display='block';setSize();render();
@@ -450,7 +453,16 @@ const flood=(seeds,refs,t)=>{const M=W*H;
 /* coarse-to-fine cutout: flood a downscaled copy, then snap the edge back at full res */
 /* boxDown ka output, xmap aur seeds har Auto press par naye bante the (1400x1200 par
    ~1.68 MB + 5.6 KB garbage). ab wahi buffers dobara use hote hain. */
-let SD=null,XM=null;const SEEDS=[];
+let SD=null,XM=null,SEEDS=null;
+/* island labelling ke stats: island ki size aur rang ka jod. buffer sirf tab bada
+   hota hai jab islands ki ginti capacity se zyada ho - warna wahi ek set reuse. */
+let ISL=null;
+const islBuf=need=>{if(ISL&&ISL.cap>=need)return ISL;
+ let cap=ISL?ISL.cap:1024;while(cap<need)cap*=2;
+ const o={cap,sz:new Int32Array(cap),sr:new Float64Array(cap),sg:new Float64Array(cap),
+  sb:new Float64Array(cap),drop:new Uint8Array(cap)};
+ if(ISL){o.sz.set(ISL.sz);o.sr.set(ISL.sr);o.sg.set(ISL.sg);o.sb.set(ISL.sb)}
+ return ISL=o};
 const boxDown=(src,w,h,nw,nh,out)=>{out=out||new Uint8ClampedArray(nw*nh*4);const sx=w/nw,sy=h/nh;
  for(let y=0;y<nh;y++){const y0=Math.floor(y*sy),y1=Math.min(h,Math.max(y0+1,Math.floor((y+1)*sy)));
   for(let x=0;x<nw;x++){const x0=Math.floor(x*sx),x1=Math.min(w,Math.max(x0+1,Math.floor((x+1)*sx)));
@@ -464,20 +476,24 @@ const cutout=()=>{const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.ro
  if(!SD||SD.length!==N*4)SD=new Uint8ClampedArray(N*4);
  const sd=boxDown(od,W,H,nw,nh,SD);
  const bucket={};let n=0;
- const seeds=SEEDS;seeds.length=0;
- const take=(px,py)=>{const i=py*nw+px,p=i*4,k=(sd[p]>>5)<<6|(sd[p+1]>>5)<<3|(sd[p+2]>>5),e=bucket[k]||(bucket[k]={n:0,r:0,g:0,b:0});e.n++;e.r+=sd[p];e.g+=sd[p+1];e.b+=sd[p+2];seeds.push(i);n++};
+ /* border seeds: photo ke kinare ka har pixel. pehle ye ek JS array me push hote
+    the (1400x1200 par 2600 push, har Auto press par) - ab ek hi Int32Array. */
+ const capS=2*(nw+nh);
+ if(!SEEDS||SEEDS.length<capS)SEEDS=new Int32Array(capS);
+ const seeds=SEEDS;let ns=0;
+ const take=(px,py)=>{const i=py*nw+px,p=i*4,k=(sd[p]>>5)<<6|(sd[p+1]>>5)<<3|(sd[p+2]>>5),e=bucket[k]||(bucket[k]={n:0,r:0,g:0,b:0});e.n++;e.r+=sd[p];e.g+=sd[p+1];e.b+=sd[p+2];seeds[ns++]=i;n++};
  for(let x=0;x<nw;x++){take(x,0);take(x,nh-1)}for(let y=0;y<nh;y++){take(0,y);take(nw-1,y)}
  const refs=Object.values(bucket).filter(e=>e.n>=n*.04).sort((a,c)=>c.n-a.n).slice(0,4).map(e=>[e.r/e.n,e.g/e.n,e.b/e.n]);
  if(!refs.length)return -1;
  if(!CC||CC.n!==N||CC.m!==M){CC={n:N,m:M,vis:new Int32Array(N),st:new Int32Array(N),vis2:new Int32Array(N),
-  st2:new Int32Array(N),lab:new Int32Array(N),q3:new Int32Array(N),bg:new Uint8Array(N),
+  st2:new Int32Array(N),lab:new Int32Array(N).fill(-1),q3:new Int32Array(N),bg:new Uint8Array(N),
   seen:new Int32Array(M),q:new Int32Array(M),lev:new Uint8Array(M),g:0}}
  const C=CC,gen=++C.g;
- const vis=C.vis,st=C.st,bg=C.bg.fill(0),vis2=C.vis2,st2=C.st2,lab=C.lab.fill(-1),q3=C.q3;
+ const vis=C.vis,st=C.st,bg=C.bg.fill(0),vis2=C.vis2,st2=C.st2,lab=C.lab,q3=C.q3;
  const t2=tol*tol;let sp=0;
  const ok=i=>{const p=i*4;for(let k=0;k<refs.length;k++){const c=refs[k],a=sd[p]-c[0],b=sd[p+1]-c[1],d=sd[p+2]-c[2];if(a*a+b*b+d*d<=t2)return true}return false};
  const add=j=>{if(vis[j]!==gen){vis[j]=gen;if(ok(j))st[sp++]=j}};
- for(let k=0;k<seeds.length;k++)add(seeds[k]);
+ for(let k=0;k<ns;k++)add(seeds[k]);
  while(sp){const i=st[--sp];bg[i]=1;const x=i%nw;
   if(x>0)add(i-1);if(x<nw-1)add(i+1);if(i>=nw)add(i-nw);if(i<N-nw)add(i+nw)}
  /* doosra pass: background ke shade-off hisse (shadow, bokeh rim) bhi le lo,
@@ -490,29 +506,35 @@ const cutout=()=>{const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.ro
   if(x>0)grow(i-1);if(x<nw-1)grow(i+1);if(i>=nw)grow(i-nw);if(i<N-nw)grow(i+nw)}
  /* island cleanup: background ke andar pade objects bache rahein.
     island ke rang ka jod labelling ke andar hi ho jata hai (alag full scan nahi) */
- const sz=[],sr=[],sgr=[],sbr=[];
+ /* island stats pehle chaar JS array me push hote the - islands.png par ek Auto
+    press me 4457 push. ab capacity ke saath badhne wale typed buffers reuse hote
+    hain, aur lab ka reset usi scan me ho jata hai jo drop lagata hai (pehle
+    alag lab.fill(-1) poora N chal raha tha). */
+ let isl=islBuf(1024),isz=isl.sz,isr=isl.sr,isg=isl.sg,isb=isl.sb,drop=isl.drop,ni=0;
  for(let i=0;i<N;i++){if(bg[i]||lab[i]>=0)continue;
-  const id=sz.length;let h=0,t=0;lab[i]=id;q3[t++]=i;let n2=0,r0=0,g0=0,b0=0;
-  while(h<t){const j=q3[h++];n2++;const p=j*4;r0+=sd[p];g0+=sd[p+1];b0+=sd[p+2];const x=j%nw;
-   const push=k=>{if(k>=0&&k<N&&!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=k}}
-   if(x>0)push(j-1);if(x<nw-1)push(j+1);push(j-nw);push(j+nw)}
-  sz.push(n2);sr.push(r0);sgr.push(g0);sbr.push(b0)}
- if(sz.length>1){
-  const total=N,drop=new Uint8Array(sz.length);
-  let big=0;for(let k=1;k<sz.length;k++)if(sz[k]>sz[big])big=k;
-  for(let k=0;k<sz.length;k++){
-   if(k===big)continue;
-   const fr=sz[k]/total,n3=sz[k],mr=sr[k]/n3,mg=sgr[k]/n3,mb=sbr[k]/n3;
+  if(ni>=isl.cap){isl=islBuf(ni+1);isz=isl.sz;isr=isl.sr;isg=isl.sg;isb=isl.sb;drop=isl.drop}
+  const id=ni++;let h=0,t=0;lab[i]=id;q3[t++]=i;let n2=0,r0=0,g0=0,b0=0;
+  while(h<t){const j=q3[h++];n2++;const p=j*4;r0+=sd[p];g0+=sd[p+1];b0+=sd[p+2];const x=j%nw;let k;
+   if(x>0){k=j-1;if(!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=k}}
+   if(x<nw-1){k=j+1;if(!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=k}}
+   if(j>=nw){k=j-nw;if(!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=k}}
+   if(j<N-nw){k=j+nw;if(!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=k}}}
+  isz[id]=n2;isr[id]=r0;isg[id]=g0;isb[id]=b0}
+ if(ni>1){
+  const total=N;
+  let big=0;for(let k=1;k<ni;k++)if(isz[k]>isz[big])big=k;
+  for(let k=0;k<ni;k++){
+   if(k===big){drop[k]=0;continue}
+   const fr=isz[k]/total,n3=isz[k],mr=isr[k]/n3,mg=isg[k]/n3,mb=isb[k]/n3;
    let dm=1e9;
    for(let j=0;j<refs.length;j++){const c=refs[j],a=mr-c[0],b2=mg-c[1],c2=mb-c[2],d=Math.sqrt(a*a+b2*b2+c2*c2);if(d<dm)dm=d}
    /* keepObj: sirf specks, background-jaisi haze aur soft bokeh hatti hai, asli object rehta hai.
       warna: sirf sabse bada blob rehta hai (purana behaviour). */
-   drop[k]=keepObj?((fr<0.0015||dm<tol*1.15)?1:0):(sz[k]<sz[big]*0.5?1:0)}
-  for(let i=0;i<N;i++){const id=lab[i];if(id>=0&&drop[id])bg[i]=1}
- }
+   drop[k]=keepObj?((fr<0.0015||dm<tol*1.15)?1:0):(isz[k]<isz[big]*0.5?1:0)}
+  for(let i=0;i<N;i++){const id=lab[i];if(id>=0){if(drop[id])bg[i]=1;lab[i]=-1}}
+ } else for(let i=0;i<N;i++)lab[i]=-1;
  const seen=C.seen,q=C.q,lev=C.lev;
  const step=Math.max(4,Math.round(4+tol*0.15)),s2=step*step,K=3;
- const near=(i,j)=>{const p=i*4,r=j*4,a=od[p]-od[r],b=od[p+1]-od[r+1],c=od[p+2]-od[r+2];return a*a+b*b+c*c<=s2};
  /* column lookup: pehle har pixel par ek integer division hota tha */
  const xmap=(XM&&XM.length===W)?XM:(XM=new Int32Array(W));
  for(let x=0;x<W;x++)xmap[x]=Math.min(nw-1,x*nw/W|0);
@@ -520,12 +542,16 @@ const cutout=()=>{const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.ro
  for(let y=0;y<H;y++){const cy=Math.min(nh-1,y*nh/H|0),row=cy*nw;
   for(let x=0;x<W;x++){const i=y*W+x;if(bg[row+xmap[x]]){seen[i]=gen;lev[i]=0;q[sp2++]=i}}}
  /* per-pixel closure allocation hata di: har pixel par ek naya function banta tha */
+ /* har pixel ka rang ab ek hi baar padha jata hai: pehle near() har neighbour
+    check par i*4 dobara ginta tha aur od se teen byte phir padhta tha (1.68 M
+    pixel par 4 x 3 extra loads). comparison bilkul wahi hai. */
  while(hd<sp2){const i=q[hd++],l=lev[i];if(mask[i]){mask[i]=0;cnt++}
-  if(l>=K)continue;const x=i%W,l1=l+1;let j;
-  if(x>0){j=i-1;if(seen[j]!==gen&&near(j,i)){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}
-  if(x<W-1){j=i+1;if(seen[j]!==gen&&near(j,i)){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}
-  if(i>=W){j=i-W;if(seen[j]!==gen&&near(j,i)){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}
-  if(i<M-W){j=i+W;if(seen[j]!==gen&&near(j,i)){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
+  if(l>=K)continue;
+  const p=i*4,r0=od[p],g0=od[p+1],b0=od[p+2],x=i%W,l1=l+1;let j,jp,a,b2,c;
+  if(x>0){j=i-1;if(seen[j]!==gen){jp=j*4;a=r0-od[jp];b2=g0-od[jp+1];c=b0-od[jp+2];if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
+  if(x<W-1){j=i+1;if(seen[j]!==gen){jp=j*4;a=r0-od[jp];b2=g0-od[jp+1];c=b0-od[jp+2];if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
+  if(i>=W){j=i-W;if(seen[j]!==gen){jp=j*4;a=r0-od[jp];b2=g0-od[jp+1];c=b0-od[jp+2];if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
+  if(i<M-W){j=i+W;if(seen[j]!==gen){jp=j*4;a=r0-od[jp];b2=g0-od[jp+1];c=b0-od[jp+2];if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}}
  enforce();mver++;return cnt};
 const auto=(silent)=>{if(!od)return;const rd=redo;push();const c=cutout();
  if(c<=0){undo.pop();redo=rd;mver++;if(!silent)toast(c<0?'Background clear nahi hai, Wand try karo':'Kuch nahi hata. Tolerance badhao ya Wand use karo');return}
@@ -569,7 +595,10 @@ const pt=e=>{const r=rect(),t=xf();
 const ring=$('#ring'),moveRing=e=>{ring.style.left=e.clientX+'px';ring.style.top=e.clientY+'px'};
 const ringSize=()=>{const r=rect(),t=xf();return Math.max(8,Math.round(brush*t[0]*(r.w/CW)))};
 let pid=null,strokeRedo=null,strokeCh=0;
-cv.addEventListener('pointerdown',e=>{if(!od||drawing)return;e.preventDefault();refreshRect();const p=pt(e);
+cv.addEventListener('pointerdown',e=>{if(!od||drawing)return;
+ /* sirf primary button/contact se stroke: pehle right-click ya stylus ka side
+    button bhi erase stroke shuru kar deta tha (aur undo history me jagah leta tha) */
+ if(e.button>0)return;e.preventDefault();refreshRect();const p=pt(e);
  if(mode==='wand'){if(p[0]<0||p[1]<0||p[0]>=W||p[1]>=H)return;
   const rd=redo;push();if(!wand(p[0],p[1])){undo.pop();redo=rd;mver++;toast('Kuch nahi hata. Tolerance badhao ya Wand use karo')}render();return}
  strokeRedo=redo;push();strokeCh=0;drawing=true;pid=e.pointerId;last=[p[0],p[1]];try{cv.setPointerCapture(e.pointerId)}catch(_){}
@@ -646,9 +675,14 @@ document.addEventListener('keydown',e=>{
 const fallback=b=>{if(ovUrl)URL.revokeObjectURL(ovUrl);ovUrl=URL.createObjectURL(b);$('#ovImg').src=ovUrl;$('#ov').classList.add('show')};
 $('#ovX').onclick=()=>{$('#ov').classList.remove('show')};
 const toBlob=(c,m)=>new Promise(res=>{try{c.toBlob(res,m,.95)}catch(_){res(null)}});
-let jcv=null;
+let jcv=null,saveBusy=false;
 const save=async()=>{
  if(!od){toast('Pehle photo choose karo');return}
+ /* ek waqt me ek save: do tap ek saath do file gallery me daal dete the.
+    bridge wale raste par guard FileReader callback tak bandha rehta hai. */
+ if(saveBusy)return;
+ saveBusy=true;let hold=false;
+ try{
  /* slider ghumane ke baad ek fast (hard-edge) preview frame rAF me pending reh
     jata hai. wo save ke full render ke baad chalta tha aur screen par hard edge
     chhod deta tha jabki file soft-edge save hoti thi. ab wo frame cancel hota hai
@@ -670,9 +704,17 @@ const save=async()=>{
  const br=AB();
  if(br&&br.saveImage){
   const fr=new FileReader();
-  fr.onload=()=>{let ok=false;try{const res=br.saveImage(String(fr.result),name,mime);ok=!(res&&String(res).indexOf('err')===0)}catch(_){ok=false}
-   if(ok)toast('Save ho gaya');else fallback(b)};
-  fr.onerror=()=>fallback(b);
+  hold=true;
+  fr.onload=()=>{saveBusy=false;let res=null;
+   try{res=br.saveImage(String(fr.result),name,mime)}catch(_){res='err'}
+   const r=res==null?'':String(res);
+   /* "ok:pending" ka matlab native ne abhi likha nahi, sirf permission maangi hai.
+      pehle page isi par "Save ho gaya" dikha deta tha aur phir native "Save nahi
+      hua" - ulta message. ab pending par page chup rehta hai; asli nateeja
+      native GlassCut.saved() se aata hai. */
+   if(r.indexOf('ok:pending')===0)return;
+   if(!r||r.indexOf('err')===0)fallback(b);else toast('Save ho gaya')};
+  fr.onerror=()=>{saveBusy=false;fallback(b)};
   fr.readAsDataURL(b);return}
  try{const f=new File([b],name,{type:mime});
   if(navigator.canShare&&navigator.canShare({files:[f]})&&/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)){
@@ -680,14 +722,17 @@ const save=async()=>{
  try{const u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download=name;a.rel='noopener';
   document.body.appendChild(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(u)},4000);
   toast('Save ho gaya');return}catch(_){}
- fallback(b)};
+ fallback(b)
+ }finally{if(!hold)saveBusy=false}};
 
 /* dock */
 $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.dataset.a;
  if(a==='photo'){$('#fMain').click();return}
  if(!od){toast('Pehle photo choose karo');return}
  if(a==='auto')auto();else if(a==='bg')showSheet($('#shBg'));else if(a==='refine')showSheet($('#shRef'));else if(a==='save')save()};
-window.GlassCut={version:'1.1.13'};
+/* native shell in dono ko bulata hai jab wo khud likhta hai (API<29 permission
+   wala rasta), taaki page wahi message dikhaye jo sach me hua */
+window.GlassCut={version:'1.1.14',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua')};
 })();
 </script>
 </body>
