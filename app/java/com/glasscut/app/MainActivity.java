@@ -28,6 +28,7 @@ import android.widget.Toast;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.OutputStream;
 
 /**
@@ -269,15 +270,26 @@ public class MainActivity extends Activity {
                 cv.put(MediaStore.Images.Media.IS_PENDING, 1);
                 Uri uri = cr.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
                 if (uri == null) return "err:insert";
-                OutputStream os = cr.openOutputStream(uri);
-                if (os == null) return "err:stream";
-                os.write(bytes);
-                os.flush();
-                os.close();
-                cv.clear();
-                cv.put(MediaStore.Images.Media.IS_PENDING, 0);
-                cr.update(uri, cv, null, null);
-                return "ok:" + uri;
+                // IS_PENDING rows are invisible to the gallery. If the write throws
+                // we must delete the row, otherwise every failed save leaves an
+                // orphan entry that the user can never see or clean up.
+                try {
+                    OutputStream os = cr.openOutputStream(uri);
+                    if (os == null) throw new IOException("stream");
+                    try {
+                        os.write(bytes);
+                        os.flush();
+                    } finally {
+                        try { os.close(); } catch (Exception ignored) { }
+                    }
+                    cv.clear();
+                    cv.put(MediaStore.Images.Media.IS_PENDING, 0);
+                    cr.update(uri, cv, null, null);
+                    return "ok:" + uri;
+                } catch (Exception e) {
+                    try { cr.delete(uri, null, null); } catch (Exception ignored) { }
+                    return "err:" + e.getMessage();
+                }
             }
 
             File dir = new File(Environment.getExternalStoragePublicDirectory(
