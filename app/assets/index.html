@@ -297,7 +297,7 @@ $('#cBlue').onclick=need(()=>{noSw();const r=$('#sBl');r.value=48;r.dispatchEven
  bg={t:'bluetint'};bgKey='';
  /* portrait mode: sirf insaan, background ka koi tukda nahi */
  keepObj=0;const kk=$('#tKeep');if(kk)kk.setAttribute('aria-checked','false');
- push();mask=mask0.slice();mver++;try{cutout()}catch(_){}
+ push();mask=mask0.slice();mver++;softKill();try{cutout()}catch(_){}
  render();toast('Blue blur lag gaya - sirf insaan dikhega')});
 $('#bBgImg').onclick=()=>$('#fBg').click();
 $('#fBg').onchange=e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
@@ -308,12 +308,17 @@ const loadImg=(f,cb)=>{const u=URL.createObjectURL(f),im=new Image();im.onload=(
 const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWidth,im.naturalHeight));
   W=Math.max(1,Math.round(im.naturalWidth*s));H=Math.max(1,Math.round(im.naturalHeight*s));
   origc.width=W;origc.height=H;const ox=origc.getContext('2d');ox.drawImage(im,0,0,W,H);
-  od=ox.getImageData(0,0,W,H).data;fgi=new ImageData(new Uint8ClampedArray(od),W,H);
+  /* pehle yahan photo ke pixel do baar rakhe jate the: getImageData ka data (od)
+     aur usi ka ek copy jo fgi ka ImageData banta tha - 1400x1200 par 6.7 MB extra
+     poore session ke liye. ab fgi hi od hai: layer() sirf alpha byte likhta hai
+     (RGB waise hi rehta hai), aur od ka asli alpha sirf neeche mask0 banate waqt
+     padha jata hai, jo pehle render se pehle ho jata hai. */
+  fgi=ox.getImageData(0,0,W,H);od=fgi.data;
   fgc.width=W;fgc.height=H;outc.width=W;outc.height=H;bgb.width=bgb.height=1;bgKey='';
   mask0=new Uint8Array(W*H);for(let i=0;i<W*H;i++)mask0[i]=od[i*4+3];mask=mask0.slice();keepMask=new Uint8Array(W*H);keepDirty=false;
   /* purani photo ke scratch buffers chhod do: inka size pichhli photo ke hisaab se tha
      (wand flood 8 B/px, cutout ~20 B/px, feather blur 1 B/px) - warna wo bekaar padi rehti hain */
-  FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS=null;DIRT=null;hardFull=false;MBUF=null;BD=null;
+  FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS=null;DIRT=null;SDIRT=null;hardFull=false;MBUF=null;BD=null;
   /* island stats, undo ka khaali buffer aur JPEG flatten canvas bhi pichhli photo
      ke size ke the (jcv CW*CH*4 = 1400x1200 par 6.7 MB) - nayi photo par chhod do */
   ISL=null;KEMPTY=null;jcv=null;
@@ -355,16 +360,19 @@ let BLS=null;
       row ke andar seedhe padhe/likhe jate hain.
    chhote canvas par bhi sab kuch table-driven hai, is liye 1x1 ya 7x1400 jaisi
    photo par bhi wahi hisaab chalta hai. */
-const blur=(src,r)=>{
- const len=src.length;
+const blurTabs=r=>{const len=W*H;
  if(!BLS||BLS.n!==len)BLS={n:len,t:new Uint8Array(len),o:new Uint8Array(len),gk:'',tab:null,ca:null,cs:null,ra:null,rs:null};
- const t=BLS.t,o=BLS.o,n=2*r+1,gk=W+'|'+H+'|'+r;
+ const n=2*r+1,gk=W+'|'+H+'|'+r;
  if(BLS.gk!==gk){BLS.gk=gk;
   const tb=BLS.tab=new Uint8Array(255*n+1);for(let i=0;i<tb.length;i++)tb[i]=Math.floor(i/n);
   const ca=BLS.ca=new Int32Array(W),cs=BLS.cs=new Int32Array(W);
   for(let x=0;x<W;x++){ca[x]=Math.min(W-1,x+r+1);cs[x]=Math.max(0,x-r)}
   const ra=BLS.ra=new Int32Array(H),rs=BLS.rs=new Int32Array(H);
   for(let y=0;y<H;y++){ra[y]=Math.min(H-1,y+r+1)*W;rs[y]=Math.max(0,y-r)*W}}
+ return BLS};
+const blur=(src,r)=>{
+ blurTabs(r);
+ const t=BLS.t,o=BLS.o;
  const tab=BLS.tab,ca=BLS.ca,cs=BLS.cs,ra=BLS.ra,rs=BLS.rs;
  let x,y,s,b,k,x0;
  for(y=0;y<H;y++){b=y*W;s=0;
@@ -381,13 +389,47 @@ const blur=(src,r)=>{
   for(y=-r;y<=r;y++)s+=t[(y<0?0:y>H-1?H-1:y)*W+x];
   for(y=0;y<H;y++){k=y*W+x;o[k]=tab[s];s+=t[ra[y]+x]-t[rs[y]+x]}}
  return o};
+/* box blur sirf ek rectangle ke liye, wahi tables aur wahi integer jod - is liye
+   rect ke andar ka har pixel poore canvas wale blur se byte-identical aata hai.
+   box blur local hai (radius r), is liye jab mask sirf DIRT rectangle me badla ho
+   to bahar ka softM abhi bhi sahi hai; sirf DIRT+r ko dobara nikaalna padta hai
+   (1400x1200 par ek stroke ke baad 1.68 M pixel ki jagah sirf brush ka area). */
+const blurRect=(src,r,rx0,ry0,rx1,ry1,out)=>{
+ blurTabs(r);
+ const t=BLS.t,tab=BLS.tab,ca=BLS.ca,cs=BLS.cs,ra=BLS.ra,rs=BLS.rs;
+ rx0=Math.max(0,rx0|0);ry0=Math.max(0,ry0|0);rx1=Math.min(W-1,rx1|0);ry1=Math.min(H-1,ry1|0);
+ if(rx1<rx0||ry1<ry0)return out;
+ const ty0=Math.max(0,ry0-r),ty1=Math.min(H-1,ry1+r);
+ let x,y,s,b,k;
+ for(y=ty0;y<=ty1;y++){b=y*W;s=0;
+  for(k=-r;k<=r;k++){const c=rx0+k;s+=src[b+(c<0?0:c>W-1?W-1:c)]}
+  for(x=rx0;x<=rx1;x++){t[b+x]=tab[s];s+=src[b+ca[x]]-src[b+cs[x]]}}
+ for(x=rx0;x<=rx1;x++){s=0;
+  for(k=-r;k<=r;k++){const c=ry0+k;s+=t[(c<0?0:c>H-1?H-1:c)*W+x]}
+  for(y=ry0;y<=ry1;y++){out[y*W+x]=tab[s];s+=t[ra[y]+x]-t[rs[y]+x]}}
+ return out};
 /* stroke ke dauraan har fast frame poora 6.7 MB ImageData upload karta tha, halanki
    sirf brush ka rectangle badla hota hai. DIRT = stroke ne chhua hua rectangle,
    hardFull = fgc poore canvas par isi mask ka hard alpha dikha raha hai (tabhi
    partial upload bilkul wahi pixels deta hai jo full upload deta tha). */
 let DIRT=null,hardFull=false;
+/* SDIRT = mask ka wo rectangle jitna softM (feather wala blur) me abhi tak shaamil
+   nahi hua. DIRT per-frame hai (har fast frame ke baad khali), SDIRT tab tak
+   rehta hai jab tak softM dobara na bane - is liye stroke ke beech chale kai
+   frames bhi galti nahi karte. */
+let SDIRT=null;
+/* mask ko kisi bhi aise raste se badalne par jahan stamp2 nahi chalta
+   (wand, cutout, grow/shrink, invert, smooth, reset, undo/redo, enforce) softM
+   purana pad jata hai - tab poora blur dobara banta hai. */
+const softKill=()=>{softKey='';SDIRT=null};
 const layer=fast=>{const soft=!fast&&feather>0,key=mver+(soft?'s'+feather:'h');if(key===fgKey)return;
- let m=mask;if(soft){const sk=mver+'|'+feather;if(softKey!==sk){softM=blur(mask,feather);softKey=sk}m=softM}
+ let m=mask;
+ if(soft){
+  if(softKey!==feather){softM=blur(mask,feather);softKey=feather;SDIRT=null}
+  /* box blur radius r sirf r pixel door tak asar dalta hai, is liye badle hue
+     rectangle ko r se bada kar ke hi dobara nikaalna hota hai */
+  else if(SDIRT){blurRect(mask,feather,SDIRT[0]-feather,SDIRT[1]-feather,SDIRT[2]+feather,SDIRT[3]+feather,softM);SDIRT=null}
+  m=softM}
  const d=fgi.data;
  if(fast&&hardFull){
   /* mask badla hi nahi: pichhla frame abhi bhi sahi hai */
@@ -462,26 +504,42 @@ const snap=()=>[mask.slice(),keepDirty?keepMask.slice():null];
    (memset, koi allocation nahi). snapshots hamesha copy rakhte hain, is liye buffer
    share hone se koi purana snapshot kharab nahi hota. */
 let KEMPTY=null;
-const restore=s=>{mask=s[0];keepDirty=!!s[1];
+const restore=s=>{mask=s[0];keepDirty=!!s[1];softKill();
  if(s[1])keepMask=s[1];
  else{if(!KEMPTY||KEMPTY.length!==W*H)KEMPTY=new Uint8Array(W*H);else KEMPTY.fill(0);keepMask=KEMPTY}};
 const push=()=>{redo=[];undo.push(snap());if(undo.length>10)undo.shift()};
 /* keep mask ka respect: jo object protect kiya gaya hai wo kabhi na hate.
    keepMask khaali ho to poora W*H scan bachta hai (stroke release, Grow,
    Shrink, Invert, Smooth, Reset, cutout - har jagah). */
-const enforce=()=>{if(!keepMask||!keepDirty)return;for(let i=0;i<mask.length;i++)if(keepMask[i])mask[i]=255};
+const enforce=()=>{if(!keepMask||!keepDirty)return;let ch=false;
+ for(let i=0;i<mask.length;i++)if(keepMask[i]&&mask[i]!==255){mask[i]=255;ch=true}
+ /* kuch badla hi nahi to softM abhi bhi sahi hai - poora blur dobara mat banao */
+ if(ch)softKill()};
 /* scratch buffers: ek hi pair of arrays har wand tap me reuse hota hai (generation
    stamp se reset free), pehle har tap par 5 bytes/pixel naya garbage banta tha */
 let FL=null;
-const flood=(seeds,refs,t)=>{const M=W*H;
+const flood=(seeds,refs,t)=>{const M=W*H;softKill();
  if(!FL||FL.n!==M){FL={n:M,vis:new Int32Array(M),st:new Int32Array(M),g:0}}
  const vis=FL.vis,st=FL.st,g=++FL.g,t2=t*t;let sp=0,cnt=0;
- const ok=i=>{if(keepMask&&keepMask[i])return false;const p=i*4;for(let k=0;k<refs.length;k++){const c=refs[k],a=od[p]-c[0],b=od[p+1]-c[1],d=od[p+2]-c[2];if(a*a+b*b+d*d<=t2)return true}return false};
- const add=j=>{if(vis[j]!==g){vis[j]=g;if(ok(j))st[sp++]=j}};
+ /* har pixel par do closure call (add -> ok) aur ek keepMask load hota tha;
+    keepMask sirf tab dekha jata hai jab sach me kuch protect kiya gaya ho
+    (keepDirty - keepMask me 255 hai to keepDirty hamesha true hai), aur ok ka
+    loop seedha neighbour ke andar chala diya gaya hai. nateeja bilkul wahi. */
+ const km=keepDirty?keepMask:null,nr=refs.length;
+ const add=j=>{if(vis[j]===g)return;vis[j]=g;if(km&&km[j])return;const p=j*4;
+  for(let k=0;k<nr;k++){const c=refs[k],a=od[p]-c[0],b=od[p+1]-c[1],d=od[p+2]-c[2];if(a*a+b*b+d*d<=t2){st[sp++]=j;return}}};
  for(let k=0;k<seeds.length;k++)add(seeds[k]);
  while(sp){const i=st[--sp],x=i%W;if(mask[i]){mask[i]=0;cnt++}
-  if(x>0)add(i-1);if(x<W-1)add(i+1);if(i>=W)add(i-W);if(i<M-W)add(i+W)}
- mver++;return cnt};
+  let j,p;
+  if(x>0){j=i-1;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){p=j*4;
+   for(let k=0;k<nr;k++){const c=refs[k],a=od[p]-c[0],b=od[p+1]-c[1],d=od[p+2]-c[2];if(a*a+b*b+d*d<=t2){st[sp++]=j;break}}}}}
+  if(x<W-1){j=i+1;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){p=j*4;
+   for(let k=0;k<nr;k++){const c=refs[k],a=od[p]-c[0],b=od[p+1]-c[1],d=od[p+2]-c[2];if(a*a+b*b+d*d<=t2){st[sp++]=j;break}}}}}
+  if(i>=W){j=i-W;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){p=j*4;
+   for(let k=0;k<nr;k++){const c=refs[k],a=od[p]-c[0],b=od[p+1]-c[1],d=od[p+2]-c[2];if(a*a+b*b+d*d<=t2){st[sp++]=j;break}}}}}
+  if(i<M-W){j=i+W;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){p=j*4;
+   for(let k=0;k<nr;k++){const c=refs[k],a=od[p]-c[0],b=od[p+1]-c[1],d=od[p+2]-c[2];if(a*a+b*b+d*d<=t2){st[sp++]=j;break}}}}}}
+ mver++;softKill();return cnt};
 /* coarse-to-fine cutout: flood a downscaled copy, then snap the edge back at full res */
 /* boxDown ka output, xmap aur seeds har Auto press par naye bante the (1400x1200 par
    ~1.68 MB + 5.6 KB garbage). ab wahi buffers dobara use hote hain. */
@@ -516,7 +574,7 @@ const boxDown=(src,w,h,nw,nh,out)=>{out=out||new Uint8ClampedArray(nw*nh*4);
  return out};
 /* scratch buffers for the coarse-to-fine pass: per-photo-size reuse, generation stamped */
 let CC=null;
-const cutout=()=>{const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.round(H/f)),N=nw*nh,M=W*H;
+const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.round(H/f)),N=nw*nh,M=W*H;
  if(!SD||SD.length!==N*4)SD=new Uint8ClampedArray(N*4);
  const sd=boxDown(od,W,H,nw,nh,SD);
  const bucket={};let n=0;
@@ -596,7 +654,7 @@ const cutout=()=>{const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.ro
   if(x<W-1){j=i+1;if(seen[j]!==gen){jp=j*4;a=r0-od[jp];b2=g0-od[jp+1];c=b0-od[jp+2];if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
   if(i>=W){j=i-W;if(seen[j]!==gen){jp=j*4;a=r0-od[jp];b2=g0-od[jp+1];c=b0-od[jp+2];if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
   if(i<M-W){j=i+W;if(seen[j]!==gen){jp=j*4;a=r0-od[jp];b2=g0-od[jp+1];c=b0-od[jp+2];if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}}
- enforce();mver++;return cnt};
+ enforce();mver++;softKill();return cnt};
 const auto=(silent)=>{if(!od)return;const rd=redo;push();const c=cutout();
  if(c<=0){undo.pop();redo=rd;mver++;if(!silent)toast(c<0?'Background clear nahi hai, Wand try karo':'Kuch nahi hata. Tolerance badhao ya Wand use karo');return}
  render();toast(silent?'Background hata diya - ab naya background chuno':'Ho gaya! Erase / Restore se saaf karo')};
@@ -611,6 +669,8 @@ const stamp2=(t1,v1,t2,v2,cx0,cy0,r)=>{
  if(x1<x0||y1<y0)return 0;
  if(!DIRT)DIRT=[x0,y0,x1,y1];
  else{if(x0<DIRT[0])DIRT[0]=x0;if(y0<DIRT[1])DIRT[1]=y0;if(x1>DIRT[2])DIRT[2]=x1;if(y1>DIRT[3])DIRT[3]=y1}
+ if(!SDIRT)SDIRT=[x0,y0,x1,y1];
+ else{if(x0<SDIRT[0])SDIRT[0]=x0;if(y0<SDIRT[1])SDIRT[1]=y0;if(x1>SDIRT[2])SDIRT[2]=x1;if(y1>SDIRT[3])SDIRT[3]=y1}
  for(let y=y0;y<=y1;y++){const dy=y-cy0,b=y*W;
   for(let x=x0;x<=x1;x++){const dx=x-cx0;if(dx*dx+dy*dy<=r2){const i=b+x;
    if(t1[i]!==v1){t1[i]=v1;ch++}
@@ -696,11 +756,11 @@ const morph=g=>{push();
   mask[(H-1)*W]=m(o[(H-1)*W],m(o[(H-2)*W],o[(H-1)*W+1]));
   mask[H*W-1]=m(o[H*W-1],m(o[H*W-2],o[(H-2)*W+W-1]))
  }else for(let y=0;y<H;y++)for(let x=0;x<W;x++){const i=y*W+x;let v=o[i];if(x>0)v=m(v,o[i-1]);if(x<W-1)v=m(v,o[i+1]);if(y>0)v=m(v,o[i-W]);if(y<H-1)v=m(v,o[i+W]);mask[i]=v}
- enforce();mver++;render()};
+ enforce();mver++;softKill();render()};
 $('#bGrow').onclick=need(()=>morph(1));$('#bShr').onclick=need(()=>morph(0));
-$('#bInv').onclick=need(()=>{push();for(let i=0;i<mask.length;i++)mask[i]=255-mask[i];enforce();mver++;render()});
-$('#bSmo').onclick=need(()=>{push();const b=blur(mask,2);for(let i=0;i<mask.length;i++)mask[i]=Math.max(0,Math.min(255,(b[i]-128)*3+128));enforce();mver++;render()});
-$('#bRst').onclick=need(()=>{push();mask=mask0.slice();enforce();mver++;render();toast('Reset ho gaya')});
+$('#bInv').onclick=need(()=>{push();for(let i=0;i<mask.length;i++)mask[i]=255-mask[i];enforce();mver++;softKill();render()});
+$('#bSmo').onclick=need(()=>{push();const b=blur(mask,2);for(let i=0;i<mask.length;i++)mask[i]=Math.max(0,Math.min(255,(b[i]-128)*3+128));enforce();mver++;softKill();render()});
+$('#bRst').onclick=need(()=>{push();mask=mask0.slice();enforce();mver++;softKill();render();toast('Reset ho gaya')});
 const cmp=$('#bCmp');
 const cmpOn=e=>{if(!od)return;if(e&&e.cancelable)e.preventDefault();showOrig=true;render()};
 const cmpOff=()=>{if(showOrig){showOrig=false;render()}};
@@ -787,7 +847,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
  if(a==='auto')auto();else if(a==='bg')showSheet($('#shBg'));else if(a==='refine')showSheet($('#shRef'));else if(a==='save')save()};
 /* native shell in dono ko bulata hai jab wo khud likhta hai (API<29 permission
    wala rasta), taaki page wahi message dikhaye jo sach me hua */
-window.GlassCut={version:'1.1.15',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua')};
+window.GlassCut={version:'1.1.16',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua')};
 })();
 </script>
 </body>
