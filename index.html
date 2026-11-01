@@ -313,7 +313,7 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
   mask0=new Uint8Array(W*H);for(let i=0;i<W*H;i++)mask0[i]=od[i*4+3];mask=mask0.slice();keepMask=new Uint8Array(W*H);keepDirty=false;
   /* purani photo ke scratch buffers chhod do: inka size pichhli photo ke hisaab se tha
      (wand flood 8 B/px, cutout ~20 B/px, feather blur 1 B/px) - warna wo bekaar padi rehti hain */
-  FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS=null;DIRT=null;hardFull=false;MBUF=null;
+  FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS=null;DIRT=null;hardFull=false;MBUF=null;BD=null;
   /* island stats, undo ka khaali buffer aur JPEG flatten canvas bhi pichhli photo
      ke size ke the (jcv CW*CH*4 = 1400x1200 par 6.7 MB) - nayi photo par chhod do */
   ISL=null;KEMPTY=null;jcv=null;
@@ -341,13 +341,45 @@ new ResizeObserver(fit).observe(stage);
 /* feather/smooth ka blur har call par do naye W*H buffers banata tha: edge-softness
    slider ghumane par har step ~2*W*H byte garbage. ab ek hi jodi reuse hoti hai. */
 let BLS=null;
-const blur=(src,r)=>{const len=src.length;
- if(!BLS||BLS.n!==len)BLS={n:len,t:new Uint8Array(len),o:new Uint8Array(len)};
- const t=BLS.t,o=BLS.o,n=2*r+1;let x,y,s,b;
- for(y=0;y<H;y++){s=0;b=y*W;for(x=-r;x<=r;x++)s+=src[b+Math.min(W-1,Math.max(0,x))];
-  for(x=0;x<W;x++){t[b+x]=s/n;s+=src[b+Math.min(W-1,x+r+1)]-src[b+Math.max(0,x-r)]}}
- for(x=0;x<W;x++){s=0;for(y=-r;y<=r;y++)s+=t[Math.min(H-1,Math.max(0,y))*W+x];
-  for(y=0;y<H;y++){o[y*W+x]=s/n;s+=t[Math.min(H-1,y+r+1)*W+x]-t[Math.max(0,y-r)*W+x]}}
+/* box blur (feather / Edge Softness / Smooth) profile me sabse mehnga kaam tha.
+   teen cheezein badli hain, output ek byte bhi nahi:
+   1. s/n - ek integer division per pixel per pass, 1400x1200 par 3.36 M division.
+      window ka jod hamesha 0..255*n ke beech hota hai, is liye floor(s/n) ki ek
+      chhoti table (max 4336 byte) ek hi baar banti hai; s kabhi negative nahi
+      hota, is liye table ki value bilkul wahi hai jo Uint8Array me s/n daalne
+      par aati thi.
+   2. har pixel par 4 Math.min/Math.max clamp call (kinare ke liye) - ab row/column
+      ke add/sub index ek baar per (W,H,r) table me banti hain.
+   3. vertical pass column-wise chalta tha, yaani t me har read ek alag cache line
+      par (W*H*n miss). ab chaar columns ek saath, chaar scalar jod ke saath,
+      row ke andar seedhe padhe/likhe jate hain.
+   chhote canvas par bhi sab kuch table-driven hai, is liye 1x1 ya 7x1400 jaisi
+   photo par bhi wahi hisaab chalta hai. */
+const blur=(src,r)=>{
+ const len=src.length;
+ if(!BLS||BLS.n!==len)BLS={n:len,t:new Uint8Array(len),o:new Uint8Array(len),gk:'',tab:null,ca:null,cs:null,ra:null,rs:null};
+ const t=BLS.t,o=BLS.o,n=2*r+1,gk=W+'|'+H+'|'+r;
+ if(BLS.gk!==gk){BLS.gk=gk;
+  const tb=BLS.tab=new Uint8Array(255*n+1);for(let i=0;i<tb.length;i++)tb[i]=Math.floor(i/n);
+  const ca=BLS.ca=new Int32Array(W),cs=BLS.cs=new Int32Array(W);
+  for(let x=0;x<W;x++){ca[x]=Math.min(W-1,x+r+1);cs[x]=Math.max(0,x-r)}
+  const ra=BLS.ra=new Int32Array(H),rs=BLS.rs=new Int32Array(H);
+  for(let y=0;y<H;y++){ra[y]=Math.min(H-1,y+r+1)*W;rs[y]=Math.max(0,y-r)*W}}
+ const tab=BLS.tab,ca=BLS.ca,cs=BLS.cs,ra=BLS.ra,rs=BLS.rs;
+ let x,y,s,b,k,x0;
+ for(y=0;y<H;y++){b=y*W;s=0;
+  for(x=-r;x<=r;x++)s+=src[b+(x<0?0:x>W-1?W-1:x)];
+  for(x=0;x<W;x++){t[b+x]=tab[s];s+=src[b+ca[x]]-src[b+cs[x]]}}
+ for(x0=0;x0+4<=W;x0+=4){
+  let s0=0,s1=0,s2=0,s3=0;
+  for(y=-r;y<=r;y++){const row=(y<0?0:y>H-1?H-1:y)*W;
+   s0+=t[row+x0];s1+=t[row+x0+1];s2+=t[row+x0+2];s3+=t[row+x0+3]}
+  for(y=0;y<H;y++){k=y*W+x0;const a=ra[y],c=rs[y];
+   o[k]=tab[s0];o[k+1]=tab[s1];o[k+2]=tab[s2];o[k+3]=tab[s3];
+   s0+=t[a+x0]-t[c+x0];s1+=t[a+x0+1]-t[c+x0+1];s2+=t[a+x0+2]-t[c+x0+2];s3+=t[a+x0+3]-t[c+x0+3]}}
+ for(x=x0;x<W;x++){s=0;
+  for(y=-r;y<=r;y++)s+=t[(y<0?0:y>H-1?H-1:y)*W+x];
+  for(y=0;y<H;y++){k=y*W+x;o[k]=tab[s];s+=t[ra[y]+x]-t[rs[y]+x]}}
  return o};
 /* stroke ke dauraan har fast frame poora 6.7 MB ImageData upload karta tha, halanki
    sirf brush ka rectangle badla hota hai. DIRT = stroke ne chhua hua rectangle,
@@ -463,12 +495,24 @@ const islBuf=need=>{if(ISL&&ISL.cap>=need)return ISL;
   sb:new Float64Array(cap),drop:new Uint8Array(cap)};
  if(ISL){o.sz.set(ISL.sz);o.sr.set(ISL.sr);o.sg.set(ISL.sg);o.sb.set(ISL.sb)}
  return ISL=o};
-const boxDown=(src,w,h,nw,nh,out)=>{out=out||new Uint8ClampedArray(nw*nh*4);const sx=w/nw,sy=h/nh;
- for(let y=0;y<nh;y++){const y0=Math.floor(y*sy),y1=Math.min(h,Math.max(y0+1,Math.floor((y+1)*sy)));
-  for(let x=0;x<nw;x++){const x0=Math.floor(x*sx),x1=Math.min(w,Math.max(x0+1,Math.floor((x+1)*sx)));
-   let r=0,g=0,b=0,n=0;
-   for(let yy=y0;yy<y1;yy++)for(let xx=x0;xx<x1;xx++){const p=(yy*w+xx)*4;r+=src[p];g+=src[p+1];b+=src[p+2];n++}
-   const q=(y*nw+x)*4;out[q]=r/n;out[q+1]=g/n;out[q+2]=b/n;out[q+3]=255}}
+/* boxDown har output pixel ke liye apna column/row range dobara Math.floor +
+   Math.min + Math.max se nikalta tha (1400x1200 par 420k output pixel x 4 builtin
+   call, har Auto press par). ranges ab ek baar per size nikal kar rakhe jate hain,
+   aur bheetar ka loop sirf jodta hai - jod bilkul wahi hai, aur n bhi wahi
+   (dy*dx = pehle ka counter), is liye output byte-identical rehta hai. */
+let BD=null;
+const boxDown=(src,w,h,nw,nh,out)=>{out=out||new Uint8ClampedArray(nw*nh*4);
+ if(!BD||BD.w!==w||BD.h!==h||BD.nw!==nw||BD.nh!==nh){
+  const sx=w/nw,sy=h/nh,xs=new Int32Array(nw*2),ys=new Int32Array(nh*2);
+  for(let x=0;x<nw;x++){const x0=Math.floor(x*sx);xs[x*2]=x0;xs[x*2+1]=Math.min(w,Math.max(x0+1,Math.floor((x+1)*sx)))}
+  for(let y=0;y<nh;y++){const y0=Math.floor(y*sy);ys[y*2]=y0;ys[y*2+1]=Math.min(h,Math.max(y0+1,Math.floor((y+1)*sy)))}
+  BD={w,h,nw,nh,xs,ys}}
+ const xs=BD.xs,ys=BD.ys;let q=0;
+ for(let y=0;y<nh;y++){const y0=ys[y*2],y1=ys[y*2+1],dy=y1-y0;
+  for(let x=0;x<nw;x++){const x0=xs[x*2],x1=xs[x*2+1];
+   let r=0,g=0,b=0;
+   for(let yy=y0;yy<y1;yy++){const base=yy*w;for(let xx=x0;xx<x1;xx++){const p=(base+xx)*4;r+=src[p];g+=src[p+1];b+=src[p+2]}}
+   const n=dy*(x1-x0);out[q]=r/n;out[q+1]=g/n;out[q+2]=b/n;out[q+3]=255;q+=4}}
  return out};
 /* scratch buffers for the coarse-to-fine pass: per-photo-size reuse, generation stamped */
 let CC=null;
@@ -674,7 +718,18 @@ document.addEventListener('keydown',e=>{
 /* save */
 const fallback=b=>{if(ovUrl)URL.revokeObjectURL(ovUrl);ovUrl=URL.createObjectURL(b);$('#ovImg').src=ovUrl;$('#ov').classList.add('show')};
 $('#ovX').onclick=()=>{$('#ov').classList.remove('show')};
-const toBlob=(c,m)=>new Promise(res=>{try{c.toBlob(res,m,.95)}catch(_){res(null)}});
+/* toBlob kabhi-kabhi bade canvas par chupchaap null de deta hai (purane WebView /
+   kam RAM). pehle save wahin "Save nahi hua" par khatam ho jata tha. ab usi canvas
+   se toDataURL try hota hai, aur uska blob bilkul wahi type rakhta hai jo browser ne
+   diya, is liye naam aur mime ka logic aage jaisa hi chalta hai. */
+const toBlob=(c,m)=>new Promise(res=>{
+ const viaUrl=()=>{try{const u=c.toDataURL(m,.95),i=u.indexOf(',');
+  if(i<8)return res(null);
+  const bin=atob(u.slice(i+1)),n=bin.length,a=new Uint8Array(n);
+  for(let k=0;k<n;k++)a[k]=bin.charCodeAt(k);
+  const ty=(u.slice(5,i).split(';')[0])||m;
+  res(new Blob([a],{type:ty}))}catch(_){res(null)}};
+ try{c.toBlob(b=>{if(b)res(b);else viaUrl()},m,.95)}catch(_){viaUrl()}});
 let jcv=null,saveBusy=false;
 const save=async()=>{
  if(!od){toast('Pehle photo choose karo');return}
@@ -732,7 +787,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
  if(a==='auto')auto();else if(a==='bg')showSheet($('#shBg'));else if(a==='refine')showSheet($('#shRef'));else if(a==='save')save()};
 /* native shell in dono ko bulata hai jab wo khud likhta hai (API<29 permission
    wala rasta), taaki page wahi message dikhaye jo sach me hua */
-window.GlassCut={version:'1.1.14',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua')};
+window.GlassCut={version:'1.1.15',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua')};
 })();
 </script>
 </body>
