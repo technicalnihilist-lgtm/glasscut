@@ -333,7 +333,7 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
   mask0=new Uint8Array(W*H);for(let i=0;i<W*H;i++)mask0[i]=od[i*4+3];mask=mask0.slice();keepMask=new Uint8Array(W*H);keepDirty=false;
   /* purani photo ke scratch buffers chhod do: inka size pichhli photo ke hisaab se tha
      (wand flood 8 B/px, cutout ~20 B/px, feather blur 1 B/px) - warna wo bekaar padi rehti hain */
-  FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS=null;DIRT=null;SDIRT=null;hardFull=false;MBUF=null;BD=null;
+  FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS=null;DIRT=null;SDIRT=null;MBUF=null;BD=null;
   /* island stats, undo ka khaali buffer aur JPEG flatten canvas bhi pichhli photo
      ke size ke the (jcv CW*CH*4 = 1400x1200 par 6.7 MB) - nayi photo par chhod do */
   ISL=null;KEMPTY=null;jcv=null;
@@ -424,10 +424,10 @@ const blurRect=(src,r,rx0,ry0,rx1,ry1,out)=>{
   for(y=ry0;y<=ry1;y++){out[y*W+x]=tab[s];s+=t[ra[y]+x]-t[rs[y]+x]}}
  return out};
 /* stroke ke dauraan har fast frame poora 6.7 MB ImageData upload karta tha, halanki
-   sirf brush ka rectangle badla hota hai. DIRT = stroke ne chhua hua rectangle,
-   hardFull = fgc poore canvas par isi mask ka hard alpha dikha raha hai (tabhi
-   partial upload bilkul wahi pixels deta hai jo full upload deta tha). */
-let DIRT=null,hardFull=false;
+   sirf brush ka rectangle badla hota hai. DIRT = stroke ne chhua hua rectangle;
+   uske bahar ke alpha bytes pehle jaise hi rehte hain, is liye partial upload
+   bilkul wahi pixels deta hai jo full upload deta tha. */
+let DIRT=null;
 /* SDIRT = mask ka wo rectangle jitna softM (feather wala blur) me abhi tak shaamil
    nahi hua. DIRT per-frame hai (har fast frame ke baad khali), SDIRT tab tak
    rehta hai jab tak softM dobara na bane - is liye stroke ke beech chale kai
@@ -438,21 +438,34 @@ let SDIRT=null;
    purana pad jata hai - tab poora blur dobara banta hai. */
 const softKill=()=>{softKey='';SDIRT=null};
 const layer=fast=>{const soft=!fast&&feather>0,key=mver+(soft?'s'+feather:'h');if(key===fgKey)return;
- let m=mask;
+ let m=mask,pr=null;
  if(soft){
   if(softKey!==feather){softM=blur(mask,feather);softKey=feather;SDIRT=null}
   /* box blur radius r sirf r pixel door tak asar dalta hai, is liye badle hue
      rectangle ko r se bada kar ke hi dobara nikaalna hota hai */
-  else if(SDIRT){blurRect(mask,feather,SDIRT[0]-feather,SDIRT[1]-feather,SDIRT[2]+feather,SDIRT[3]+feather,softM);SDIRT=null}
+  else if(SDIRT){pr=SDIRT;blurRect(mask,feather,pr[0]-feather,pr[1]-feather,pr[2]+feather,pr[3]+feather,softM);SDIRT=null}
   m=softM}
+ /* fgc par jo hissa pehle se sahi hai use dobara upload karna bekaar hai. mask
+    sirf DIRT (fast frame) ya SDIRT (stroke ka poora chhua hissa) me badla hai,
+    aur in dono ke bahar ke alpha bytes pehle jaise hi hain - soft preview me bhi,
+    kyunki stroke ke dauraan sirf brush ka rectangle hard hota hai aur baaki canvas
+    pehle wale soft render jaisa hi rehta hai. is liye ab stroke ka pehla frame aur
+    release ka final render dono poore 1400x1200 (6.7 MB) ki jagah sirf chhua hua
+    rectangle bhejte hain. */
  const d=fgi.data;
- if(fast&&hardFull){
+ let x0,y0,x1,y1,part=false;
+ if(fast){
   /* mask badla hi nahi: pichhla frame abhi bhi sahi hai */
   if(!DIRT){fgKey=key;return}
-  const x0=DIRT[0],y0=DIRT[1],x1=DIRT[2],y1=DIRT[3];
+  x0=DIRT[0];y0=DIRT[1];x1=DIRT[2];y1=DIRT[3];part=true;
+ }else if(pr){
+  x0=Math.max(0,pr[0]-feather);y0=Math.max(0,pr[1]-feather);
+  x1=Math.min(W-1,pr[2]+feather);y1=Math.min(H-1,pr[3]+feather);part=true;
+ }
+ if(part){
   for(let y=y0;y<=y1;y++){const b=y*W;for(let x=x0;x<=x1;x++){const i=b+x;d[i*4+3]=m[i]}}
   fgx.putImageData(fgi,0,0,x0,y0,x1-x0+1,y1-y0+1);
- }else{for(let i=0,n=W*H;i<n;i++)d[i*4+3]=m[i];fgx.putImageData(fgi,0,0);hardFull=fast}
+ }else{for(let i=0,n=W*H;i<n;i++)d[i*4+3]=m[i];fgx.putImageData(fgi,0,0)}
  DIRT=null;fgKey=key};
 /* xf() ko har frame aur har pointermove par bulaya jata hai - ek hi array reuse hota
    hai taaki per-frame garbage na bane (values turant padh li jati hain) */
@@ -529,11 +542,23 @@ const restore=s=>{mask=s[0];keepDirty=!!s[1];softKill();
    ek memset+copy, koi allocation nahi). pool do buffer tak hi rakha jata hai
    taaki zinda memory na badhe; snapshot ke arrays kabhi mask khud nahi hote
    (mask sirf restore() se banta hai, jo pop karta hai, shift nahi). */
-let POOL=[];
+let POOL=[],PEND=null;
 const bufOf=()=>{const a=POOL.pop();return(a&&a.length===W*H)?a:new Uint8Array(W*H)};
 const recycle=s=>{if(!s)return;const a=s[0];if(a&&a.length===W*H&&POOL.length<2)POOL.push(a)};
-const push=()=>{if(redo.length){for(let i=0;i<redo.length;i++)recycle(redo[i]);redo=[]}
+/* push() pehle redo stack ke buffers turant pool me daal deta tha aur uske baad
+   snapshot usi pool se buffer leta tha - yaani naya undo snapshot aur purani redo
+   entry ek hi array par baithe rehte the. jab operation kuch nahi badalta (no-op
+   wand/auto, khaali stroke) to wo redo stack wapas lauta diya jata tha, aur tab
+   uske buffers snapshot ke saath share ho chuke hote the: undo ke baad mask wahi
+   array ban jata jo redo entry me tha, is liye Redo kuch bhi nahi karta tha
+   (1400x1200 par test: redo ke baad canvas purane state par hi atka rehta tha).
+   ab redo ke buffers sirf agle push par recycle hote hain - tab tak wo stack ya to
+   abort se wapas aa chuka hota hai (PEND null ho jata hai) ya pakka bekaar hai. */
+const push=()=>{if(PEND){for(let i=0;i<PEND.length;i++)recycle(PEND[i]);PEND=null}
+ PEND=redo.length?redo:null;redo=[];
  undo.push(snap());if(undo.length>10)recycle(undo.shift())};
+/* operation kuch nahi badla: redo stack wapas, aur uske buffers chhue bhi nahi */
+const abortPush=()=>{redo=PEND||[];PEND=null};
 /* keep mask ka respect: jo object protect kiya gaya hai wo kabhi na hate.
    keepMask khaali ho to poora W*H scan bachta hai (stroke release, Grow,
    Shrink, Invert, Smooth, Reset, cutout - har jagah). */
@@ -741,8 +766,8 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
   if(i>=W){j=i-W;if(seen[j]!==gen){jp=j*4;a=r0-od[jp];b2=g0-od[jp+1];c=b0-od[jp+2];if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
   if(i<M-W){j=i+W;if(seen[j]!==gen){jp=j*4;a=r0-od[jp];b2=g0-od[jp+1];c=b0-od[jp+2];if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}}
  enforce();mver++;softKill();return cnt};
-const auto=(silent)=>{if(!od)return;const rd=redo;push();const c=cutout();
- if(c<=0){recycle(undo.pop());redo=rd;mver++;if(!silent)toast(c<0?'Background clear nahi hai, Wand try karo':'Kuch nahi hata. Tolerance badhao ya Wand use karo');return}
+const auto=(silent)=>{if(!od)return;push();const c=cutout();
+ if(c<=0){recycle(undo.pop());abortPush();mver++;if(!silent)toast(c<0?'Background clear nahi hai, Wand try karo':'Kuch nahi hata. Tolerance badhao ya Wand use karo');return}
  render();toast(silent?'Background hata diya - ab naya background chuno':'Ho gaya! Erase / Restore se saaf karo')};
 const wand=(x,y)=>{x=Math.min(W-1,Math.max(0,x|0));y=Math.min(H-1,Math.max(0,y|0));let r=0,g=0,b=0,n=0;
  for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const px=x+dx,py=y+dy;if(px>=0&&py>=0&&px<W&&py<H){const p=(py*W+px)*4;r+=od[p];g+=od[p+1];b+=od[p+2];n++}}
@@ -796,14 +821,14 @@ const pt=e=>{const r=rect(),t=xf();
  return[ux+W/2,uy+H/2,CW/r.w/t[0]]};
 const ring=$('#ring'),moveRing=e=>{ring.style.left=e.clientX+'px';ring.style.top=e.clientY+'px'};
 const ringSize=()=>{const r=rect(),t=xf();return Math.max(8,Math.round(brush*t[0]*(r.w/CW)))};
-let pid=null,strokeRedo=null,strokeCh=0;
+let pid=null,strokeCh=0;
 cv.addEventListener('pointerdown',e=>{if(!od||drawing)return;
  /* sirf primary button/contact se stroke: pehle right-click ya stylus ka side
     button bhi erase stroke shuru kar deta tha (aur undo history me jagah leta tha) */
  if(e.button>0)return;e.preventDefault();refreshRect();const p=pt(e);
  if(mode==='wand'){if(p[0]<0||p[1]<0||p[0]>=W||p[1]>=H)return;
-  const rd=redo;push();if(!wand(p[0],p[1])){recycle(undo.pop());redo=rd;mver++;toast('Kuch nahi hata. Tolerance badhao ya Wand use karo')}render();return}
- strokeRedo=redo;push();strokeCh=0;drawing=true;pid=e.pointerId;last=[p[0],p[1]];try{cv.setPointerCapture(e.pointerId)}catch(_){}
+  push();if(!wand(p[0],p[1])){recycle(undo.pop());abortPush();mver++;toast('Kuch nahi hata. Tolerance badhao ya Wand use karo')}render();return}
+ push();strokeCh=0;drawing=true;pid=e.pointerId;last=[p[0],p[1]];try{cv.setPointerCapture(e.pointerId)}catch(_){}
  const rs=ringSize()+'px';ring.style.width=ring.style.height=rs;ring.style.display='block';moveRing(e);strokeCh+=stroke(p[0],p[1],p[0],p[1],p[2])});
 cv.addEventListener('pointermove',e=>{if(!drawing||e.pointerId!==pid)return;const p=pt(e);moveRing(e);strokeCh+=stroke(last[0],last[1],p[0],p[1],p[2]);last=[p[0],p[1]]});
 /* ek hi ungli ek waqt: doosri ungli ka pointer is stroke ko nahi todta */
@@ -812,8 +837,8 @@ const end=e=>{if(!drawing)return;if(e&&e.pointerId!=null&&pid!=null&&e.pointerId
  /* jis stroke ne ek bhi pixel nahi badla (khaali jagah par tap, pehle se mitaya hua
     hissa) wo undo history me jagah nahi lete - warna 10 aise tap asli history ko
     dhak dete hain aur Undo kuch karta hua nahi lagta. */
- if(strokeCh===0){recycle(undo.pop());redo=strokeRedo}else enforce();
- strokeRedo=null;strokeCh=0;
+ if(strokeCh===0){recycle(undo.pop());abortPush()}else enforce();
+ strokeCh=0;
  /* stroke ke dauraan fast preview ke liye ek rAF pending reh jata hai; wo release ke
     baad chal kar feather wale final frame ko hard-edge preview se overwrite kar deta
     tha - screen aur save ki file alag dikhti thi. ab wo pending frame cancel hota hai
@@ -969,8 +994,15 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
    wala rasta), taaki page wahi message dikhaye jo sach me hua */
 /* pause/resume: native shell onPause/onResume par bulata hai (WebView khud
    background me JS timers nahi rokta) */
-window.GlassCut={version:'1.1.20',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
- pause:()=>{shellPaused=true;idleCheck()},resume:()=>{shellPaused=false;idleCheck()}};
+/* back button: shell ka onBackPressed seedha activity finish kar deta tha, chahe
+   options/background sheet ya save wala overlay khula ho - yaani jis cheez ko band
+   karna tha wo khuli reh jati thi aur app band ho jata tha. page par Escape pehle
+   se sheet band karta hai; ab back bhi wahi karta hai aur sirf tab app chhodta hai
+   jab kuch khula na ho. */
+window.GlassCut={version:'1.1.21',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+ pause:()=>{shellPaused=true;idleCheck()},resume:()=>{shellPaused=false;idleCheck()},
+ back:()=>{const ov=$('#ov');if(ov&&ov.classList.contains('show')){$('#ov').classList.remove('show');return true}
+  if(openSh){closeAll();return true}return false}};
 })();
 </script>
 </body>

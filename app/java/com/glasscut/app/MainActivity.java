@@ -11,6 +11,8 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.MediaStore;
 import android.util.Base64;
 import android.view.View;
@@ -456,13 +458,58 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * Back used to finish the activity straight away, even when the page had an
+     * open sheet (options / background) or the "saved" overlay on screen - the
+     * thing the user wanted to dismiss stayed open and the whole app went away.
+     * The page already closes a sheet on Escape; back now asks it first and only
+     * leaves the app when the page says it has nothing to close.
+     */
+    private int backToken;
+    private boolean backAnswered;
+
     @Override
     public void onBackPressed() {
-        if (web != null && web.canGoBack()) {
-            web.goBack();
-        } else {
+        if (web == null) {
             super.onBackPressed();
+            return;
         }
+        if (web.canGoBack()) {
+            web.goBack();
+            return;
+        }
+        final int token = ++backToken;
+        backAnswered = false;
+        try {
+            web.evaluateJavascript(
+                    "(function(){try{return (window.GlassCut&&GlassCut.back&&GlassCut.back())?'1':'0'}"
+                            + "catch(e){return '0'}})();",
+                    new ValueCallback<String>() {
+                        @Override
+                        public void onReceiveValue(String v) {
+                            if (token != backToken || backAnswered) return;
+                            backAnswered = true;
+                            if (v == null || v.indexOf('1') < 0) finishFromBack();
+                        }
+                    });
+        } catch (Exception e) {
+            finishFromBack();
+            return;
+        }
+        // A page that is busy (mid-save) must not be able to swallow the back press.
+        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (token != backToken || backAnswered) return;
+                backAnswered = true;
+                finishFromBack();
+            }
+        }, 600);
+    }
+
+    private void finishFromBack() {
+        if (isFinishing() || isDestroyed()) return;
+        super.onBackPressed();
     }
 
     @Override
