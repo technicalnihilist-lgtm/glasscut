@@ -333,12 +333,23 @@ public class MainActivity extends Activity {
                     Environment.DIRECTORY_PICTURES), "GlassCut");
             if (!dir.exists() && !dir.mkdirs()) return "err:mkdir";
             File f = new File(dir, name);
-            FileOutputStream fos = new FileOutputStream(f);
+            // API 29+ never leaves a half-written file behind: the MediaStore row
+            // is IS_PENDING, so a failed write is deleted and stays invisible.
+            // This path has no such flag - a write that dies (disk full, card
+            // pulled, app killed) used to leave a truncated image in Pictures/
+            // GlassCut forever, and the media scanner would happily index it.
+            // Now the partial file is removed before the error goes back to the page.
             try {
-                writeBase64(b64, fos);
-                fos.flush();
-            } finally {
-                try { fos.close(); } catch (Exception ignored) { }
+                FileOutputStream fos = new FileOutputStream(f);
+                try {
+                    writeBase64(b64, fos);
+                    fos.flush();
+                } finally {
+                    try { fos.close(); } catch (Exception ignored) { }
+                }
+            } catch (Exception e) {
+                try { if (f.exists()) f.delete(); } catch (Exception ignored) { }
+                throw e;
             }
             android.media.MediaScannerConnection.scanFile(this,
                     new String[]{f.getAbsolutePath()}, new String[]{mime}, null);
@@ -396,7 +407,15 @@ public class MainActivity extends Activity {
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                Toast.makeText(MainActivity.this, msg, Toast.LENGTH_SHORT).show();
+                // A save runs on its own thread and reports back when it is done.
+                // If the user has already left the screen by then the activity is
+                // gone, and Toast.makeText on a destroyed activity throws
+                // WindowManager$BadTokenException - a crash caused purely by the
+                // save finishing late. Say nothing instead.
+                if (isFinishing() || isDestroyed()) return;
+                try {
+                    Toast.makeText(MainActivity.this, msg, Toast.LENGTH_SHORT).show();
+                } catch (Exception ignored) { }
             }
         });
     }
