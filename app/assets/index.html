@@ -326,7 +326,24 @@ $('#fBg').onchange=e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
  loadImg(f,im=>{bgImg=im;bg={t:'img'};bgKey='';noSw();render();toast('Background lag gaya')})};
 
 /* image load */
-const loadImg=(f,cb)=>{const u=URL.createObjectURL(f),im=new Image();im.onload=()=>{URL.revokeObjectURL(u);cb(im)};im.onerror=()=>{URL.revokeObjectURL(u);toast('Photo load nahi hui')};im.src=u};
+/* Photo load: na onload na onerror aaye (kharab file, decode OOM, WebView jo
+   image chhod de) to pehle kuch bhi nahi hota tha - na toast, na photo, aur usi
+   file ko dobara chunne ke alawa koi raasta nahi tha. ab 20 s ka watchdog hai.
+   Saath hi token: agar pehli (bhaari) photo ka decode doosri photo ke baad poora
+   hota hai to purana callback nayi photo ko overwrite nahi karta (pehle kar deta
+   tha, yaani jo photo baad me chuni wo gayab). box dene par hi token chalta hai -
+   background photo ka apna box hai, is liye wo main photo se nahi katta. */
+const mkLoadBox=()=>({t:0});
+const loadImg=(f,cb,box)=>{const tok=box?++box.t:0,u=URL.createObjectURL(f),im=new Image();
+ let done=false,wd=0;
+ const fin=ok=>{if(done)return;done=true;if(wd)clearTimeout(wd);
+  try{URL.revokeObjectURL(u)}catch(_){}
+  if(box&&tok!==box.t)return;
+  if(ok)cb(im);else toast('Photo load nahi hui')};
+ wd=setTimeout(()=>fin(false),20000);
+ im.onload=()=>fin(true);im.onerror=()=>fin(false);
+ try{im.src=u}catch(_){fin(false)}};
+const MAINLOAD=mkLoadBox();
 const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWidth,im.naturalHeight));
   W=Math.max(1,Math.round(im.naturalWidth*s));H=Math.max(1,Math.round(im.naturalHeight*s));
   origc.width=W;origc.height=H;const ox=origc.getContext('2d');ox.drawImage(im,0,0,W,H);
@@ -347,7 +364,7 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
   if(ovUrl){URL.revokeObjectURL(ovUrl);ovUrl=null}
   undo=[];redo=[];POOL.length=0;fgKey=outKey=softKey='';mver++;
   $('#empty').style.display='none';cv.style.display='block';setSize();render();
-  setTimeout(()=>{try{auto(true)}catch(_){toast('Auto dabao ya Wand / Erase use karo')}},30)})};
+  setTimeout(()=>{try{auto(true)}catch(_){toast('Auto dabao ya Wand / Erase use karo')}},30)},MAINLOAD)};
 $('#bPick').onclick=()=>$('#fMain').click();
 $('#fMain').onchange=e=>{const f=e.target.files[0];e.target.value='';if(!f)return;pickPhoto(f)};
 /* drag & drop / paste on desktop */
@@ -426,7 +443,19 @@ const blurRect=(src,r,rx0,ry0,rx1,ry1,out)=>{
  for(y=ty0;y<=ty1;y++){b=y*W;s=0;
   for(k=-r;k<=r;k++){const c=rx0+k;s+=src[b+(c<0?0:c>W-1?W-1:c)]}
   for(x=rx0;x<=rx1;x++){t[b+x]=tab[s];s+=src[b+ca[x]]-src[b+cs[x]]}}
- for(x=rx0;x<=rx1;x++){s=0;
+ /* vertical pass chaar column ek saath, bilkul poore blur() ki tarah: column-wise
+    chalne par har read ek alag cache line par jata tha, aur jab blur ka box poore
+    canvas jitna bada ho to column-wise loop poore blur se dheema pad jata tha.
+    jod, table aur likhne ka kram bilkul wahi hai, is liye out byte-identical. */
+ let xx=rx0;
+ for(;xx+4<=rx1+1;xx+=4){
+  let s0=0,s1=0,s2=0,s3=0;
+  for(k=-r;k<=r;k++){const c=ry0+k,row=(c<0?0:c>H-1?H-1:c)*W;
+   s0+=t[row+xx];s1+=t[row+xx+1];s2+=t[row+xx+2];s3+=t[row+xx+3]}
+  for(y=ry0;y<=ry1;y++){const o2=y*W+xx,a=ra[y],c=rs[y];
+   out[o2]=tab[s0];out[o2+1]=tab[s1];out[o2+2]=tab[s2];out[o2+3]=tab[s3];
+   s0+=t[a+xx]-t[c+xx];s1+=t[a+xx+1]-t[c+xx+1];s2+=t[a+xx+2]-t[c+xx+2];s3+=t[a+xx+3]-t[c+xx+3]}}
+ for(x=xx;x<=rx1;x++){s=0;
   for(k=-r;k<=r;k++){const c=ry0+k;s+=t[(c<0?0:c>H-1?H-1:c)*W+x]}
   for(y=ry0;y<=ry1;y++){out[y*W+x]=tab[s];s+=t[ra[y]+x]-t[rs[y]+x]}}
  return out};
@@ -440,6 +469,9 @@ let DIRT=null;
    rehta hai jab tak softM dobara na bane - is liye stroke ke beech chale kai
    frames bhi galti nahi karte. */
 let SDIRT=null;
+/* SBOX = softM ka wo box jiske bahar har byte pakka 0 hai (blur ka nateeja wahan
+   0 hi hota hai). isi par poora-blur ki jagah sirf box ka blur khada hai. */
+let SBOX=null;
 /* mask ko kisi bhi aise raste se badalne par jahan stamp2 nahi chalta
    (wand, cutout, grow/shrink, invert, smooth, reset, undo/redo, enforce) softM
    purana pad jata hai - tab poora blur dobara banta hai. */
@@ -471,7 +503,31 @@ const layer=fast=>{const soft=!fast&&feather>0,key=mver+(soft?'s'+feather:'h');i
  if(fgc.width!==W||fgc.height!==H){fgc.width=W;fgc.height=H;fgFull=true}
  let m=mask,pr=null;
  if(soft){
-  if(softKey!==feather){softM=blur(mask,feather);softKey=feather;SDIRT=null}
+  if(softKey!==feather){
+   /* poore canvas ki jagah sirf mask ka box (MB) + radius blur hota hai: MB ke
+      bahar har mask pixel pakka 0 hai, aur radius r ka box blur r pixel se zyada
+      door asar nahi dalta - yaani MB+r ke bahar softM ka sahi nateeja 0 hai.
+      pichhli baar ka box bada tha to uska wo hissa jo naye box se bahar reh gaya
+      use saaf 0 kar diya jata hai (memset), taaki purana blur wahan na bacha reh
+      jaye. MB poora canvas ho to yahi purana poora blur ban jata hai. */
+   const nx0=Math.max(0,MB[0]-feather),ny0=Math.max(0,MB[1]-feather),
+         nx1=Math.min(W-1,MB[2]+feather),ny1=Math.min(H-1,MB[3]+feather);
+   /* box canvas ke bade hisse ko dhak raha ho to poora blur hi sasta hai (doosra
+      raasta wahi kaam karta hai, sirf box ke bahar ka memset bachta hai) */
+   if(!softM||softM.length!==W*H||!SBOX||MB[2]<MB[0]||nx1<nx0||ny1<ny0
+      ||(nx1-nx0+1)*(ny1-ny0+1)>=W*H*0.7){softM=blur(mask,feather);SBOX=[0,0,W-1,H-1]}
+   else{
+    /* purane box ka wo hissa jo naye box se bahar hai saaf 0 (memset) */
+    const o=SBOX;
+    if(o[1]<ny0)softM.fill(0,o[1]*W+o[0],Math.min(o[3],ny0-1)*W+o[2]+1);
+    if(o[3]>ny1)softM.fill(0,Math.max(o[1],ny1+1)*W+o[0],o[3]*W+o[2]+1);
+    const ya=Math.max(o[1],ny0),yb=Math.min(o[3],ny1);
+    if(ya<=yb){
+     if(o[0]<nx0)softM.fill(0,ya*W+o[0],yb*W+Math.min(o[2],nx0-1)+1);
+     if(o[2]>nx1)softM.fill(0,ya*W+Math.max(o[0],nx1+1),yb*W+o[2]+1)}
+    blurRect(mask,feather,nx0,ny0,nx1,ny1,softM);SBOX=[nx0,ny0,nx1,ny1]}
+   softKey=feather;SDIRT=null
+  }
   /* box blur radius r sirf r pixel door tak asar dalta hai, is liye badle hue
      rectangle ko r se bada kar ke hi dobara nikaalna hota hai */
   else if(SDIRT){pr=SDIRT;blurRect(mask,feather,pr[0]-feather,pr[1]-feather,pr[2]+feather,pr[3]+feather,softM);SDIRT=null}
@@ -565,8 +621,14 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
  const dep=P.depth/100;
  if(P.sh||dep>0){cx.shadowColor='rgba(0,0,0,'+(0.45+dep*0.30).toFixed(2)+')';cx.shadowBlur=CW*(0.04+dep*0.07);cx.shadowOffsetY=CW*(0.015+dep*0.03);cx.shadowOffsetX=mx*dep*CW*0.012}
  cx.drawImage(tmp,0,0);cx.restore()};
-function render(fast){if(!od)return;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1;cx.clearRect(0,0,CW,CH);
+function render(fast){if(!od)return;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1;
  const pm=P.motion/100,pox=-mx*pm*CW*0.010,poy=-my*pm*CH*0.010;
+ /* colour/gradient background poore canvas par ek opaque fillRect karta hai, aur
+    bina parallax (pox=poy=0) wo bilkul canvas ke kinare se kinare tak dhakta hai -
+    yaani uske pehle ka poora clearRect (1400x1200 par 1.68 M pixel) bekaar tha.
+    4D motion ya transparent background par clear hamesha hota hai, is liye
+    nateeja byte-identical rehta hai. */
+ if(!((bg.t==='color'||bg.t==='grad')&&pox===0&&poy===0))cx.clearRect(0,0,CW,CH);
  cx.save();cx.translate(pox,poy);
  if(bg.t==='color'){cx.fillStyle=bg.v;cx.fillRect(0,0,CW,CH)}
  else if(bg.t==='grad'){const k=CW+'|'+CH+'|'+bg.v;
@@ -592,14 +654,23 @@ const qr=()=>{sched(true);clearTimeout(rt);rt=setTimeout(()=>render(false),160)}
    keepDirty sirf jhootha-true ho sakta hai (erase keepMask saaf karta hai),
    jo memory thodi zyada leta hai par kabhi galat mask nahi banata. */
 let keepDirty=false;
-const snap=()=>{const a=bufOf();a.set(mask);return[a,keepDirty?keepMask.slice():null]};
+const snap=()=>{const a=bufOf();a.set(mask);
+ /* mask ke saath uska box bhi yaad rakha jata hai: undo/redo ke baad box poora
+    canvas maan lena (mbAll) Grow/Shrink/Smooth ke scan aur feather ke blur ko
+    bekaar poore 1.68 M pixel par chalata tha. snapshot ka box us snapshot ke
+    mask ke liye pehle se hi conservative hai (har 255 likhne wali jagah usse
+    chauda karti hai), is liye wapas lauta dena bhi utna hi safe hai. keepMask
+    me paint ho to poora canvas hi rakha jata hai (wo box ke bahar 255 likhta hai). */
+ return[a,keepDirty?keepMask.slice():null,keepDirty?null:[MB[0],MB[1],MB[2],MB[3]]]};
 /* snapshot me keepMask tabhi hota hai jab keep tool se kuch paint hua ho. jab nahi
    hota (aam haal) to undo/redo har press par 1.68 MB ka naya khaali array bana raha
    tha. ab ek hi khaali buffer reuse hota hai - use fill(0) karke saaf kiya jata hai
    (memset, koi allocation nahi). snapshots hamesha copy rakhte hain, is liye buffer
    share hone se koi purana snapshot kharab nahi hota. */
 let KEMPTY=null;
-const restore=s=>{mask=s[0];keepDirty=!!s[1];softKill();mbAll();
+const restore=s=>{mask=s[0];keepDirty=!!s[1];softKill();
+ const sb=s[2];
+ if(sb){MB[0]=sb[0];MB[1]=sb[1];MB[2]=sb[2];MB[3]=sb[3]}else mbAll();
  if(s[1])keepMask=s[1];
  else{if(!KEMPTY||KEMPTY.length!==W*H)KEMPTY=new Uint8Array(W*H);else KEMPTY.fill(0);keepMask=KEMPTY}};
 /* snapshot ka mask buffer ab recycle hota hai. pehle har stroke ek naya 1.68 MB
@@ -1125,7 +1196,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;POOL.length=0;
  fgKey='';outKey='';bgKey='';SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.24',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.25',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  trim:()=>{dropScratch();if(od)render()},
  pause:()=>{shellPaused=true;idleCheck()},resume:()=>{shellPaused=false;idleCheck()},
  back:()=>{const ov=$('#ov');if(ov&&ov.classList.contains('show')){$('#ov').classList.remove('show');return true}

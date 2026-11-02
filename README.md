@@ -6,10 +6,10 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 
 | | |
 |---|---|
-| **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 218 KB, Android 7.0+ |
+| **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 222 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.24 (versionCode 24) |
+| **Version** | 1.1.25 (versionCode 25) |
 
 ---
 
@@ -179,6 +179,9 @@ Honest limitation: a soft out-of-focus highlight and a soft-edged object look id
 - **Outline redrew the whole canvas** — the edge outline drew the full W×H silhouette 16 times per frame even when the subject covered a third of the canvas; it now draws only the subject's bounding box.
 - **Idle 4D Motion burned frames** — with the gyro still, the page re-rendered the same frame 16 times a second; it now renders only when the parallax offset actually changes.
 - **Safe areas** — the page reads `--sat` / `--sab` CSS variables, which the Android shell feeds from real window insets, so the header clears a notch and the dock clears the gesture bar.
+- **Feather re-blurred the whole canvas** — with Edge Softness above 0, every Wand / Auto / Grow / Smooth / Undo rebuilt the soft mask over all W×H pixels even though the mask only has content inside the subject's box. It now rebuilds only that box (+radius) and memsets the rest, and undo/redo keep the mask box instead of resetting it to the whole canvas: measured in headless Chrome at 1400×1200 with softness 6, one rebuild 73.3 ms → 20.2 ms (−72%), an Edge Grow press 107 ms → 72 ms.
+- **Opaque background cleared twice** — with a colour or gradient background and no parallax, every frame cleared the full canvas and then painted over all of it. The redundant clear is gone: 1,680,000 → 0 clearRect pixels per frame, identical canvas hash.
+- **A photo that never decodes left the app stuck** — if the WebView neither fires `onload` nor `onerror` (corrupt file, decode OOM), nothing happened at all before: no toast, no photo. There is now a 20 s watchdog, and a slow first decode can no longer overwrite the photo the user picked after it.
 
 Verified in headless Chrome: load → auto → wand → erase → undo → redo → reset → re-cut → save → language switch → close, with zero console errors, and the saved file checked on disk.
 
@@ -188,10 +191,10 @@ Verified in headless Chrome: load → auto → wand → erase → undo → redo 
 
 Download [`GlassCut.apk`](GlassCut.apk) on the phone, tap it, allow "install unknown apps" for your browser or file manager once. Android 7.0 (API 24) or newer.
 
-**This build has a new signing key again** — `/scratch/saved` was empty when the 1.1.24 build sandbox came up, so `build.sh` generated a fresh keystore. Android will refuse to install it over any earlier build — uninstall the old app once, then install. The keystore is deliberately *not* committed (a signing key is a credential); this run's key is handed back as `glasscut-signing-key.jks` so it can be dropped at `/scratch/saved/glasscut-signing-key.jks`, and every later build in this workspace will reuse it. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate for this build:
+**This build has a new signing key again** — `/scratch/saved` was empty when the 1.1.25 build sandbox came up, so `build.sh` generated a fresh keystore. Android will refuse to install it over any earlier build — uninstall the old app once, then install. The keystore is deliberately *not* committed (a signing key is a credential); this run's key is handed back as `glasscut-signing-key.jks` so it can be dropped at `/scratch/saved/glasscut-signing-key.jks`, and every later build in this workspace will reuse it. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate for this build:
 
 ```
-fa3f4348277c91297b5a600643e43f94582d92f7cdde219c2f450dc382be0b89
+d7c3967a19250e21ba4aa0e57d073afba7f817199ebcd02e5ae038a7554cbeef
 ```
 
 ## Build it yourself
