@@ -234,8 +234,11 @@ const AB=()=>window.GlassCutAndroid||window.AndroidBridge||null;
 win.addEventListener('animationend',e=>{if(e.target!==win)return;
  if(win.classList.contains('closing')){win.classList.remove('closing');win.classList.add('hidden');$('#launch').classList.add('show')}
  else win.classList.remove('opening')});
-$('#bClose').onclick=()=>{if(win.classList.contains('closing'))return;closeAll();win.classList.add('closing')};
-$('#launch').onclick=()=>{$('#launch').classList.remove('show');win.classList.remove('hidden');void win.offsetWidth;win.classList.add('opening')};
+$('#bClose').onclick=()=>{if(win.classList.contains('closing'))return;closeAll();win.classList.add('closing');
+ /* band window par 4D Motion ka timer chalte rehna bekaar hai */
+ winClosed=true;idleCheck()};
+$('#launch').onclick=()=>{$('#launch').classList.remove('show');win.classList.remove('hidden');void win.offsetWidth;win.classList.add('opening');
+ winClosed=false;idleCheck()};
 
 /* sheets */
 let openSh=null;
@@ -264,11 +267,23 @@ slider('sS',v=>{P.s=v;qr()});slider('sX',v=>{P.x=v;qr()});slider('sY',v=>{P.y=v;
 slider('sOp',v=>{P.op=v;sched(false)});slider('sBl',v=>{P.bl=v;sched(false)});
 slider('sDp',v=>{P.depth=v;sched(false)});slider('sTt',v=>{P.tilt=v;sched(false)});
 slider('sM',v=>{P.motion=v;startMotion()});
-const motionTick=()=>{mraf=0;if(!P.motion){mx=my=0;sched(false);return}
+/* 4D Motion ka timer har 60 ms par ek poora render karta tha - chahe page hidden ho,
+   window band ho ya native shell app ko background me le jaye. ab in teeno haalat me
+   timer ruk jata hai aur wapas aane par chalu hota hai, warna app background me
+   bekaar har second 16 full-canvas render jalaata rehta hai. */
+let idle=false,winClosed=false,shellPaused=false;
+const motionTick=()=>{mraf=0;if(idle)return;if(!P.motion){mx=my=0;sched(false);return}
  if(gyro){mx=Math.max(-1,Math.min(1,gx));my=Math.max(-1,Math.min(1,gy))}
  else{const t=Date.now()/1000;mx=Math.sin(t*0.9);my=Math.cos(t*1.35)*0.65}
  sched(false);mraf=setTimeout(motionTick,60)};
-const startMotion=()=>{if(!mraf)mraf=setTimeout(motionTick,30)};
+const startMotion=()=>{if(!mraf&&!idle)mraf=setTimeout(motionTick,30)};
+const setIdle=v=>{if(idle===v)return;idle=v;
+ if(v){if(mraf){clearTimeout(mraf);mraf=0}}
+ else if(P.motion)startMotion()};
+const idleCheck=()=>setIdle(!!(document.hidden||winClosed||shellPaused));
+document.addEventListener('visibilitychange',idleCheck);
+window.addEventListener('pagehide',()=>setIdle(true));
+window.addEventListener('pageshow',idleCheck);
 try{window.addEventListener('deviceorientation',e=>{
  if(e.gamma==null&&e.beta==null)return;gyro=true;gx=(e.gamma||0)/28;gy=((e.beta||0)-45)/28;},{passive:true})}catch(_){}
 seg('tools',v=>{mode=v;toast(v==='wand'?'Photo par tap karo, same color hat jayega':v==='erase'?'Ungli se mitao':v==='keep'?'Object par ungli phero, wo kabhi nahi hatega':'Ungli se wapas lao')});
@@ -688,10 +703,22 @@ const stamp2=(t1,v1,t2,v2,cx0,cy0,r)=>{
  else{if(x0<DIRT[0])DIRT[0]=x0;if(y0<DIRT[1])DIRT[1]=y0;if(x1>DIRT[2])DIRT[2]=x1;if(y1>DIRT[3])DIRT[3]=y1}
  if(!SDIRT)SDIRT=[x0,y0,x1,y1];
  else{if(x0<SDIRT[0])SDIRT[0]=x0;if(y0<SDIRT[1])SDIRT[1]=y0;if(x1>SDIRT[2])SDIRT[2]=x1;if(y1>SDIRT[3])SDIRT[3]=y1}
- for(let y=y0;y<=y1;y++){const dy=y-cy0,b=y*W;
-  for(let x=x0;x<=x1;x++){const dx=x-cx0;if(dx*dx+dy*dy<=r2){const i=b+x;
+ /* brush ka circle pehle poore bounding box par per-pixel dx*dx+dy*dy test se bharta
+    tha: bbox ka ~21% hissa (kone) bekaar test hota tha aur har pixel par do multiply
+    + ek add chalta tha. circle ek row me ek hi lagataar span hota hai, is liye ab har
+    row ka span ek sqrt se nikalta hai aur sirf span ke do kinare asli test se
+    confirm hote hain (floating point me sqrt ka rounding ek pixel idhar-udhar kar
+    sakta hai) - is liye chhaya hua pixel set bilkul wahi rehta hai. */
+ for(let y=y0;y<=y1;y++){const dy=y-cy0,d2=dy*dy;
+  if(d2>r2)continue;
+  const sp=Math.sqrt(r2-d2),b=y*W;
+  let a=Math.ceil(cx0-sp);if(a<x0)a=x0;
+  let e=Math.floor(cx0+sp);if(e>x1)e=x1;
+  while(a<=e){const dx=a-cx0;if(dx*dx+d2<=r2)break;a++}
+  while(e>=a){const dx=e-cx0;if(dx*dx+d2<=r2)break;e--}
+  for(let x=a;x<=e;x++){const i=b+x;
    if(t1[i]!==v1){t1[i]=v1;ch++}
-   if(t2&&t2[i]!==v2){t2[i]=v2;ch++}}}}
+   if(t2&&t2[i]!==v2){t2[i]=v2;ch++}}}
  return ch};
 const stroke=(a,b,c,d,k)=>{const r=Math.max(2,brush*k/2),keep=mode==='keep',v=keep||mode!=='erase'?255:0,n=Math.max(1,Math.ceil(Math.hypot(c-a,d-b)/Math.max(1,r/3)));let ch=0;
  for(let i=0;i<=n;i++){const px=a+(c-a)*i/n,py=b+(d-b)*i/n;
@@ -868,7 +895,10 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
  if(a==='auto')auto();else if(a==='bg')showSheet($('#shBg'));else if(a==='refine')showSheet($('#shRef'));else if(a==='save')save()};
 /* native shell in dono ko bulata hai jab wo khud likhta hai (API<29 permission
    wala rasta), taaki page wahi message dikhaye jo sach me hua */
-window.GlassCut={version:'1.1.17',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua')};
+/* pause/resume: native shell onPause/onResume par bulata hai (WebView khud
+   background me JS timers nahi rokta) */
+window.GlassCut={version:'1.1.18',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+ pause:()=>{shellPaused=true;idleCheck()},resume:()=>{shellPaused=false;idleCheck()}};
 })();
 </script>
 </body>

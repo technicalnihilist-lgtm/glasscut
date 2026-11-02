@@ -411,6 +411,32 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * WebView apne aap background me JS timers nahi rokta: page ka 4D Motion loop
+     * 60 ms par ek full-canvas render karta rehta tha jab tak app foreground me hai,
+     * chahe user kisi doosri app me ho. onPause par page ko bata kar us loop ko rok
+     * dete hain (aur WebView ko bhi pause kar dete hain), onResume par wapas chalu.
+     */
+    @Override
+    protected void onPause() {
+        if (web != null) {
+            web.evaluateJavascript(
+                    "window.GlassCut&&GlassCut.pause&&GlassCut.pause();", null);
+            web.onPause();
+        }
+        super.onPause();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (web != null) {
+            web.onResume();
+            web.evaluateJavascript(
+                    "window.GlassCut&&GlassCut.resume&&GlassCut.resume();", null);
+        }
+    }
+
     @Override
     public void onBackPressed() {
         if (web != null && web.canGoBack()) {
