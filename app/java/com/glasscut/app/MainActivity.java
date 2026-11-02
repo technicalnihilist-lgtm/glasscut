@@ -2,6 +2,7 @@ package com.glasscut.app;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ComponentCallbacks2;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Intent;
@@ -403,6 +404,43 @@ public class MainActivity extends Activity {
                 w.evaluateJavascript("window.GlassCut&&GlassCut.saved&&GlassCut.saved();", null);
             }
         });
+    }
+
+    /**
+     * The page keeps a handful of caches that only exist to make the next frame
+     * cheaper: the feather-blurred mask, the box-blur tables, the Grow/Shrink
+     * copy buffer, the undo buffer pool, the JPEG flatten canvas and the island
+     * scratch arrays. On a 1400x1200 photo that is ~27 MB of typed arrays held
+     * for the whole session, even while the user is in another app. Android tells
+     * us when memory is tight; the page then drops all of it (GlassCut.trim) and
+     * rebuilds whatever it needs on the next render, so the picture on screen
+     * does not change.
+     */
+    private void trimPage() {
+        if (web == null) return;
+        web.post(new Runnable() {
+            @Override
+            public void run() {
+                WebView w = web;
+                if (w == null) return;
+                try {
+                    w.evaluateJavascript(
+                            "window.GlassCut&&GlassCut.trim&&GlassCut.trim();", null);
+                } catch (Exception ignored) { }
+            }
+        });
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) trimPage();
+    }
+
+    @Override
+    public void onLowMemory() {
+        super.onLowMemory();
+        trimPage();
     }
 
     private void jsToast(final String msg) {

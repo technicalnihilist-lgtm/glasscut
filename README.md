@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 218 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.21 (versionCode 21) |
+| **Version** | 1.1.22 (versionCode 22) |
 
 ---
 
@@ -176,6 +176,8 @@ Honest limitation: a soft out-of-focus highlight and a soft-edged object look id
 - **Pointer capture was never released**, so a stroke could stick after leaving the canvas; `pointerleave` now ends it.
 - **Memory** — undo history trimmed to 15 full-resolution masks.
 - **Objects in the background were deleted** — the island filter kept only the biggest blob. Fixed in 1.0.1, see above.
+- **Outline redrew the whole canvas** — the edge outline drew the full W×H silhouette 16 times per frame even when the subject covered a third of the canvas; it now draws only the subject's bounding box.
+- **Idle 4D Motion burned frames** — with the gyro still, the page re-rendered the same frame 16 times a second; it now renders only when the parallax offset actually changes.
 - **Safe areas** — the page reads `--sat` / `--sab` CSS variables, which the Android shell feeds from real window insets, so the header clears a notch and the dock clears the gesture bar.
 
 Verified in headless Chrome: load → auto → wand → erase → undo → redo → reset → re-cut → save → language switch → close, with zero console errors, and the saved file checked on disk.
@@ -186,10 +188,10 @@ Verified in headless Chrome: load → auto → wand → erase → undo → redo 
 
 Download [`GlassCut.apk`](GlassCut.apk) on the phone, tap it, allow "install unknown apps" for your browser or file manager once. Android 7.0 (API 24) or newer.
 
-**This build has a new signing key again** — `/scratch/saved` was empty when the 1.1.21 build sandbox came up, so `build.sh` generated a fresh keystore. Android will refuse to install it over any earlier build — uninstall the old app once, then install. The keystore is deliberately *not* committed (a signing key is a credential); this run's key is handed back as `glasscut-signing-key.jks` so it can be dropped at `/scratch/saved/glasscut-signing-key.jks`, and every later build in this workspace will reuse it. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate for this build:
+**This build has a new signing key again** — `/scratch/saved` was empty when the 1.1.22 build sandbox came up, so `build.sh` generated a fresh keystore. Android will refuse to install it over any earlier build — uninstall the old app once, then install. The keystore is deliberately *not* committed (a signing key is a credential); this run's key is handed back as `glasscut-signing-key.jks` so it can be dropped at `/scratch/saved/glasscut-signing-key.jks`, and every later build in this workspace will reuse it. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate for this build:
 
 ```
-e3d1d85af1f481e55ac6c913ae3e6276cb4552e014214a3b1e431b42ba266c0c
+17d2df7557dd2f4863200468e29dcf70301f497f25c08567399fe298ef82bdea
 ```
 
 ## Build it yourself
@@ -222,6 +224,8 @@ GlassCutAndroid.toast("message");
 
 // native → page, on every inset change
 document.documentElement.style.setProperty('--sat', '28px');
+// native → page, when Android says memory is tight (onTrimMemory / onLowMemory)
+window.GlassCut.trim();   // drops cached scratch buffers, redraws the same picture
 ```
 
 ## Licence

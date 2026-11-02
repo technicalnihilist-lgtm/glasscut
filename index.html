@@ -272,10 +272,17 @@ slider('sM',v=>{P.motion=v;startMotion()});
    timer ruk jata hai aur wapas aane par chalu hota hai, warna app background me
    bekaar har second 16 full-canvas render jalaata rehta hai. */
 let idle=false,winClosed=false,shellPaused=false;
-const motionTick=()=>{mraf=0;if(idle)return;if(!P.motion){mx=my=0;sched(false);return}
+/* gyro par mx/my sirf device hilne par badalte hain, lekin timer phir bhi 60 ms par
+   poora canvas render karta rehta tha - phone mez par rakha ho to second me 16
+   bilkul ek jaise frame. ab sirf tab render hota hai jab parallax offset sach me
+   badla ho (auto wala sine rasta hamesha badalta hai, is liye wahan koi asar nahi). */
+let mDrawn=false,mLX=0,mLY=0;
+const motionTick=()=>{mraf=0;if(idle)return;
+ if(!P.motion){mx=my=0;if(!mDrawn||mLX!==0||mLY!==0){mLX=0;mLY=0;mDrawn=true;sched(false)}return}
  if(gyro){mx=Math.max(-1,Math.min(1,gx));my=Math.max(-1,Math.min(1,gy))}
  else{const t=Date.now()/1000;mx=Math.sin(t*0.9);my=Math.cos(t*1.35)*0.65}
- sched(false);mraf=setTimeout(motionTick,60)};
+ if(!mDrawn||mx!==mLX||my!==mLY){mLX=mx;mLY=my;mDrawn=true;sched(false)}
+ mraf=setTimeout(motionTick,60)};
 const startMotion=()=>{if(!mraf&&!idle)mraf=setTimeout(motionTick,30)};
 const setIdle=v=>{if(idle===v)return;idle=v;
  if(v){if(mraf){clearTimeout(mraf);mraf=0}}
@@ -336,7 +343,7 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
   FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS=null;DIRT=null;SDIRT=null;MBUF=null;BD=null;
   /* island stats, undo ka khaali buffer aur JPEG flatten canvas bhi pichhli photo
      ke size ke the (jcv CW*CH*4 = 1400x1200 par 6.7 MB) - nayi photo par chhod do */
-  ISL=null;KEMPTY=null;jcv=null;
+  ISL=null;KEMPTY=null;jcv=null;SUB=null;fgFull=true;
   if(ovUrl){URL.revokeObjectURL(ovUrl);ovUrl=null}
   undo=[];redo=[];POOL.length=0;fgKey=outKey=softKey='';mver++;
   $('#empty').style.display='none';cv.style.display='block';setSize();render();
@@ -437,7 +444,20 @@ let SDIRT=null;
    (wand, cutout, grow/shrink, invert, smooth, reset, undo/redo, enforce) softM
    purana pad jata hai - tab poora blur dobara banta hai. */
 const softKill=()=>{softKey='';SDIRT=null};
+/* SUB = fgc ke asli alpha ka bounding box (mask ke non-zero pixels ka box).
+   fgc par is box ke bahar har pixel transparent hai, is liye drawSubj jab fgc/outc
+   draw karta hai to sirf yahi box bhejna bilkul wahi pixels deta hai - poora
+   1400x1200 quad bhejne ki zaroorat nahi. box poore upload par exactly nikalta
+   hai aur partial upload par sirf badhta hai (conservative, kabhi chhota nahi),
+   is liye purana box kabhi kuch clip nahi karta. */
+let SUB=null,fgFull=false;
+/* box ko 4 source pixel chauda karke bhejte hain taaki scale hone par bilinear
+   sampling box ke kinare par wahi pixels dekhe jo poore canvas me dekhta tha */
+const SUBP=[0,0,0,0];
+const subPad=b=>{const x0=b[0]-4<0?0:b[0]-4,y0=b[1]-4<0?0:b[1]-4,x1=b[2]+4>W-1?W-1:b[2]+4,y1=b[3]+4>H-1?H-1:b[3]+4;
+ SUBP[0]=x0;SUBP[1]=y0;SUBP[2]=x1-x0+1;SUBP[3]=y1-y0+1;return SUBP};
 const layer=fast=>{const soft=!fast&&feather>0,key=mver+(soft?'s'+feather:'h');if(key===fgKey)return;
+ if(fgc.width!==W||fgc.height!==H){fgc.width=W;fgc.height=H;fgFull=true}
  let m=mask,pr=null;
  if(soft){
   if(softKey!==feather){softM=blur(mask,feather);softKey=feather;SDIRT=null}
@@ -462,11 +482,23 @@ const layer=fast=>{const soft=!fast&&feather>0,key=mver+(soft?'s'+feather:'h');i
   x0=Math.max(0,pr[0]-feather);y0=Math.max(0,pr[1]-feather);
   x1=Math.min(W-1,pr[2]+feather);y1=Math.min(H-1,pr[3]+feather);part=true;
  }
+ /* fgc abhi-abhi naya bana (nayi photo / trim) to usme kuch bhi sahi nahi hai:
+    partial upload chhota box likh kar baaki canvas khaali chhod deta. */
+ if(part&&fgFull){part=false;DIRT=null}
  if(part){
   for(let y=y0;y<=y1;y++){const b=y*W;for(let x=x0;x<=x1;x++){const i=b+x;d[i*4+3]=m[i]}}
   fgx.putImageData(fgi,0,0,x0,y0,x1-x0+1,y1-y0+1);
- }else{for(let i=0,n=W*H;i<n;i++)d[i*4+3]=m[i];fgx.putImageData(fgi,0,0)}
- DIRT=null;fgKey=key};
+  if(SUB){if(x0<SUB[0])SUB[0]=x0;if(y0<SUB[1])SUB[1]=y0;if(x1>SUB[2])SUB[2]=x1;if(y1>SUB[3])SUB[3]=y1}
+  else SUB=[x0,y0,x1,y1];
+ }else{
+  /* poora upload: yahin SUB exactly nikalta hai (ek hi pass, wahi loop) */
+  let bx0=W,by0=H,bx1=-1,by1=-1;
+  for(let y=0;y<H;y++){const b=y*W;for(let x=0;x<W;x++){const i=b+x,v=m[i];d[i*4+3]=v;
+   if(v){if(x<bx0)bx0=x;if(x>bx1)bx1=x;if(by0===H)by0=y;by1=y}}}
+  fgx.putImageData(fgi,0,0);
+  SUB=bx1<0?null:[bx0,by0,bx1,by1];
+ }
+ fgFull=false;DIRT=null;fgKey=key};
 /* xf() ko har frame aur har pointermove par bulaya jata hai - ek hi array reuse hota
    hai taaki per-frame garbage na bane (values turant padh li jati hain) */
 const XF=[0,0,0];
@@ -489,11 +521,25 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
     bekaar full-canvas copy thi (clear + draw + wapas draw). us haalat me fgc ko
     seedha cx par wahi transform de kar draw karna bilkul same pixels deta hai. */
  if(src!==fgc||(P.line<=0&&P.op>=100&&!P.sh&&P.depth<=0)){
-  cx.save();cx.translate(t[1],t[2]);cx.scale(sx,t[0]);cx.transform(cs3,sh3,0,1,0,0);cx.drawImage(src,-W/2,-H/2);cx.restore();return}
+  cx.save();cx.translate(t[1],t[2]);cx.scale(sx,t[0]);cx.transform(cs3,sh3,0,1,0,0);
+  /* fgc ka content sirf SUB ke andar hai - sirf wahi box bhejo */
+  const pb=src===fgc&&SUB?subPad(SUB):null;
+  if(pb)cx.drawImage(src,pb[0],pb[1],pb[2],pb[3],pb[0]-W/2,pb[1]-H/2,pb[2],pb[3]);
+  else cx.drawImage(src,-W/2,-H/2);
+  cx.restore();return}
  const tc=tcx;tc.setTransform(1,0,0,1,0,0);tc.clearRect(0,0,CW,CH);tc.save();tc.translate(t[1],t[2]);tc.scale(sx,t[0]);tc.transform(cs3,sh3,0,1,0,0);tc.translate(-W/2,-H/2);
- if(P.line>0){if(outKey!==fgKey){const ox=oxc;ox.setTransform(1,0,0,1,0,0);ox.globalCompositeOperation='copy';ox.drawImage(fgc,0,0);ox.globalCompositeOperation='source-in';ox.fillStyle='#fff';ox.fillRect(0,0,W,H);ox.globalCompositeOperation='source-over';outKey=fgKey}
-  const r=P.line/t[0],n=fast?8:16;for(let a=0;a<n;a++)tc.drawImage(outc,Math.cos(a*2*Math.PI/n)*r,Math.sin(a*2*Math.PI/n)*r)}
- tc.drawImage(fgc,0,0);tc.restore();
+ /* outline 16 (fast frame me 8) baar poora W*H silhouette draw karta tha - ek
+    render me 30 M source pixel. silhouette (outc) bhi fgc jaisa hi SUB ke bahar
+    khaali hai, is liye har shift sirf SUB ka box bhejta hai. */
+ const pb=SUB?subPad(SUB):null;
+ if(P.line>0){if(outKey!==fgKey){const ox=oxc;if(outc.width!==W||outc.height!==H){outc.width=W;outc.height=H}ox.setTransform(1,0,0,1,0,0);ox.globalCompositeOperation='copy';ox.drawImage(fgc,0,0);ox.globalCompositeOperation='source-in';ox.fillStyle='#fff';ox.fillRect(0,0,W,H);ox.globalCompositeOperation='source-over';outKey=fgKey}
+  const r=P.line/t[0],n=fast?8:16;
+  if(pb)for(let a=0;a<n;a++){const dx=Math.cos(a*2*Math.PI/n)*r,dy=Math.sin(a*2*Math.PI/n)*r;
+   tc.drawImage(outc,pb[0],pb[1],pb[2],pb[3],pb[0]+dx,pb[1]+dy,pb[2],pb[3])}
+  else for(let a=0;a<n;a++)tc.drawImage(outc,Math.cos(a*2*Math.PI/n)*r,Math.sin(a*2*Math.PI/n)*r)}
+ if(pb)tc.drawImage(fgc,pb[0],pb[1],pb[2],pb[3],pb[0],pb[1],pb[2],pb[3]);
+ else tc.drawImage(fgc,0,0);
+ tc.restore();
  cx.save();cx.globalAlpha=P.op/100;
  const dep=P.depth/100;
  if(P.sh||dep>0){cx.shadowColor='rgba(0,0,0,'+(0.45+dep*0.30).toFixed(2)+')';cx.shadowBlur=CW*(0.04+dep*0.07);cx.shadowOffsetY=CW*(0.015+dep*0.03);cx.shadowOffsetX=mx*dep*CW*0.012}
@@ -999,7 +1045,16 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
    karna tha wo khuli reh jati thi aur app band ho jata tha. page par Escape pehle
    se sheet band karta hai; ab back bhi wahi karta hai aur sirf tab app chhodta hai
    jab kuch khula na ho. */
-window.GlassCut={version:'1.1.21',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+/* trim: Android onTrimMemory / onLowMemory par bulaya jata hai. yahan jo bhi
+   sirf cache hai (feather ka softM, blur tables, morph ka copy, undo pool, JPEG
+   flatten canvas, island buffers) chhod diya jata hai aur fgc/outc/bgb/sm
+   1x1 ho jate hain - agla render sab kuch wapas bana leta hai, is liye screen
+   par kuch nahi badalta. photo khud (origc/fgi/mask) chhui bhi nahi jati. */
+const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;POOL.length=0;
+ fgKey='';outKey='';bgKey='';SUB=null;fgFull=true;
+ fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
+window.GlassCut={version:'1.1.22',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+ trim:()=>{dropScratch();if(od)render()},
  pause:()=>{shellPaused=true;idleCheck()},resume:()=>{shellPaused=false;idleCheck()},
  back:()=>{const ov=$('#ov');if(ov&&ov.classList.contains('show')){$('#ov').classList.remove('show');return true}
   if(openSh){closeAll();return true}return false}};
