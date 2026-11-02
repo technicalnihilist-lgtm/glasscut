@@ -340,7 +340,7 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
   mask0=new Uint8Array(W*H);for(let i=0;i<W*H;i++)mask0[i]=od[i*4+3];mask=mask0.slice();keepMask=new Uint8Array(W*H);keepDirty=false;
   /* purani photo ke scratch buffers chhod do: inka size pichhli photo ke hisaab se tha
      (wand flood 8 B/px, cutout ~20 B/px, feather blur 1 B/px) - warna wo bekaar padi rehti hain */
-  FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS=null;DIRT=null;SDIRT=null;MBUF=null;BD=null;
+  FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS=null;XR=null;DIRT=null;SDIRT=null;MBUF=null;BD=null;
   /* island stats, undo ka khaali buffer aur JPEG flatten canvas bhi pichhli photo
      ke size ke the (jcv CW*CH*4 = 1400x1200 par 6.7 MB) - nayi photo par chhod do */
   ISL=null;KEMPTY=null;jcv=null;SUB=null;fgFull=true;
@@ -532,7 +532,17 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
     render me 30 M source pixel. silhouette (outc) bhi fgc jaisa hi SUB ke bahar
     khaali hai, is liye har shift sirf SUB ka box bhejta hai. */
  const pb=SUB?subPad(SUB):null;
- if(P.line>0){if(outKey!==fgKey){const ox=oxc;if(outc.width!==W||outc.height!==H){outc.width=W;outc.height=H}ox.setTransform(1,0,0,1,0,0);ox.globalCompositeOperation='copy';ox.drawImage(fgc,0,0);ox.globalCompositeOperation='source-in';ox.fillStyle='#fff';ox.fillRect(0,0,W,H);ox.globalCompositeOperation='source-over';outKey=fgKey}
+ /* outc (silhouette) sirf SUB box me padha jata hai - neeche har shift usi box ka
+    drawImage karta hai. is liye usse poore W*H par dobara banana bekaar tha: copy
+    wala draw aur source-in fill dono ab sirf SUB box par chalte hain (copy composite
+    sirf source ke bbox par lagta hai, bahar destination waisa hi rehta hai), aur box
+    ke bahar ka outc kabhi read nahi hota - nateeja bilkul wahi. */
+ if(P.line>0){if(outKey!==fgKey){const ox=oxc;if(outc.width!==W||outc.height!==H){outc.width=W;outc.height=H}
+  ox.setTransform(1,0,0,1,0,0);ox.globalCompositeOperation='copy';
+  if(pb)ox.drawImage(fgc,pb[0],pb[1],pb[2],pb[3],pb[0],pb[1],pb[2],pb[3]);else ox.drawImage(fgc,0,0);
+  ox.globalCompositeOperation='source-in';ox.fillStyle='#fff';
+  if(pb)ox.fillRect(pb[0],pb[1],pb[2],pb[3]);else ox.fillRect(0,0,W,H);
+  ox.globalCompositeOperation='source-over';outKey=fgKey}
   const r=P.line/t[0],n=fast?8:16;
   if(pb)for(let a=0;a<n;a++){const dx=Math.cos(a*2*Math.PI/n)*r,dy=Math.sin(a*2*Math.PI/n)*r;
    tc.drawImage(outc,pb[0],pb[1],pb[2],pb[3],pb[0]+dx,pb[1]+dy,pb[2],pb[3])}
@@ -646,7 +656,7 @@ const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;softKill();
 /* coarse-to-fine cutout: flood a downscaled copy, then snap the edge back at full res */
 /* boxDown ka output, xmap aur seeds har Auto press par naye bante the (1400x1200 par
    ~1.68 MB + 5.6 KB garbage). ab wahi buffers dobara use hote hain. */
-let SD=null,XM=null,SEEDS=null;
+let SD=null,XM=null,SEEDS=null,XR=null;
 /* island labelling ke stats: island ki size aur rang ka jod. buffer sirf tab bada
    hota hai jab islands ki ginti capacity se zyada ho - warna wahi ek set reuse. */
 let ISL=null;
@@ -778,9 +788,16 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
  } else for(let i=0;i<N;i++)lab[i]=-1;
  const seen=C.seen,q=C.q,lev=C.lev;
  const step=Math.max(4,Math.round(4+tol*0.15)),s2=step*step,K=3;
- /* column lookup: pehle har pixel par ek integer division hota tha */
- const xmap=(XM&&XM.length===W)?XM:(XM=new Int32Array(W));
- for(let x=0;x<W;x++)xmap[x]=Math.min(nw-1,x*nw/W|0);
+ /* coarse column ka pixel range: pehle har full-res pixel par xmap[x] load hota
+    tha aur phir bg[c] aur inner[c] dobara padhe jate the - teen load per pixel,
+    1.68 M pixel par. ab har coarse column ka [x0,x1) ek hi baar banta hai aur us
+    column ke bg/inner bhi ek hi baar padhe jate hain, pixel loop ke andar sirf i
+    likha jata hai. kram wahi hai (column chadhte, andar x chadhte), is liye q me
+    pixels bilkul usi tarteeb me jate hain aur BFS ka nateeja byte-identical. */
+ if(!XR||XR.W!==W||XR.nw!==nw){const r=new Int32Array(nw+1);let x=0;
+  for(let c2=0;c2<nw;c2++){r[c2]=x;while(x<W&&Math.min(nw-1,x*nw/W|0)===c2)x++}
+  r[nw]=W;XR={W:W,nw:nw,r:r}}
+ const xr=XR.r;
  /* coarse grid ka wo cell jiske aath ke aath cell (3x3) background hain, uske
     har full-res pixel ka chaaron neighbour bhi background cell me hi padta hai -
     yaani wo pehle se queue me hai, is liye us pixel ke chaar neighbour check
@@ -797,9 +814,13 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
  for(let y=0;y<nh;y++){const row=y*nw;
   for(let x=0;x<nw;x++){const i=row+x;inner[i]=(hb[i]===0&&(y===0||hb[i-nw]===0)&&(y===nh-1||hb[i+nw]===0))?1:0}}
  let hd=0,sp2=0,cnt=0;
- for(let y=0;y<H;y++){const cy=Math.min(nh-1,y*nh/H|0),row=cy*nw;
-  for(let x=0;x<W;x++){const i=y*W+x,c=row+xmap[x];if(bg[c]){seen[i]=gen;lev[i]=0;
-   if(inner[c]){if(mask[i]){mask[i]=0;cnt++}}else q[sp2++]=i}}}
+ for(let y=0;y<H;y++){const cy=Math.min(nh-1,y*nh/H|0),row=cy*nw,base=y*W;
+  for(let c2=0;c2<nw;c2++){const c=row+c2,x1=xr[c2+1];if(bg[c]){
+   /* lev sirf queue me jane wale pixel ke liye likhna padta hai - andar ka
+      (inner) pixel BFS me kabhi aata hi nahi, is liye uska lev kabhi padha
+      nahi jata. pehle wo 1.68 M baar likha jata tha. */
+   if(inner[c]){for(let x=xr[c2];x<x1;x++){const i=base+x;seen[i]=gen;if(mask[i]){mask[i]=0;cnt++}}}
+   else{for(let x=xr[c2];x<x1;x++){const i=base+x;seen[i]=gen;lev[i]=0;q[sp2++]=i}}}}}
  /* per-pixel closure allocation hata di: har pixel par ek naya function banta tha */
  /* har pixel ka rang ab ek hi baar padha jata hai: pehle near() har neighbour
     check par i*4 dobara ginta tha aur od se teen byte phir padhta tha (1.68 M
@@ -1010,18 +1031,29 @@ const save=async()=>{
  const br=AB();
  if(br&&br.saveImage){
   const fr=new FileReader();
+  /* FileReader ka jawab kabhi na aaye (purana WebView, bada blob, OOM) ya
+     readAsDataURL khud throw kar de, to pehle saveBusy hamesha ke liye true reh
+     jata tha aur us session me Save dobara kabhi kaam nahi karta tha - bilkul
+     wahi bug jo 1.1.20 me toBlob ke liye theek hua tha. ab 6 s ka watchdog hai,
+     readAsDataURL throw kare to bhi saveBusy chhut jata hai, aur late aane wala
+     FileReader callback dobara save nahi karta. */
+  let bdone=false,wd=0;
+  const bfin=ok=>{if(bdone)return;bdone=true;if(wd)clearTimeout(wd);saveBusy=false;
+   if(!ok)fallback(b)};
+  wd=setTimeout(()=>bfin(false),6000);
   hold=true;
-  fr.onload=()=>{saveBusy=false;let res=null;
+  fr.onload=()=>{if(bdone)return;let res=null;
    try{res=br.saveImage(String(fr.result),name,mime)}catch(_){res='err'}
    const r=res==null?'':String(res);
    /* "ok:pending" ka matlab native ne abhi likha nahi, sirf permission maangi hai.
       pehle page isi par "Save ho gaya" dikha deta tha aur phir native "Save nahi
       hua" - ulta message. ab pending par page chup rehta hai; asli nateeja
       native GlassCut.saved() se aata hai. */
-   if(r.indexOf('ok:pending')===0)return;
-   if(!r||r.indexOf('err')===0)fallback(b);else toast('Save ho gaya')};
-  fr.onerror=()=>{saveBusy=false;fallback(b)};
-  fr.readAsDataURL(b);return}
+   if(r.indexOf('ok:pending')===0){bdone=true;if(wd)clearTimeout(wd);saveBusy=false;return}
+   if(!r||r.indexOf('err')===0)bfin(false);else bfin(true)};
+  fr.onerror=()=>bfin(false);
+  try{fr.readAsDataURL(b)}catch(_){bfin(false)}
+  return}
  try{const f=new File([b],name,{type:mime});
   if(navigator.canShare&&navigator.canShare({files:[f]})&&/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)){
    await navigator.share({files:[f],title:'GlassCut'});toast('Save ho gaya');return}}catch(err){if(err&&err.name==='AbortError')return}
@@ -1050,10 +1082,10 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
    flatten canvas, island buffers) chhod diya jata hai aur fgc/outc/bgb/sm
    1x1 ho jate hain - agla render sab kuch wapas bana leta hai, is liye screen
    par kuch nahi badalta. photo khud (origc/fgi/mask) chhui bhi nahi jati. */
-const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;POOL.length=0;
+const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;POOL.length=0;
  fgKey='';outKey='';bgKey='';SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.22',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.23',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  trim:()=>{dropScratch();if(od)render()},
  pause:()=>{shellPaused=true;idleCheck()},resume:()=>{shellPaused=false;idleCheck()},
  back:()=>{const ov=$('#ov');if(ov&&ov.classList.contains('show')){$('#ov').classList.remove('show');return true}
