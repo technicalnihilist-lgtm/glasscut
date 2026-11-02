@@ -589,6 +589,7 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
  if(!refs.length)return -1;
  if(!CC||CC.n!==N||CC.m!==M){CC={n:N,m:M,vis:new Int32Array(N),st:new Int32Array(N),vis2:new Int32Array(N),
   st2:new Int32Array(N),lab:new Int32Array(N).fill(-1),q3:new Int32Array(N),bg:new Uint8Array(N),
+  hb:new Uint8Array(N),inner:new Uint8Array(N),
   seen:new Int32Array(M),q:new Int32Array(M),lev:new Uint8Array(M),g:0}}
  const C=CC,gen=++C.g;
  const vis=C.vis,st=C.st,bg=C.bg.fill(0),vis2=C.vis2,st2=C.st2,lab=C.lab,q3=C.q3;
@@ -640,9 +641,25 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
  /* column lookup: pehle har pixel par ek integer division hota tha */
  const xmap=(XM&&XM.length===W)?XM:(XM=new Int32Array(W));
  for(let x=0;x<W;x++)xmap[x]=Math.min(nw-1,x*nw/W|0);
+ /* coarse grid ka wo cell jiske aath ke aath cell (3x3) background hain, uske
+    har full-res pixel ka chaaron neighbour bhi background cell me hi padta hai -
+    yaani wo pehle se queue me hai, is liye us pixel ke chaar neighbour check
+    kabhi kuch nahi karte (seen pehle hi gen hai). aise pixel ko seedha clear kar
+    dete hain: BFS bhi wahi karta (mask[i]=0, cnt++), sirf bekaar queue entry aur
+    4 seen loads bachte hain. boundary wale pixels ka BFS bilkul waisa hi chalta hai. */
+ const hb=C.hb,inner=C.inner;
+ /* hb=0 ka matlab: ye cell bg hai aur left/right wale cell bhi bg hain (kinare par
+    jahan cell hi nahi, wahan koi rukavat nahi). do pass me (3x3) ka hisaab: pehle
+    horizontal, phir vertical - dono jagah AND, warna ek hi bg padosi poori row ko
+    "andar" bana deta hai. */
+ for(let y=0;y<nh;y++){const row=y*nw;
+  for(let x=0;x<nw;x++){const i=row+x;hb[i]=(bg[i]&&(x===0||bg[i-1])&&(x===nw-1||bg[i+1]))?0:1}}
+ for(let y=0;y<nh;y++){const row=y*nw;
+  for(let x=0;x<nw;x++){const i=row+x;inner[i]=(hb[i]===0&&(y===0||hb[i-nw]===0)&&(y===nh-1||hb[i+nw]===0))?1:0}}
  let hd=0,sp2=0,cnt=0;
  for(let y=0;y<H;y++){const cy=Math.min(nh-1,y*nh/H|0),row=cy*nw;
-  for(let x=0;x<W;x++){const i=y*W+x;if(bg[row+xmap[x]]){seen[i]=gen;lev[i]=0;q[sp2++]=i}}}
+  for(let x=0;x<W;x++){const i=y*W+x,c=row+xmap[x];if(bg[c]){seen[i]=gen;lev[i]=0;
+   if(inner[c]){if(mask[i]){mask[i]=0;cnt++}}else q[sp2++]=i}}}
  /* per-pixel closure allocation hata di: har pixel par ek naya function banta tha */
  /* har pixel ka rang ab ek hi baar padha jata hai: pehle near() har neighbour
     check par i*4 dobara ginta tha aur od se teen byte phir padhta tha (1.68 M
@@ -803,7 +820,11 @@ const save=async()=>{
     chhod deta tha jabki file soft-edge save hoti thi. ab wo frame cancel hota hai
     taaki screen aur file ek hi render se aayein. */
  if(raf){cancelAnimationFrame(raf);raf=0}fastReq=false;
- clearTimeout(rt);render(false);
+ clearTimeout(rt);
+ /* Hold: Original dabaye hue save karne par render() original photo banata tha,
+    is liye file me bina cut ki hui photo jati thi. save ke waqt compare hamesha
+    off rehta hai - screen aur file dono edit dikhate hain. */
+ showOrig=false;render(false);
  let src=cv;
  if(fmt==='jpeg'&&bg.t==='none'){
   if(!jcv)jcv=mk();
@@ -847,7 +868,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
  if(a==='auto')auto();else if(a==='bg')showSheet($('#shBg'));else if(a==='refine')showSheet($('#shRef'));else if(a==='save')save()};
 /* native shell in dono ko bulata hai jab wo khud likhta hai (API<29 permission
    wala rasta), taaki page wahi message dikhaye jo sach me hua */
-window.GlassCut={version:'1.1.16',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua')};
+window.GlassCut={version:'1.1.17',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua')};
 })();
 </script>
 </body>
