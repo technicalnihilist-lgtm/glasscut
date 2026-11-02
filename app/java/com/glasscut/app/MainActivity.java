@@ -221,9 +221,11 @@ public class MainActivity extends Activity {
         public String saveImage(String dataUrl, String name, String mime) {
             try {
                 if (dataUrl == null || dataUrl.length() < 32) return "err:empty";
-                int comma = dataUrl.indexOf(',');
-                if (comma < 0) return "err:format";
-                String b64 = dataUrl.substring(comma + 1);
+                if (dataUrl.indexOf(',') < 0) return "err:format";
+                /* yahan pehle `String b64 = dataUrl.substring(comma+1)` tha - ek
+                   poora multi-MB copy jo kabhi use hi nahi hota tha (naam bhi
+                   kahin nahi jata). har save par base64 payload ka dohra copy
+                   sirf ban kar garbage ban jata tha. */
                 if (mime == null || mime.length() == 0) mime = "image/png";
                 if (Build.VERSION.SDK_INT < 29
                         && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
@@ -265,9 +267,9 @@ public class MainActivity extends Activity {
      * save only ever needs one 16 KB window (16 KB chars in, 12 KB out), which is
      * what keeps a big save from turning into an OOM on a low-RAM device.
      */
-    private static void writeBase64(String b64, OutputStream os) throws IOException {
+    private static void writeBase64(String b64, int from, OutputStream os) throws IOException {
         final int n = b64.length();
-        int i = 0;
+        int i = from;
         while (i < n) {
             int end = Math.min(n, i + B64_CHUNK);
             if (end < n) {
@@ -296,8 +298,12 @@ public class MainActivity extends Activity {
         try {
             if (dataUrl == null) return "err:empty";
             if (mime == null || mime.length() == 0) mime = "image/png";
-            int comma = dataUrl.indexOf(',');
-            String b64 = comma >= 0 ? dataUrl.substring(comma + 1) : dataUrl;
+            /* `dataUrl.substring(comma+1)` poore base64 payload ka ek dohra String
+               banata tha - 1400x1200 PNG par ~6 MB ka payload yaani save ke waqt
+               6 MB extra Java heap, sirf is liye ki payload ko "kaatna" pada. ab
+               payload jahan hai wahin se, ek offset se padha jata hai; har 16 KB
+               slice hi kat kar decode hoti hai (jaisa pehle se tha). */
+            final int start = dataUrl.indexOf(',') >= 0 ? dataUrl.indexOf(',') + 1 : 0;
             if (name == null || name.length() == 0) name = "glasscut.png";
 
             if (Build.VERSION.SDK_INT >= 29) {
@@ -317,7 +323,7 @@ public class MainActivity extends Activity {
                     OutputStream os = cr.openOutputStream(uri);
                     if (os == null) throw new IOException("stream");
                     try {
-                        writeBase64(b64, os);
+                        writeBase64(dataUrl, start, os);
                         os.flush();
                     } finally {
                         try { os.close(); } catch (Exception ignored) { }
@@ -345,7 +351,7 @@ public class MainActivity extends Activity {
             try {
                 FileOutputStream fos = new FileOutputStream(f);
                 try {
-                    writeBase64(b64, fos);
+                    writeBase64(dataUrl, start, fos);
                     fos.flush();
                 } finally {
                     try { fos.close(); } catch (Exception ignored) { }

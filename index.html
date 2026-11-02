@@ -319,7 +319,7 @@ $('#cBlue').onclick=need(()=>{noSw();const r=$('#sBl');r.value=48;r.dispatchEven
  bg={t:'bluetint'};bgKey='';
  /* portrait mode: sirf insaan, background ka koi tukda nahi */
  keepObj=0;const kk=$('#tKeep');if(kk)kk.setAttribute('aria-checked','false');
- push();mask=mask0.slice();mver++;softKill();try{cutout()}catch(_){}
+ push();const nm=bufOf();nm.set(mask0);mask=nm;mbAll();mver++;softKill();try{cutout()}catch(_){}
  render();toast('Blue blur lag gaya - sirf insaan dikhega')});
 $('#bBgImg').onclick=()=>$('#fBg').click();
 $('#fBg').onchange=e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
@@ -337,7 +337,7 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
      padha jata hai, jo pehle render se pehle ho jata hai. */
   fgi=ox.getImageData(0,0,W,H);od=fgi.data;
   fgc.width=W;fgc.height=H;outc.width=W;outc.height=H;bgb.width=bgb.height=1;bgKey='';
-  mask0=new Uint8Array(W*H);for(let i=0;i<W*H;i++)mask0[i]=od[i*4+3];mask=mask0.slice();keepMask=new Uint8Array(W*H);keepDirty=false;
+  mask0=new Uint8Array(W*H);for(let i=0;i<W*H;i++)mask0[i]=od[i*4+3];mask=mask0.slice();keepMask=new Uint8Array(W*H);keepDirty=false;mbAll();
   /* purani photo ke scratch buffers chhod do: inka size pichhli photo ke hisaab se tha
      (wand flood 8 B/px, cutout ~20 B/px, feather blur 1 B/px) - warna wo bekaar padi rehti hain */
   FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS=null;XR=null;DIRT=null;SDIRT=null;MBUF=null;BD=null;
@@ -456,6 +456,17 @@ let SUB=null,fgFull=false;
 const SUBP=[0,0,0,0];
 const subPad=b=>{const x0=b[0]-4<0?0:b[0]-4,y0=b[1]-4<0?0:b[1]-4,x1=b[2]+4>W-1?W-1:b[2]+4,y1=b[3]+4>H-1?H-1:b[3]+4;
  SUBP[0]=x0;SUBP[1]=y0;SUBP[2]=x1-x0+1;SUBP[3]=y1-y0+1;return SUBP};
+/* mask ka conservative bounding box: MB=[x0,y0,x1,y1] hamesha har non-zero mask
+   pixel ko ghere rakhta hai (kabhi exact nahi, sirf bada ya barabar). is liye MB
+   ke bahar har pixel pakka 0 hai - aur wahan Grow/Shrink/Smooth ka nateeja bhi 0
+   hi hota hai, yaani wahan kuch likhna zaroori nahi. isi baat par Grow/Shrink aur
+   Smooth ka scan sirf MB (+radius) tak seemit hai; nateeja byte-identical rehta
+   hai. har wo jagah jo mask me 255 likh sakti hai MB ko chauda karti hai
+   (stamp2, morph grow, smooth, cutout), aur jahan mask poori tarah badal jata hai
+   (undo/redo, Reset, Invert, Blue blur, nayi photo) wahan MB poora canvas ho jata hai. */
+let MB=[0,0,-1,-1];
+const mbAll=()=>{MB[0]=0;MB[1]=0;MB[2]=W-1;MB[3]=H-1};
+const mbAdd=(x0,y0,x1,y1)=>{if(x0<MB[0])MB[0]=x0;if(y0<MB[1])MB[1]=y0;if(x1>MB[2])MB[2]=x1;if(y1>MB[3])MB[3]=y1};
 const layer=fast=>{const soft=!fast&&feather>0,key=mver+(soft?'s'+feather:'h');if(key===fgKey)return;
  if(fgc.width!==W||fgc.height!==H){fgc.width=W;fgc.height=H;fgFull=true}
  let m=mask,pr=null;
@@ -588,7 +599,7 @@ const snap=()=>{const a=bufOf();a.set(mask);return[a,keepDirty?keepMask.slice():
    (memset, koi allocation nahi). snapshots hamesha copy rakhte hain, is liye buffer
    share hone se koi purana snapshot kharab nahi hota. */
 let KEMPTY=null;
-const restore=s=>{mask=s[0];keepDirty=!!s[1];softKill();
+const restore=s=>{mask=s[0];keepDirty=!!s[1];softKill();mbAll();
  if(s[1])keepMask=s[1];
  else{if(!KEMPTY||KEMPTY.length!==W*H)KEMPTY=new Uint8Array(W*H);else KEMPTY.fill(0);keepMask=KEMPTY}};
 /* snapshot ka mask buffer ab recycle hota hai. pehle har stroke ek naya 1.68 MB
@@ -814,13 +825,19 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
  for(let y=0;y<nh;y++){const row=y*nw;
   for(let x=0;x<nw;x++){const i=row+x;inner[i]=(hb[i]===0&&(y===0||hb[i-nw]===0)&&(y===nh-1||hb[i+nw]===0))?1:0}}
  let hd=0,sp2=0,cnt=0;
+ /* MB yahin nikalta hai: bg cell ka har pixel pakka 0 ho jata hai (inner seedha
+    clear hota hai, baaki poora BFS se), is liye bacha hua non-zero sirf non-bg
+    cells me ho sakta hai - unka full-res failaav hi naya MB hai. ye hisaab usi
+    loop me ho jata hai jo pehle se har cell par chal raha tha. */
+ let mbx0=W,mby0=H,mbx1=-1,mby1=-1;
  for(let y=0;y<H;y++){const cy=Math.min(nh-1,y*nh/H|0),row=cy*nw,base=y*W;
   for(let c2=0;c2<nw;c2++){const c=row+c2,x1=xr[c2+1];if(bg[c]){
    /* lev sirf queue me jane wale pixel ke liye likhna padta hai - andar ka
       (inner) pixel BFS me kabhi aata hi nahi, is liye uska lev kabhi padha
       nahi jata. pehle wo 1.68 M baar likha jata tha. */
    if(inner[c]){for(let x=xr[c2];x<x1;x++){const i=base+x;seen[i]=gen;if(mask[i]){mask[i]=0;cnt++}}}
-   else{for(let x=xr[c2];x<x1;x++){const i=base+x;seen[i]=gen;lev[i]=0;q[sp2++]=i}}}}}
+   else{for(let x=xr[c2];x<x1;x++){const i=base+x;seen[i]=gen;lev[i]=0;q[sp2++]=i}}}
+   else{const cxx=xr[c2];if(cxx<mbx0)mbx0=cxx;if(x1-1>mbx1)mbx1=x1-1;if(y<mby0)mby0=y;mby1=y}}}
  /* per-pixel closure allocation hata di: har pixel par ek naya function banta tha */
  /* har pixel ka rang ab ek hi baar padha jata hai: pehle near() har neighbour
     check par i*4 dobara ginta tha aur od se teen byte phir padhta tha (1.68 M
@@ -832,7 +849,11 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
   if(x<W-1){j=i+1;if(seen[j]!==gen){jp=j*4;a=r0-od[jp];b2=g0-od[jp+1];c=b0-od[jp+2];if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
   if(i>=W){j=i-W;if(seen[j]!==gen){jp=j*4;a=r0-od[jp];b2=g0-od[jp+1];c=b0-od[jp+2];if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
   if(i<M-W){j=i+W;if(seen[j]!==gen){jp=j*4;a=r0-od[jp];b2=g0-od[jp+1];c=b0-od[jp+2];if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}}
- enforce();mver++;softKill();return cnt};
+ enforce();
+ /* keepMask me paint kiya hua hissa cutout ke box se bahar ho sakta hai (enforce
+    wahan 255 likhta hai) - us haalat me poora box hi surakshit hai */
+ if(keepDirty)mbAll();else if(mbx1<0){MB[0]=0;MB[1]=0;MB[2]=-1;MB[3]=-1}else{MB[0]=mbx0;MB[1]=mby0;MB[2]=mbx1;MB[3]=mby1}
+ mver++;softKill();return cnt};
 const auto=(silent)=>{if(!od)return;push();const c=cutout();
  if(c<=0){recycle(undo.pop());abortPush();mver++;if(!silent)toast(c<0?'Background clear nahi hai, Wand try karo':'Kuch nahi hata. Tolerance badhao ya Wand use karo');return}
  render();toast(silent?'Background hata diya - ab naya background chuno':'Ho gaya! Erase / Restore se saaf karo')};
@@ -849,6 +870,9 @@ const stamp2=(t1,v1,t2,v2,cx0,cy0,r)=>{
  else{if(x0<DIRT[0])DIRT[0]=x0;if(y0<DIRT[1])DIRT[1]=y0;if(x1>DIRT[2])DIRT[2]=x1;if(y1>DIRT[3])DIRT[3]=y1}
  if(!SDIRT)SDIRT=[x0,y0,x1,y1];
  else{if(x0<SDIRT[0])SDIRT[0]=x0;if(y0<SDIRT[1])SDIRT[1]=y0;if(x1>SDIRT[2])SDIRT[2]=x1;if(y1>SDIRT[3])SDIRT[3]=y1}
+ /* jo stamp 255 likhta hai (Restore, Keep) wo box ko chauda karta hai; Erase sirf
+   0 likhta hai, is liye wo box ko chhota kar sakta hai par bada nahi */
+ if(v1===255||v2===255)mbAdd(x0,y0,x1,y1);
  /* brush ka circle pehle poore bounding box par per-pixel dx*dx+dy*dy test se bharta
     tha: bbox ka ~21% hissa (kone) bekaar test hota tha aur har pixel par do multiply
     + ek add chalta tha. circle ek row me ek hi lagataar span hota hai, is liye ab har
@@ -936,15 +960,20 @@ let MBUF=null;
 const morph=g=>{push();
  if(!MBUF||MBUF.length!==mask.length)MBUF=new Uint8Array(mask.length);
  const o=MBUF,m=g?Math.max:Math.min;o.set(mask);
+ /* bheetar ka scan sirf MB+1 tak - box ke bahar mask (aur uske chaaron padosi)
+   pakka 0 hain, is liye Grow ka max aur Shrink ka min wahan 0 hi aata, jo pehle
+   se likha hua hai. kinare wali rows/columns (2W+2H pixel) pehle jaise chalti hain. */
+ const bxa=Math.max(1,MB[0]-1),bxb=Math.min(W-2,MB[2]+1),bya=Math.max(1,MB[1]-1),byb=Math.min(H-2,MB[3]+1);
+ const bOK=bxa<=bxb&&bya<=byb;
  if(W>2&&H>2){
   if(g){
-   for(let y=1;y<H-1;y++){const row=y*W;
-    for(let x=1;x<W-1;x++){const i=row+x;let v=o[i],w;
+   for(let y=bya;bOK&&y<=byb;y++){const row=y*W;
+    for(let x=bxa;x<=bxb;x++){const i=row+x;let v=o[i],w;
      w=o[i-1];if(w>v)v=w;w=o[i+1];if(w>v)v=w;w=o[i-W];if(w>v)v=w;w=o[i+W];if(w>v)v=w;
      mask[i]=v}}
   }else{
-   for(let y=1;y<H-1;y++){const row=y*W;
-    for(let x=1;x<W-1;x++){const i=row+x;let v=o[i],w;
+   for(let y=bya;bOK&&y<=byb;y++){const row=y*W;
+    for(let x=bxa;x<=bxb;x++){const i=row+x;let v=o[i],w;
      w=o[i-1];if(w<v)v=w;w=o[i+1];if(w<v)v=w;w=o[i-W];if(w<v)v=w;w=o[i+W];if(w<v)v=w;
      mask[i]=v}}}
   for(let x=1;x<W-1;x++){const i=x;mask[i]=m(m(o[i],o[i-1]),m(o[i+1],o[i+W]))}
@@ -957,11 +986,22 @@ const morph=g=>{push();
   mask[(H-1)*W]=m(o[(H-1)*W],m(o[(H-2)*W],o[(H-1)*W+1]));
   mask[H*W-1]=m(o[H*W-1],m(o[H*W-2],o[(H-2)*W+W-1]))
  }else for(let y=0;y<H;y++)for(let x=0;x<W;x++){const i=y*W+x;let v=o[i];if(x>0)v=m(v,o[i-1]);if(x<W-1)v=m(v,o[i+1]);if(y>0)v=m(v,o[i-W]);if(y<H-1)v=m(v,o[i+W]);mask[i]=v}
+ /* Grow har taraf ek pixel badhta hai - box bhi ek pixel bada */
+ if(g&&MB[2]>=MB[0])mbAdd(Math.max(0,MB[0]-1),Math.max(0,MB[1]-1),Math.min(W-1,MB[2]+1),Math.min(H-1,MB[3]+1));
  enforce();mver++;softKill();render()};
 $('#bGrow').onclick=need(()=>morph(1));$('#bShr').onclick=need(()=>morph(0));
-$('#bInv').onclick=need(()=>{push();for(let i=0;i<mask.length;i++)mask[i]=255-mask[i];enforce();mver++;softKill();render()});
-$('#bSmo').onclick=need(()=>{push();const b=blur(mask,2);for(let i=0;i<mask.length;i++)mask[i]=Math.max(0,Math.min(255,(b[i]-128)*3+128));enforce();mver++;softKill();render()});
-$('#bRst').onclick=need(()=>{push();const nm=bufOf();nm.set(mask0);mask=nm;enforce();mver++;softKill();render();toast('Reset ho gaya')});
+$('#bInv').onclick=need(()=>{push();for(let i=0;i<mask.length;i++)mask[i]=255-mask[i];mbAll();enforce();mver++;softKill();render()});
+/* Smooth ka box blur bhi sirf MB+2 tak: radius 2 ka blur MB se do pixel door ke
+   bahar har jagah 0 deta hai, aur 0 par (0-128)*3+128 clamp hokar 0 hi banta hai -
+   yaani wahan mask pehle se 0 hai, likhne ki zaroorat nahi. */
+$('#bSmo').onclick=need(()=>{push();
+ const bxa=Math.max(0,MB[0]-2),bxb=Math.min(W-1,MB[2]+2),bya=Math.max(0,MB[1]-2),byb=Math.min(H-1,MB[3]+2);
+ if(bxb>=bxa&&byb>=bya){
+  blurTabs(2);const b=blurRect(mask,2,bxa,bya,bxb,byb,BLS.o);
+  for(let y=bya;y<=byb;y++){const row=y*W;for(let x=bxa;x<=bxb;x++){const i=row+x,v=(b[i]-128)*3+128;mask[i]=v<0?0:v>255?255:v}}
+  mbAdd(bxa,bya,bxb,byb)}
+ enforce();mver++;softKill();render()});
+$('#bRst').onclick=need(()=>{push();const nm=bufOf();nm.set(mask0);mask=nm;mbAll();enforce();mver++;softKill();render();toast('Reset ho gaya')});
 const cmp=$('#bCmp');
 const cmpOn=e=>{if(!od)return;if(e&&e.cancelable)e.preventDefault();showOrig=true;render()};
 const cmpOff=()=>{if(showOrig){showOrig=false;render()}};
@@ -1085,7 +1125,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;POOL.length=0;
  fgKey='';outKey='';bgKey='';SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.23',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.24',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  trim:()=>{dropScratch();if(od)render()},
  pause:()=>{shellPaused=true;idleCheck()},resume:()=>{shellPaused=false;idleCheck()},
  back:()=>{const ov=$('#ov');if(ov&&ov.classList.contains('show')){$('#ov').classList.remove('show');return true}
