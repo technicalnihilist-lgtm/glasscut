@@ -402,6 +402,7 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
   if(OD32){const u32=OD32,n=W*H;for(let i=0;i<n;i++){const av=u32[i]>>>24;mask0[i]=av;if(av<amin)amin=av}}
   else for(let i=0;i<W*H;i++){const av=od[i*4+3];mask0[i]=av;if(av<amin)amin=av}
   photoOpaque=amin===255;mask=mask0.slice();keepMask=new Uint8Array(W*H);keepDirty=false;mbAll();
+  kbNone();
   /* purani photo ke scratch buffers chhod do: inka size pichhli photo ke hisaab se tha
      (wand flood 8 B/px, cutout ~20 B/px, feather blur 1 B/px) - warna wo bekaar padi rehti hain */
   FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS=null;XR=null;DIRT=null;SDIRT=null;MBUF=null;BD=null;
@@ -813,8 +814,9 @@ let KEMPTY=null;
 const restore=s=>{mask=s[0];keepDirty=!!s[1];
  const sb=s[2];
  if(sb){MB[0]=sb[0];MB[1]=sb[1];MB[2]=sb[2];MB[3]=sb[3]}else mbAll();
- if(s[1])keepMask=s[1];
- else{if(!KEMPTY||KEMPTY.length!==W*H)KEMPTY=new Uint8Array(W*H);else KEMPTY.fill(0);keepMask=KEMPTY}};
+ if(s[1]){keepMask=s[1];kbAll()}
+ else{if(!KEMPTY||KEMPTY.length!==W*H)KEMPTY=new Uint8Array(W*H);else KEMPTY.fill(0);keepMask=KEMPTY;
+  kbNone()}};
 /* snapshot ka mask buffer ab recycle hota hai. pehle har stroke ek naya 1.68 MB
    Uint8Array banata tha (1400x1200) aur stack se girne wala purana array garbage
    ban jata tha - yaani har ungli uthane par 1.68 MB GC kaam. ab stack se nikla
@@ -850,8 +852,21 @@ const abortPush=()=>{redo=PEND||[];PEND=null};
 /* keep mask ka respect: jo object protect kiya gaya hai wo kabhi na hate.
    keepMask khaali ho to poora W*H scan bachta hai (stroke release, Grow,
    Shrink, Invert, Smooth, Reset, cutout - har jagah). */
+/* KMB = keepMask ke 255 wale pixels ka conservative box (jaisa MB mask ke liye).
+   iske bahar keepMask pakka 0 hai, is liye enforce ka poora W*H scan bekaar tha -
+   ab sirf usi box par chalta hai. KMB sirf wahin chauda hota hai jahan sach me 255
+   likha jata hai (keep stamp), nayi photo par khaali, aur snapshot se keepMask
+   wapas aane par poora canvas (conservative - tab box pata nahi hota). */
+let KMB=[0,0,-1,-1];
+const kbAll=()=>{KMB[0]=0;KMB[1]=0;KMB[2]=W-1;KMB[3]=H-1};
+/* khaali box: W,H se shuru, warna pehla kbAdd x0=0 par atak jata (0 < 0 galat) */
+const kbNone=()=>{KMB[0]=W;KMB[1]=H;KMB[2]=-1;KMB[3]=-1};
+const kbAdd=(x0,y0,x1,y1)=>{if(x0<KMB[0])KMB[0]=x0;if(y0<KMB[1])KMB[1]=y0;if(x1>KMB[2])KMB[2]=x1;if(y1>KMB[3])KMB[3]=y1};
 const enforce=()=>{if(!keepMask||!keepDirty)return;let ch=false;
- for(let i=0;i<mask.length;i++)if(keepMask[i]&&mask[i]!==255){mask[i]=255;ch=true}
+ if(KMB[2]<KMB[0]||KMB[3]<KMB[1])return;
+ const kx0=KMB[0],kx1=KMB[2],ky0=KMB[1],ky1=KMB[3];
+ for(let y=ky0;y<=ky1;y++){const b=y*W;
+  for(let x=kx0;x<=kx1;x++){const i=b+x;if(keepMask[i]&&mask[i]!==255){mask[i]=255;ch=true}}}
  /* kuch badla hi nahi to softM abhi bhi sahi hai - poora blur dobara mat banao */
  if(ch)softKill()};
 /* scratch buffers: ek hi pair of arrays har wand tap me reuse hota hai (generation
@@ -909,6 +924,14 @@ const islBuf=need=>{if(ISL&&ISL.cap>=need)return ISL;
    aur bheetar ka loop sirf jodta hai - jod bilkul wahi hai, aur n bhi wahi
    (dy*dx = pehle ka counter), is liye output byte-identical rehta hai. */
 let BD=null;
+/* boxDown ke 2x2 block (n=4) ka bhaag: table Uint8ClampedArray me likh kar banti
+   hai, is liye har entry bilkul wahi byte hai jo `r/4` likhne par aata (round-
+   half-to-even bhi wahi). 1021 byte, size se azaad, ek hi baar. */
+let D4T=null;
+const div4=()=>{if(D4T)return D4T;
+ const t=new Uint8Array(1021),c=new Uint8ClampedArray(1);
+ for(let i=0;i<1021;i++){c[0]=i/4;t[i]=c[0]}
+ return D4T=t};
 const boxDown=(src,w,h,nw,nh,out)=>{out=out||new Uint8ClampedArray(nw*nh*4);
  if(!BD||BD.w!==w||BD.h!==h||BD.nw!==nw||BD.nh!==nh){
   const sx=w/nw,sy=h/nh,xs=new Int32Array(nw*2),ys=new Int32Array(nh*2);
@@ -922,12 +945,32 @@ const boxDown=(src,w,h,nw,nh,out)=>{out=out||new Uint8ClampedArray(nw*nh*4);
     badhta hai. jod, n aur nateeja bilkul wahi - alag se naapa: 1400x1200 par
     boxDown 21.04 -> 16.12 ms (min of 15) aur output me 0 byte diff. */
  const u32=(src===od)?OD32:null;
+ /* auto ka downscale hamesha f=2 hota hai, is liye lagbhag har block theek 2x2
+    (4 source pixel) hota hai - par generic loop har output pixel ke liye inner
+    loop ke bounds (e, p+=w) dobara chalata tha. 2x2 block ke liye chaar load
+    seedhe likhe hain aur n=4 ka bhaag ek chhoti table se aata hai.
+    table Uint8ClampedArray me hi likh kar banti hai, is liye 0..255 par uska
+    conversion bilkul wahi hai jo r/4 par hota tha (round-half-to-even samet) -
+    alag se naapa: 1400x1200 par 121 case (n=4) par 0 byte diff. */
  if(u32){
+  const U=u32,D4=div4();
   for(let y=0;y<nh;y++){const y0=ys[y*2],y1=ys[y*2+1],dy=y1-y0;
+   if(dy===2){const p=y0*w;
+    for(let x=0;x<nw;x++){const x0=xs[x*2],x1=xs[x*2+1];
+     if(x1-x0===2){const o2=p+x0,a=U[o2],b2=U[o2+1],c=U[o2+w],d=U[o2+w+1];
+      out[q]=D4[(a&255)+(b2&255)+(c&255)+(d&255)];
+      out[q+1]=D4[((a>>>8)&255)+((b2>>>8)&255)+((c>>>8)&255)+((d>>>8)&255)];
+      out[q+2]=D4[((a>>>16)&255)+((b2>>>16)&255)+((c>>>16)&255)+((d>>>16)&255)];
+      out[q+3]=255;q+=4;continue}
+     let r=0,g=0,b=0,pp0=p+x0;
+     for(let yy=y0;yy<y1;yy++){const e=pp0+(x1-x0);
+      for(let pp=pp0;pp<e;pp++){const v=U[pp];r+=v&255;g+=(v>>>8)&255;b+=(v>>>16)&255}pp0+=w}
+     const n=dy*(x1-x0);out[q]=r/n;out[q+1]=g/n;out[q+2]=b/n;out[q+3]=255;q+=4}
+    continue}
    for(let x=0;x<nw;x++){const x0=xs[x*2],x1=xs[x*2+1];
     let r=0,g=0,b=0,p=y0*w+x0;
     for(let yy=y0;yy<y1;yy++){const e=p+(x1-x0);
-     for(let pp=p;pp<e;pp++){const v=u32[pp];r+=v&255;g+=(v>>>8)&255;b+=(v>>>16)&255}p+=w}
+     for(let pp=p;pp<e;pp++){const v=U[pp];r+=v&255;g+=(v>>>8)&255;b+=(v>>>16)&255}p+=w}
     const n=dy*(x1-x0);out[q]=r/n;out[q+1]=g/n;out[q+2]=b/n;out[q+3]=255;q+=4}}
  }else{
   for(let y=0;y<nh;y++){const y0=ys[y*2],y1=ys[y*2+1],dy=y1-y0;
@@ -1135,6 +1178,9 @@ const stamp2=(t1,v1,t2,v2,cx0,cy0,r)=>{
  /* jo stamp 255 likhta hai (Restore, Keep) wo box ko chauda karta hai; Erase sirf
    0 likhta hai, is liye wo box ko chhota kar sakta hai par bada nahi */
  if(v1===255||v2===255)mbAdd(x0,y0,x1,y1);
+ /* keepMask me 255 likhne wala hi rasta hai (keep tool), is liye uska box yahin
+    chauda hota hai - koi alag scan nahi */
+ if(t1===keepMask&&v1===255)kbAdd(x0,y0,x1,y1);
  /* brush ka circle pehle poore bounding box par per-pixel dx*dx+dy*dy test se bharta
     tha: bbox ka ~21% hissa (kone) bekaar test hota tha aur har pixel par do multiply
     + ek add chalta tha. circle ek row me ek hi lagataar span hota hai, is liye ab har
@@ -1402,7 +1448,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;POOL.length=0;
  fgKey='';outKey='';bgKey='';SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.29',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.30',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full

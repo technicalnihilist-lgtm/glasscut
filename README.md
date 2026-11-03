@@ -6,10 +6,10 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 
 | | |
 |---|---|
-| **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 222 KB, Android 7.0+ |
+| **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 226 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.28 (versionCode 28) |
+| **Version** | 1.1.30 (versionCode 30) |
 
 ---
 
@@ -182,8 +182,10 @@ Honest limitation: a soft out-of-focus highlight and a soft-edged object look id
 - **Feather re-blurred the whole canvas** — with Edge Softness above 0, every Wand / Auto / Grow / Smooth / Undo rebuilt the soft mask over all W×H pixels even though the mask only has content inside the subject's box. It now rebuilds only that box (+radius) and memsets the rest, and undo/redo keep the mask box instead of resetting it to the whole canvas: measured in headless Chrome at 1400×1200 with softness 6, one rebuild 73.3 ms → 20.2 ms (−72%), an Edge Grow press 107 ms → 72 ms.
 - **Opaque background cleared twice** — with a colour or gradient background and no parallax, every frame cleared the full canvas and then painted over all of it. The redundant clear is gone: 1,680,000 → 0 clearRect pixels per frame, identical canvas hash.
 - **A photo that never decodes left the app stuck** — if the WebView neither fires `onload` nor `onerror` (corrupt file, decode OOM), nothing happened at all before: no toast, no photo. There is now a 20 s watchdog, and a slow first decode can no longer overwrite the photo the user picked after it.
+- **Auto's downsample ran a generic loop for a 2×2 block** — the cutout shrinks the photo by half, so nearly every output pixel is the average of exactly four source pixels, yet each one re-ran the generic inner-loop bounds and did three divisions. Those blocks now take four straight loads and a 1021-byte table built through `Uint8ClampedArray` (so it rounds exactly like `r/4`): at 1400×1200 the downsample went 17.9 ms → 6.9 ms (−61%) and the whole Auto press 116.5 ms → 99.4 ms (−15%).
+- **The Keep tool's protection scan covered the whole canvas** — `enforce()` walked all W×H pixels on every stroke release, Grow, Smooth, Invert, Reset and Auto, even though only the painted keep area can be protected. It now keeps a conservative box of that area (like the mask box) and scans only that: 1,680,000 → 5,325 pixels for a single Keep stroke (−99.7%).
 
-Verified in headless Chrome: load → auto → wand → erase → undo → redo → reset → re-cut → save → language switch → close, with zero console errors, and the saved file checked on disk.
+Verified in headless Chrome: load → auto → wand → erase → restore → undo → redo → grow/shrink/smooth/invert/reset → keep + erase + undo/redo → feather/outline/opacity/depth/tilt → four backgrounds → blue blur → save (PNG/JPG/WEBP checked on disk) → language switch → close/open → trim, at 1400×1200, 320×274, 1200×1000 and a 4000×3428 photo, with zero console errors and 48 canvas hashes byte-identical to the previous build.
 
 ---
 
@@ -191,10 +193,10 @@ Verified in headless Chrome: load → auto → wand → erase → undo → redo 
 
 Download [`GlassCut.apk`](GlassCut.apk) on the phone, tap it, allow "install unknown apps" for your browser or file manager once. Android 7.0 (API 24) or newer.
 
-**This build has a new signing key again** — `/scratch/saved` was empty when the 1.1.28 build sandbox came up (it is mounted read-only in this workspace, so a key handed back last run cannot be dropped there either), so `build.sh` generated a fresh keystore. Android will refuse to install it over any earlier build — uninstall the old app once, then install. The keystore is deliberately *not* committed (a signing key is a credential); this run's key is handed back as `glasscut-signing-key.jks` so it can be dropped at `/scratch/saved/glasscut-signing-key.jks`, and every later build in this workspace will reuse it. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate for this build:
+**This build has a new signing key again** — `/scratch/saved` was empty when the 1.1.30 build sandbox came up (it is mounted read-only in this workspace, so a key handed back last run cannot be dropped there either), so `build.sh` generated a fresh keystore. Android will refuse to install it over any earlier build — uninstall the old app once, then install. The keystore is deliberately *not* committed (a signing key is a credential); this run's key is handed back as `glasscut-signing-key.jks` so it can be dropped at `/scratch/saved/glasscut-signing-key.jks`, and every later build in this workspace will reuse it. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate for this build:
 
 ```
-f20a08e7da06220ca2091a3daaaef6e4a31a8c873fbf1f6337e14db5eca8d771
+368bd070cd883f5f36389df91c57429e2a89773e505c43f1669cead4e5d4935d
 ```
 
 ## Build it yourself
