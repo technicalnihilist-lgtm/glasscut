@@ -219,6 +219,16 @@ const tcx=tmp.getContext('2d'),oxc=outc.getContext('2d'),bxc=bgb.getContext('2d'
 let W=0,H=0,CW=0,CH=0,od=null,fgi=null,mask=null,mask0=null,keepMask=null,undo=[],redo=[],mode='erase',bg={t:'none'},bgImg=null;
 let tol=40,feather=2,brush=36,keepObj=1,ratio='0',fmt='png',showOrig=false,drawing=false,last=null,raf=0,fastReq=false,rt=0,tt=0;
 let mver=0,fgKey='',outKey='',softM=null,softKey='',bgKey='',ovUrl=null;
+/* od (fgi.data) se ek pixel ka RGB teen alag byte load se aata tha. ek hi 32-bit
+   view se wahi teen byte ek load me mil jate hain (little-endian par byte 0 = R,
+   is liye LE check hai; BE par neeche sab jagah purana byte raasta hi chalta hai).
+   layer() sirf alpha byte (byte 3) likhta hai, RGB load ke baad kabhi nahi badalta,
+   is liye view kabhi purana nahi padta. nayi photo par fgi naya banta hai aur
+   view bhi saath me naya. */
+const LE32=(()=>{try{const a=new ArrayBuffer(4);new Uint32Array(a)[0]=0x0a0b0c0d;
+ return new Uint8Array(a)[0]===0x0d}catch(_){return false}})();
+let OD32=null;
+const mkOD32=()=>{OD32=(LE32&&od&&(od.byteOffset&3)===0)?new Uint32Array(od.buffer,od.byteOffset,od.length>>>2):null};
 /* background ka poora canvas dhakna: photo ke har pixel ka alpha 255 hai ya nahi,
    aur "Apni photo" wale background image ka composite opaque hai ya nahi */
 let photoOpaque=false,imgOpaque=false,imgOpaqueFor=null;
@@ -340,9 +350,14 @@ const imgOpaqueCheck=im=>{try{if(!CW||!CH)return false;
  const d=x.getImageData(0,0,CW,CH).data;
  for(let i=3;i<d.length;i+=4)if(d[i]!==255)return false;
  return true}catch(_){return false}};
+/* background photo ka apna token: do background images jaldi-jaldi chunne par
+   pehli (dheemi decode) ka onload doosri ke BAAD aata tha aur bgImg ko wapas
+   apne aap par set kar deta tha - yaani jo photo baad me chuni wo gayab, aur
+   imgOpaque bhi purani image ka. wahi token jo main photo ke liye hai. */
+let BGLOAD=null;
 $('#fBg').onchange=e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
  loadImg(f,im=>{bgImg=im;bg={t:'img'};bgKey='';imgOpaqueFor=im;imgOpaque=imgOpaqueCheck(im);
-  noSw();render();toast('Background lag gaya')})};
+  noSw();render();toast('Background lag gaya')},BGLOAD)};
 
 /* image load */
 /* Photo load: na onload na onerror aaye (kharab file, decode OOM, WebView jo
@@ -363,6 +378,7 @@ const loadImg=(f,cb,box)=>{const tok=box?++box.t:0,u=URL.createObjectURL(f),im=n
  im.onload=()=>fin(true);im.onerror=()=>fin(false);
  try{im.src=u}catch(_){fin(false)}};
 const MAINLOAD=mkLoadBox();
+BGLOAD=mkLoadBox();
 const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWidth,im.naturalHeight));
   W=Math.max(1,Math.round(im.naturalWidth*s));H=Math.max(1,Math.round(im.naturalHeight*s));
   origc.width=W;origc.height=H;const ox=origc.getContext('2d');ox.drawImage(im,0,0,W,H);
@@ -371,10 +387,13 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
      poore session ke liye. ab fgi hi od hai: layer() sirf alpha byte likhta hai
      (RGB waise hi rehta hai), aur od ka asli alpha sirf neeche mask0 banate waqt
      padha jata hai, jo pehle render se pehle ho jata hai. */
-  fgi=ox.getImageData(0,0,W,H);od=fgi.data;
+  fgi=ox.getImageData(0,0,W,H);od=fgi.data;mkOD32();
   fgc.width=W;fgc.height=H;outc.width=W;outc.height=H;bgb.width=bgb.height=1;bgKey='';
   mask0=new Uint8Array(W*H);let amin=255;
-  for(let i=0;i<W*H;i++){const av=od[i*4+3];mask0[i]=av;if(av<amin)amin=av}
+  /* har pixel par i*4 ka multiply aur ek byte load; ab ek hi 32-bit load ka
+     sabse upar wala byte (alpha) - wahi value, 1.68 M multiply kam */
+  if(OD32){const u32=OD32,n=W*H;for(let i=0;i<n;i++){const av=u32[i]>>>24;mask0[i]=av;if(av<amin)amin=av}}
+  else for(let i=0;i<W*H;i++){const av=od[i*4+3];mask0[i]=av;if(av<amin)amin=av}
   photoOpaque=amin===255;mask=mask0.slice();keepMask=new Uint8Array(W*H);keepDirty=false;mbAll();
   /* purani photo ke scratch buffers chhod do: inka size pichhli photo ke hisaab se tha
      (wand flood 8 B/px, cutout ~20 B/px, feather blur 1 B/px) - warna wo bekaar padi rehti hain */
@@ -769,6 +788,14 @@ const restore=s=>{mask=s[0];keepDirty=!!s[1];softKill();
 let POOL=[],PEND=null;
 const bufOf=()=>{const a=POOL.pop();return(a&&a.length===W*H)?a:new Uint8Array(W*H)};
 const recycle=s=>{if(!s)return;const a=s[0];if(a&&a.length===W*H&&POOL.length<2)POOL.push(a)};
+/* undo/redo me snap() pool se buffer leta hai, par jo array abhi tak mask tha wo
+   kisi stack me nahi hota (stack me hamesha copy hoti hai) - pehle wo sirf garbage
+   ban jata tha, is liye pool khaali reh jata tha aur har undo/redo press 1.68 MB ka
+   naya Uint8Array banata tha (1400x1200). ab wahi array pool me wapas jata hai.
+   mask kabhi mask0 nahi hota, aur restore() ke baad purana array sach me free hai -
+   is liye yeh sirf tab chalta hai jab old ab mask na ho. */
+const recycleMask=old=>{if(!old||old===mask||old===mask0||old.length!==W*H||POOL.length>=2)return;
+ POOL.push(old)};
 /* push() pehle redo stack ke buffers turant pool me daal deta tha aur uske baad
    snapshot usi pool se buffer leta tha - yaani naya undo snapshot aur purani redo
    entry ek hi array par baithe rehte the. jab operation kuch nahi badalta (no-op
@@ -807,19 +834,24 @@ const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;softKill();
     (keepDirty - keepMask me 255 hai to keepDirty hamesha true hai), aur ok ka
     loop seedha neighbour ke andar chala diya gaya hai. nateeja bilkul wahi. */
  const km=keepDirty?keepMask:null;
- const add=j=>{if(vis[j]===g)return;vis[j]=g;if(km&&km[j])return;const p=j*4;
-  const a=od[p]-cr,b=od[p+1]-cg,d=od[p+2]-cb;if(a*a+b*b+d*d<=t2)st[sp++]=j};
+ /* neighbour ka rang pehle j*4 multiply + teen byte load se aata tha; ab ek hi
+   32-bit load (little-endian: byte0=R). BE par u32 null hota hai aur wahi purana
+   byte raasta chalta hai - dono par wahi teen value, wahi compare, wahi queue. */
+ const u32=OD32;
+ const add=j=>{if(vis[j]===g)return;vis[j]=g;if(km&&km[j])return;
+  const v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
+  const a=(v&255)-cr,b=((v>>>8)&255)-cg,d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=j};
  for(let k=0;k<seeds.length;k++)add(seeds[k]);
  while(sp){const i=st[--sp],x=i%W;if(mask[i]){mask[i]=0;cnt++}
-  let j,p,a,b,d;
-  if(x>0){j=i-1;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){p=j*4;
-   a=od[p]-cr;b=od[p+1]-cg;d=od[p+2]-cb;if(a*a+b*b+d*d<=t2)st[sp++]=j}}}
-  if(x<W-1){j=i+1;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){p=j*4;
-   a=od[p]-cr;b=od[p+1]-cg;d=od[p+2]-cb;if(a*a+b*b+d*d<=t2)st[sp++]=j}}}
-  if(i>=W){j=i-W;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){p=j*4;
-   a=od[p]-cr;b=od[p+1]-cg;d=od[p+2]-cb;if(a*a+b*b+d*d<=t2)st[sp++]=j}}}
-  if(i<M-W){j=i+W;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){p=j*4;
-   a=od[p]-cr;b=od[p+1]-cg;d=od[p+2]-cb;if(a*a+b*b+d*d<=t2)st[sp++]=j}}}}
+  let j,v,a,b,d;
+  if(x>0){j=i-1;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
+   a=(v&255)-cr;b=((v>>>8)&255)-cg;d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=j}}}
+  if(x<W-1){j=i+1;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
+   a=(v&255)-cr;b=((v>>>8)&255)-cg;d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=j}}}
+  if(i>=W){j=i-W;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
+   a=(v&255)-cr;b=((v>>>8)&255)-cg;d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=j}}}
+  if(i<M-W){j=i+W;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
+   a=(v&255)-cr;b=((v>>>8)&255)-cg;d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=j}}}}
  mver++;softKill();return cnt};
 /* coarse-to-fine cutout: flood a downscaled copy, then snap the edge back at full res */
 /* boxDown ka output, xmap aur seeds har Auto press par naye bante the (1400x1200 par
@@ -847,11 +879,26 @@ const boxDown=(src,w,h,nw,nh,out)=>{out=out||new Uint8ClampedArray(nw*nh*4);
   for(let y=0;y<nh;y++){const y0=Math.floor(y*sy);ys[y*2]=y0;ys[y*2+1]=Math.min(h,Math.max(y0+1,Math.floor((y+1)*sy)))}
   BD={w,h,nw,nh,xs,ys}}
  const xs=BD.xs,ys=BD.ys;let q=0;
- for(let y=0;y<nh;y++){const y0=ys[y*2],y1=ys[y*2+1],dy=y1-y0;
-  for(let x=0;x<nw;x++){const x0=xs[x*2],x1=xs[x*2+1];
-   let r=0,g=0,b=0;
-   for(let yy=y0;yy<y1;yy++){const base=yy*w;for(let xx=x0;xx<x1;xx++){const p=(base+xx)*4;r+=src[p];g+=src[p+1];b+=src[p+2]}}
-   const n=dy*(x1-x0);out[q]=r/n;out[q+1]=g/n;out[q+2]=b/n;out[q+3]=255;q+=4}}
+ /* block ka har source pixel teen alag byte load aur ek (base+xx)*4 multiply
+    karta tha (1400x1200 par 1.68 M multiply). ab jab src wahi od hai to ek hi
+    32-bit load se teen byte (little-endian: byte0=R) aur row ka index seedha
+    badhta hai. jod, n aur nateeja bilkul wahi - alag se naapa: 1400x1200 par
+    boxDown 21.04 -> 16.12 ms (min of 15) aur output me 0 byte diff. */
+ const u32=(src===od)?OD32:null;
+ if(u32){
+  for(let y=0;y<nh;y++){const y0=ys[y*2],y1=ys[y*2+1],dy=y1-y0;
+   for(let x=0;x<nw;x++){const x0=xs[x*2],x1=xs[x*2+1];
+    let r=0,g=0,b=0,p=y0*w+x0;
+    for(let yy=y0;yy<y1;yy++){const e=p+(x1-x0);
+     for(let pp=p;pp<e;pp++){const v=u32[pp];r+=v&255;g+=(v>>>8)&255;b+=(v>>>16)&255}p+=w}
+    const n=dy*(x1-x0);out[q]=r/n;out[q+1]=g/n;out[q+2]=b/n;out[q+3]=255;q+=4}}
+ }else{
+  for(let y=0;y<nh;y++){const y0=ys[y*2],y1=ys[y*2+1],dy=y1-y0;
+   for(let x=0;x<nw;x++){const x0=xs[x*2],x1=xs[x*2+1];
+    let r=0,g=0,b=0;
+    for(let yy=y0;yy<y1;yy++){const base=yy*w;for(let xx=x0;xx<x1;xx++){const p=(base+xx)*4;r+=src[p];g+=src[p+1];b+=src[p+2]}}
+    const n=dy*(x1-x0);out[q]=r/n;out[q+1]=g/n;out[q+2]=b/n;out[q+3]=255;q+=4}}
+ }
  return out};
 /* scratch buffers for the coarse-to-fine pass: per-photo-size reuse, generation stamped */
 let CC=null;
@@ -1011,13 +1058,22 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
  /* har pixel ka rang ab ek hi baar padha jata hai: pehle near() har neighbour
     check par i*4 dobara ginta tha aur od se teen byte phir padhta tha (1.68 M
     pixel par 4 x 3 extra loads). comparison bilkul wahi hai. */
+ /* rang ek hi 32-bit load se (byte0=R), warna teen byte load + jp=j*4 multiply
+    - 1.68 M pixel par 4 neighbour check ke saath. BE par u32 null hai aur wahi
+    purana byte raasta chalta hai; dono par value bilkul wahi. */
+ const u32=OD32;
  while(hd<sp2){const i=q[hd++],l=lev[i];if(mask[i]){mask[i]=0;cnt++}
   if(l>=K)continue;
-  const p=i*4,r0=od[p],g0=od[p+1],b0=od[p+2],x=i%W,l1=l+1;let j,jp,a,b2,c;
-  if(x>0){j=i-1;if(seen[j]!==gen){jp=j*4;a=r0-od[jp];b2=g0-od[jp+1];c=b0-od[jp+2];if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
-  if(x<W-1){j=i+1;if(seen[j]!==gen){jp=j*4;a=r0-od[jp];b2=g0-od[jp+1];c=b0-od[jp+2];if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
-  if(i>=W){j=i-W;if(seen[j]!==gen){jp=j*4;a=r0-od[jp];b2=g0-od[jp+1];c=b0-od[jp+2];if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
-  if(i<M-W){j=i+W;if(seen[j]!==gen){jp=j*4;a=r0-od[jp];b2=g0-od[jp+1];c=b0-od[jp+2];if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}}
+  const vi=u32?u32[i]:(od[i*4]|od[i*4+1]<<8|od[i*4+2]<<16),
+   r0=vi&255,g0=(vi>>>8)&255,b0=(vi>>>16)&255,x=i%W,l1=l+1;let j,v,a,b2,c;
+  if(x>0){j=i-1;if(seen[j]!==gen){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
+   a=r0-(v&255);b2=g0-((v>>>8)&255);c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
+  if(x<W-1){j=i+1;if(seen[j]!==gen){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
+   a=r0-(v&255);b2=g0-((v>>>8)&255);c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
+  if(i>=W){j=i-W;if(seen[j]!==gen){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
+   a=r0-(v&255);b2=g0-((v>>>8)&255);c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
+  if(i<M-W){j=i+W;if(seen[j]!==gen){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
+   a=r0-(v&255);b2=g0-((v>>>8)&255);c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}}
  enforce();
  /* keepMask me paint kiya hua hissa cutout ke box se bahar ho sakta hai (enforce
     wahan 255 likhta hai) - us haalat me poora box hi surakshit hai */
@@ -1178,8 +1234,8 @@ cmp.addEventListener('pointerdown',cmpOn);
 ['pointerup','pointerleave','pointercancel'].forEach(ev=>cmp.addEventListener(ev,cmpOff));
 cmp.oncontextmenu=e=>e.preventDefault();
 window.addEventListener('pointerup',cmpOff);window.addEventListener('blur',cmpOff);
-$('#bUndo').onclick=need(()=>{if(undo.length){redo.push(snap());restore(undo.pop());mver++;render()}else toast('Undo ke liye kuch nahi')});
-$('#bRedo').onclick=need(()=>{if(redo.length){undo.push(snap());restore(redo.pop());mver++;render()}else toast('Redo ke liye kuch nahi')});
+$('#bUndo').onclick=need(()=>{if(undo.length){const old=mask;redo.push(snap());restore(undo.pop());mver++;render();recycleMask(old)}else toast('Undo ke liye kuch nahi')});
+$('#bRedo').onclick=need(()=>{if(redo.length){const old=mask;undo.push(snap());restore(redo.pop());mver++;render();recycleMask(old)}else toast('Redo ke liye kuch nahi')});
 document.addEventListener('keydown',e=>{
  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'&&od){e.preventDefault();if(e.shiftKey)$('#bRedo').click();else $('#bUndo').click()}
  else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='y'&&od){e.preventDefault();$('#bRedo').click()}
@@ -1294,7 +1350,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;POOL.length=0;
  fgKey='';outKey='';bgKey='';SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.27',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.28',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
