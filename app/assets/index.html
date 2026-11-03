@@ -218,7 +218,14 @@ const fgc=mk(),fgx=fgc.getContext('2d'),origc=mk(),sm=mk(),tmp=mk(),outc=mk(),bg
 const tcx=tmp.getContext('2d'),oxc=outc.getContext('2d'),bxc=bgb.getContext('2d'),smx=sm.getContext('2d');
 let W=0,H=0,CW=0,CH=0,od=null,fgi=null,mask=null,mask0=null,keepMask=null,undo=[],redo=[],mode='erase',bg={t:'none'},bgImg=null;
 let tol=40,feather=2,brush=36,keepObj=1,ratio='0',fmt='png',showOrig=false,drawing=false,last=null,raf=0,fastReq=false,rt=0,tt=0;
-let mver=0,fgKey='',outKey='',softM=null,softKey='',bgKey='',ovUrl=null;
+let mver=0,fgKey='',outKey='',softM=null,softKey='',ovUrl=null;
+/* bgSig/bgVer: background-blur cache ka signature. pehle har render par ek naya
+   string banta tha (CW+'|'+CH+'|'+P.bl+'|'+blue) sirf compare karne ke liye - yaani
+   har frame ek string allocation. ab wahi signature paanch number me hai (koi
+   allocation nahi) aur invalidate karne ke liye bgVer badhta hai, is liye string
+   banane ki zaroorat hi nahi padti. bgGrad/depGrad/shadowColor/tilt ke keys bhi
+   isi tarah number ban gaye hain. */
+let bgVer=0,bgSig=[-1,-1,-1,-1,-1];
 /* od (fgi.data) se ek pixel ka RGB teen alag byte load se aata tha. ek hi 32-bit
    view se wahi teen byte ek load me mil jate hain (little-endian par byte 0 = R,
    is liye LE check hai; BE par neeche sab jagah purana byte raasta hi chalta hai).
@@ -337,9 +344,9 @@ const noSw=()=>$$('.sw').forEach(s=>s.classList.remove('on'));
  $('#grads').innerHTML=GRADS.map((g,i)=>`<button class="sw" data-t="grad" data-v="${i}" style="background:linear-gradient(135deg,${g[0]},${g[1]})"></button>`).join('')})();
 document.addEventListener('click',e=>{const b=e.target.closest('button.sw');if(!b)return;noSw();b.classList.add('on');bg={t:b.dataset.t,v:b.dataset.v};render()});
 $('#cCol').oninput=function(){noSw();this.parentElement.classList.add('on');bg={t:'color',v:this.value};render()};
-$('#cBlur').onclick=need(()=>{noSw();bg={t:'blur'};bgKey='';render();toast('Blur lag gaya')});
+$('#cBlur').onclick=need(()=>{noSw();bg={t:'blur'};bgVer++;render();toast('Blur lag gaya')});
 $('#cBlue').onclick=need(()=>{noSw();const r=$('#sBl');r.value=48;r.dispatchEvent(new Event('input',{bubbles:true}));
- bg={t:'bluetint'};bgKey='';
+ bg={t:'bluetint'};bgVer++;
  /* portrait mode: sirf insaan, background ka koi tukda nahi */
  keepObj=0;const kk=$('#tKeep');if(kk)kk.setAttribute('aria-checked','false');
  push();const nm=bufOf();nm.set(mask0);mask=nm;mbAll();mver++;softKill();try{cutout()}catch(_){}
@@ -363,7 +370,7 @@ const imgOpaqueCheck=im=>{try{if(!CW||!CH)return false;
    imgOpaque bhi purani image ka. wahi token jo main photo ke liye hai. */
 let BGLOAD=null;
 $('#fBg').onchange=e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
- loadImg(f,im=>{bgImg=im;bg={t:'img'};bgKey='';imgOpaqueFor=im;imgOpaque=imgOpaqueCheck(im);
+ loadImg(f,im=>{bgImg=im;bg={t:'img'};bgVer++;imgOpaqueFor=im;imgOpaque=imgOpaqueCheck(im);
   noSw();render();toast('Background lag gaya')},BGLOAD)};
 
 /* image load */
@@ -395,7 +402,7 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
      (RGB waise hi rehta hai), aur od ka asli alpha sirf neeche mask0 banate waqt
      padha jata hai, jo pehle render se pehle ho jata hai. */
   fgi=ox.getImageData(0,0,W,H);od=fgi.data;mkOD32();mkFG32();
-  fgc.width=W;fgc.height=H;outc.width=W;outc.height=H;bgb.width=bgb.height=1;bgKey='';
+  fgc.width=W;fgc.height=H;outc.width=W;outc.height=H;bgb.width=bgb.height=1;bgVer++;
   mask0=new Uint8Array(W*H);let amin=255;
   /* har pixel par i*4 ka multiply aur ek byte load; ab ek hi 32-bit load ka
      sabse upar wala byte (alpha) - wahi value, 1.68 M multiply kam */
@@ -425,7 +432,7 @@ const setSize=()=>{if(!od)return;
  else{const[a,b]=ratio.split(':').map(Number),r=a/b,M=Math.min(1400,Math.max(W,H));
   if(r>=1){CW=M;CH=Math.max(1,Math.round(M/r))}else{CH=M;CW=Math.max(1,Math.round(M*r))}}
  CW=Math.max(1,Math.round(CW));CH=Math.max(1,Math.round(CH));
- cv.width=CW;cv.height=CH;tmp.width=CW;tmp.height=CH;bgKey='';THas=false;fit()};
+ cv.width=CW;cv.height=CH;tmp.width=CW;tmp.height=CH;bgVer++;THas=false;fit()};
 const fit=()=>{if(!od)return;const s=Math.min((stage.clientWidth-4)/CW,(stage.clientHeight-4)/CH);cv.style.width=Math.floor(CW*s)+'px';cv.style.height=Math.floor(CH*s)+'px';cRect=null};
 new ResizeObserver(fit).observe(stage);
 
@@ -672,10 +679,12 @@ const xf=()=>{const s=Math.min(CW/W,CH/H)*P.s/100*(1+P.depth/100*0.07);
  XF[2]=CH/2+P.y/100*CH+my*P.motion/100*CH*0.022;return XF};
 /* background + depth gradients canvas size par depend karte hain, position par nahi -
    isliye ek baar bana kar cache kar liye jate hain (pehle har render par naye bante the) */
-let bgGradKey='',bgGrad=null,depGradKey='',depGrad=null;
+let bgGrad=null,depGrad=null,bgGK=[-1,-1,-1],depGK=[-1,-1],shColK=-1,shColS='';
 const cover=(c,im,iw,ih,w,h)=>{const k=Math.max(w/iw,h/ih),dw=iw*k,dh=ih*k;c.drawImage(im,(w-dw)/2,(h-dh)/2,dw,dh)};
-const blurBg=()=>{const blue=bg.t==='bluetint',k=CW+'|'+CH+'|'+P.bl+'|'+(blue?1:0);if(bgKey===k)return;
- bgKey=k;const f=2+P.bl*1.6,sw=Math.max(2,CW/f|0),sh=Math.max(2,CH/f|0);sm.width=sw;sm.height=sh;
+const blurBg=()=>{const blue=bg.t==='bluetint'?1:0,sg=bgSig;
+ if(sg[0]===bgVer&&sg[1]===CW&&sg[2]===CH&&sg[3]===P.bl&&sg[4]===blue)return;
+ sg[0]=bgVer;sg[1]=CW;sg[2]=CH;sg[3]=P.bl;sg[4]=blue;
+ const f=2+P.bl*1.6,sw=Math.max(2,CW/f|0),sh=Math.max(2,CH/f|0);sm.width=sw;sm.height=sh;
  const sx=smx;sx.clearRect(0,0,sw,sh);cover(sx,origc,W,H,sw,sh);
  bgb.width=CW;bgb.height=CH;const bx=bxc;bx.imageSmoothingEnabled=true;bx.imageSmoothingQuality='high';bx.clearRect(0,0,CW,CH);bx.drawImage(sm,0,0,CW,CH);
  if(blue){bx.globalAlpha=0.72;bx.fillStyle='#0a5cff';bx.fillRect(0,0,CW,CH);bx.globalAlpha=1}};
@@ -688,9 +697,16 @@ const blurBg=()=>{const blue=bg.t==='bluetint',k=CW+'|'+CH+'|'+P.bl+'|'+(blue?1:
    aur cx par uska draw poore canvas ki jagah sirf usi box par hota hai jahan
    sach me kuch likha gaya hai - box ke bahar tmp ka har pixel transparent hai,
    is liye cx par nateeja bilkul wahi rehta hai. */
+/* tilt ka shear sirf P.tilt par depend karta hai - pehle drawSubj har frame aur pt()
+   har pointermove par do trig call (Math.cos/Math.sin) dobara karta tha. ab wahi do
+   value slider ki value par cache hoti hain; P.tilt 0 par sh3=0, is liye behaviour
+   bilkul wahi rehta hai. */
+let tiltK=-1,tiltCs=1,tiltSh=0;
+const tiltUpd=()=>{if(tiltK!==P.tilt){tiltK=P.tilt;const th=P.tilt*Math.PI/180;
+ tiltCs=Math.cos(th*0.85);tiltSh=Math.sin(th*0.5)*0.55}};
 const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
  /* 3D tilt: ek halka shear, jo subject ko axis par ghuma hua dikhata hai */
- const th=P.tilt*Math.PI/180,cs3=Math.cos(th*0.85),sh3=Math.sin(th*0.5)*0.55;
+ tiltUpd();const cs3=tiltCs,sh3=tiltSh;
  /* outline / opacity / shadow / depth me se kuch bhi nahi hai to tmp canvas ek
     bekaar full-canvas copy thi (clear + draw + wapas draw). us haalat me fgc ko
     seedha cx par wahi transform de kar draw karna bilkul same pixels deta hai. */
@@ -764,7 +780,8 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
  }
  cx.save();cx.globalAlpha=P.op/100;
  const dep=P.depth/100;
- if(P.sh||dep>0){cx.shadowColor='rgba(0,0,0,'+(0.45+dep*0.30).toFixed(2)+')';cx.shadowBlur=CW*(0.04+dep*0.07);cx.shadowOffsetY=CW*(0.015+dep*0.03);cx.shadowOffsetX=mx*dep*CW*0.012}
+ if(P.sh||dep>0){if(shColK!==P.depth){shColK=P.depth;shColS='rgba(0,0,0,'+(0.45+dep*0.30).toFixed(2)+')'}
+   cx.shadowColor=shColS;cx.shadowBlur=CW*(0.04+dep*0.07);cx.shadowOffsetY=CW*(0.015+dep*0.03);cx.shadowOffsetX=mx*dep*CW*0.012}
  /* composite poore canvas par: source-rect wala drawImage 1:1 par bhi bilinear
     raaste se jata hai aur alpha composite me 1/255 ka farak chhod deta hai, is
     liye wahi purana poora draw rakha gaya hai (nateeja byte-identical). */
@@ -790,16 +807,16 @@ function render(fast){if(!od)return;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=
  if(!(opaqueBg()&&pox===0&&poy===0))cx.clearRect(0,0,CW,CH);
  cx.save();cx.translate(pox,poy);
  if(bg.t==='color'){cx.fillStyle=bg.v;cx.fillRect(0,0,CW,CH)}
- else if(bg.t==='grad'){const k=CW+'|'+CH+'|'+bg.v;
-  if(bgGradKey!==k){const g=GRADS[bg.v];bgGrad=cx.createLinearGradient(0,0,CW,CH);bgGrad.addColorStop(0,g[0]);bgGrad.addColorStop(1,g[1]);bgGradKey=k}
+ else if(bg.t==='grad'){const gk=bgGK,gv=+bg.v;
+  if(gk[0]!==CW||gk[1]!==CH||gk[2]!==gv){const g=GRADS[bg.v];bgGrad=cx.createLinearGradient(0,0,CW,CH);bgGrad.addColorStop(0,g[0]);bgGrad.addColorStop(1,g[1]);gk[0]=CW;gk[1]=CH;gk[2]=gv}
   cx.fillStyle=bgGrad;cx.fillRect(0,0,CW,CH)}
  else if(bg.t==='img'&&bgImg)cover(cx,bgImg,bgImg.naturalWidth,bgImg.naturalHeight,CW,CH);
  else if(bg.t==='blur'||bg.t==='bluetint'){blurBg();cx.drawImage(bgb,0,0)}
  cx.restore();
  /* depth: background ko halka gehra karo taaki subject aage ubhre */
- if(P.depth>0){const dk=CW+'|'+CH+'|'+P.depth;
-  if(depGradKey!==dk){const vg=cx.createRadialGradient(CW/2,CH*0.42,Math.min(CW,CH)*0.18,CW/2,CH*0.42,Math.max(CW,CH)*0.72);
-   vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,'+(P.depth/100*0.42).toFixed(3)+')');depGrad=vg;depGradKey=dk}
+ if(P.depth>0){const dk=depGK;
+  if(dk[0]!==CW||dk[1]!==CH||dk[2]!==P.depth){const vg=cx.createRadialGradient(CW/2,CH*0.42,Math.min(CW,CH)*0.18,CW/2,CH*0.42,Math.max(CW,CH)*0.72);
+   vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,'+(P.depth/100*0.42).toFixed(3)+')');depGrad=vg;dk[0]=CW;dk[1]=CH;dk[2]=P.depth}
   cx.fillStyle=depGrad;cx.fillRect(0,0,CW,CH)}
  /* "Hold: Original" me foreground layer kisi kaam ki nahi - poora putImageData bachta hai */
  if(showOrig){cx.clearRect(0,0,CW,CH);drawSubj(origc,fast);return}
@@ -1038,11 +1055,21 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
  if(!nc)return -1;
  const rn=nc<4?nc:4,R0=REF.r,G0=REF.g,B0=REF.b;
  for(let a=0;a<rn;a++){const o=CND[a]<<2,c=bk[o];R0[a]=bk[o+1]/c;G0[a]=bk[o+2]/c;B0[a]=bk[o+3]/c}
+ /* seen bhi sirf ek generation stamp rakhta hai, koi value nahi - is liye usme 32-bit
+    ki jagah 8-bit kaafi hai (1..255, 0 khaali). 1400x1200 par seen 6.72 MB -> 1.68 MB
+    aur full-res seed scan har pixel par 4 byte ki jagah 1 byte likhta hai. vis/vis2
+    Int32Array hi rakhe gaye: coarse BFS ka read-modify pattern (vis[j]!==gen, phir
+    vis[j]=gen) 8-bit par naap kar dheema nikla (1.68 M check par 1.2 -> 1.8 ms), aur
+    wahi buffer cutout ka sabse garma-garam loop hai. */
  if(!CC||CC.n!==N||CC.m!==M){CC={n:N,m:M,vis:new Int32Array(N),st:new Int32Array(N),vis2:new Int32Array(N),
   st2:new Int32Array(N),lab:new Int32Array(N).fill(-1),q3:new Int32Array(N),bg:new Uint8Array(N),
   inner:new Uint8Array(N),
-  seen:new Int32Array(M),q:new Int32Array(M),lev:new Uint8Array(M),g:0}}
- const C=CC,gen=++C.g;
+  seen:new Uint8Array(M),q:new Int32Array(M),lev:new Uint8Array(M),g:0}}
+ const C=CC;
+ /* 8-bit generation 255 par wrap hota hai - tab teeno buffer saaf aur g 1 se dobara.
+    stamp sirf "is run me dekha gaya" batata hai, is liye reset se nateeja nahi badalta. */
+ if(++C.g>255){C.vis.fill(0);C.vis2.fill(0);C.seen.fill(0);C.g=1}
+ const gen=C.g;
  const vis=C.vis,st=C.st,bg=C.bg.fill(0),vis2=C.vis2,st2=C.st2,lab=C.lab,q3=C.q3;
  const t2=tol*tol;let sp=0;
  /* coarse grid (downscaled copy) ka rang pehle har neighbour check par p=i*4 ka
@@ -1262,6 +1289,10 @@ const wand=(x,y)=>{x=Math.min(W-1,Math.max(0,x|0));y=Math.min(H-1,Math.max(0,y|0
    baar wahi pixels). ab ek hi scan dono arrays update karta hai aur chhua hua
    rectangle DIRT me note karta hai taaki render sirf utna hissa bheje. */
 const stamp2=(t1,v1,t2,v2,cx0,cy0,r)=>{
+ /* t2=null ka matlab: doosra array abhi poora khaali hai, usme 0 likhna kuch nahi
+    badalta (keepMask jab tak koi object protect na kiya ho poora 0 hota hai). us
+    haalat me loop ek hi array padhta/likhta hai - pehle erase stroke har pixel par
+    keepMask bhi padhta tha aur ek branch bhi chalti thi. */
  const x0=Math.max(0,Math.floor(cx0-r)),x1=Math.min(W-1,Math.ceil(cx0+r)),y0=Math.max(0,Math.floor(cy0-r)),y1=Math.min(H-1,Math.ceil(cy0+r)),r2=r*r;let ch=0;
  if(x1<x0||y1<y0)return 0;
  if(!DIRT)DIRT=[x0,y0,x1,y1];
@@ -1287,15 +1318,16 @@ const stamp2=(t1,v1,t2,v2,cx0,cy0,r)=>{
   let e=Math.floor(cx0+sp);if(e>x1)e=x1;
   while(a<=e){const dx=a-cx0;if(dx*dx+d2<=r2)break;a++}
   while(e>=a){const dx=e-cx0;if(dx*dx+d2<=r2)break;e--}
-  for(let x=a;x<=e;x++){const i=b+x;
+  if(t2)for(let x=a;x<=e;x++){const i=b+x;
    if(t1[i]!==v1){t1[i]=v1;ch++}
-   if(t2&&t2[i]!==v2){t2[i]=v2;ch++}}}
+   if(t2[i]!==v2){t2[i]=v2;ch++}}
+  else for(let x=a;x<=e;x++){const i=b+x;if(t1[i]!==v1){t1[i]=v1;ch++}}}
  return ch};
 const stroke=(a,b,c,d,k)=>{const r=Math.max(2,brush*k/2),keep=mode==='keep',v=keep||mode!=='erase'?255:0,n=Math.max(1,Math.ceil(Math.hypot(c-a,d-b)/Math.max(1,r/3)));let ch=0;
  for(let i=0;i<=n;i++){const px=a+(c-a)*i/n,py=b+(d-b)*i/n;
   if(keep)ch+=stamp2(keepMask,255,mask,255,px,py,r);
   if(keep&&ch){keepDirty=true}
-  else if(v===0)ch+=stamp2(mask,0,keepMask,0,px,py,r);
+  else if(v===0)ch+=stamp2(mask,0,keepDirty?keepMask:null,0,px,py,r);
   else ch+=stamp2(mask,255,null,0,px,py,r)}
  mver++;sched(true);return ch};
 /* pt() har pointermove par chalta hai. getBoundingClientRect() har call par layout
@@ -1308,8 +1340,7 @@ const pt=e=>{const r=rect(),t=xf();
  /* drawSubj 3D tilt par ek shear (cs3,sh3) lagata hai. pehle pt() us shear ko ulta
     nahi karta tha, is liye tilt chalte waqt erase/restore ungli se 40+ px door
     lagta tha. tilt 0 par sh3=0 hai, to default behaviour bilkul wahi rehta hai. */
- if(P.tilt){const th=P.tilt*Math.PI/180,cs3=Math.cos(th*0.85),sh3=Math.sin(th*0.5)*0.55;
-  if(sh3)ux=(ux-sh3*uy)/cs3}
+ if(P.tilt){tiltUpd();const sh3=tiltSh;if(sh3)ux=(ux-sh3*uy)/tiltCs}
  return[ux+W/2,uy+H/2,CW/r.w/t[0]]};
 const ring=$('#ring'),moveRing=e=>{ring.style.left=e.clientX+'px';ring.style.top=e.clientY+'px'};
 const ringSize=()=>{const r=rect(),t=xf();return Math.max(8,Math.round(brush*t[0]*(r.w/CW)))};
@@ -1539,9 +1570,9 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
    1x1 ho jate hain - agla render sab kuch wapas bana leta hai, is liye screen
    par kuch nahi badalta. photo khud (origc/fgi/mask) chhui bhi nahi jati. */
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;POOL.length=0;
- fgKey='';outKey='';bgKey='';SUB=null;fgFull=true;
+ fgKey='';outKey='';bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.31',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.32',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
