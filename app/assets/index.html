@@ -245,7 +245,7 @@ let FG32=null;
 const mkFG32=()=>{FG32=(LE32&&fgi&&fgi.data&&(fgi.data.byteOffset&3)===0&&(fgi.data.buffer.byteLength>=W*H*4))?new Uint32Array(fgi.data.buffer,fgi.data.byteOffset,W*H):null};
 /* background ka poora canvas dhakna: photo ke har pixel ka alpha 255 hai ya nahi,
    aur "Apni photo" wale background image ka composite opaque hai ya nahi */
-let photoOpaque=false,imgOpaque=false,imgOpaqueFor=null;
+let photoOpaque=false,imgOpaque=false,imgOpaqueFor=null,imgOpaqueW=-1,imgOpaqueH=-1;
 /* tmp composite ka cache (drawSubj) - neeche tafseel */
 let THas=false,TFULL=false,Tfg=null,Ts0=0,Ts1=0,Ts2=0,Tr=-1,Tcs=0,Tsh=0,Tn=0;
 const TPB=[0,0,0,0],TDB=[0,0,0,0];
@@ -358,6 +358,18 @@ $('#bBgImg').onclick=()=>$('#fBg').click();
    ek hi baar hota hai, aur usi CW x CH par jo sach me composite hota hai (scale
    se opacity nahi badalti), is liye transparent background image par clear
    pehle jaisa hi chalta hai. */
+/* yeh jawab canvas ke size par depend karta hai: cover() image ko CW x CH par
+   crop karke bharti hai, is liye transparent kinare wali image ek size par poora
+   canvas dhak leti hai aur doosre par nahi. is liye flag ke saath wo size bhi
+   yaad rakha jata hai jis par wo naapa gaya (neeche setSize dekho). */
+const setImgOpaque=im=>{imgOpaqueFor=im;imgOpaqueW=CW;imgOpaqueH=CH;imgOpaque=imgOpaqueCheck(im)};
+/* size badalne par flag turant "pata nahi" (false) ho jata hai - tab clearRect phir
+   chalta hai, yaani nateeja sahi. asli check (poora CW x CH canvas + getImageData)
+   agle frame ke baad chalta hai, taaki ratio ya photo badalne ka click usse block na
+   ho (check 1400x1200 par ~60 ms leta hai). */
+let imgOTok=0;
+const imgOpaqueLater=im=>{const tok=++imgOTok;
+ setTimeout(()=>{if(tok!==imgOTok||bgImg!==im||bg.t!=='img')return;setImgOpaque(im)},0)};
 const imgOpaqueCheck=im=>{try{if(!CW||!CH)return false;
  const c=mk();c.width=CW;c.height=CH;const x=c.getContext('2d');
  cover(x,im,im.naturalWidth,im.naturalHeight,CW,CH);
@@ -370,7 +382,7 @@ const imgOpaqueCheck=im=>{try{if(!CW||!CH)return false;
    imgOpaque bhi purani image ka. wahi token jo main photo ke liye hai. */
 let BGLOAD=null;
 $('#fBg').onchange=e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
- loadImg(f,im=>{bgImg=im;bg={t:'img'};bgVer++;imgOpaqueFor=im;imgOpaque=imgOpaqueCheck(im);
+ loadImg(f,im=>{bgImg=im;bg={t:'img'};bgVer++;setImgOpaque(im);
   noSw();render();toast('Background lag gaya')},BGLOAD)};
 
 /* image load */
@@ -432,7 +444,15 @@ const setSize=()=>{if(!od)return;
  else{const[a,b]=ratio.split(':').map(Number),r=a/b,M=Math.min(1400,Math.max(W,H));
   if(r>=1){CW=M;CH=Math.max(1,Math.round(M/r))}else{CH=M;CW=Math.max(1,Math.round(M*r))}}
  CW=Math.max(1,Math.round(CW));CH=Math.max(1,Math.round(CH));
- cv.width=CW;cv.height=CH;tmp.width=CW;tmp.height=CH;bgVer++;THas=false;fit()};
+ cv.width=CW;cv.height=CH;tmp.width=CW;tmp.height=CH;bgVer++;THas=false;
+ /* photo ya ratio badalne par CW/CH badal jata hai, aur uske saath cover() ka crop
+    bhi - "Apni photo" wala opaque flag purane size ka jawab tha. galat "opaque" par
+    render ka clearRect chhoot jata tha, is liye transparent kinare wali background
+    image ke neeche pichhle frame ke pixel transparent jagah par dikhte the
+    (1200x300 se 600x600 par jaate waqt (6,6) aur (300,8) par alpha 255 reh jata
+    tha, 0 hona chahiye). ab size badalne par flag dobara naapa jata hai. */
+ if(bgImg&&bg.t==='img'&&(imgOpaqueW!==CW||imgOpaqueH!==CH)){imgOpaqueFor=null;imgOpaque=false;imgOpaqueLater(bgImg)}
+ fit()};
 const fit=()=>{if(!od)return;const s=Math.min((stage.clientWidth-4)/CW,(stage.clientHeight-4)/CH);cv.style.width=Math.floor(CW*s)+'px';cv.style.height=Math.floor(CH*s)+'px';cRect=null};
 new ResizeObserver(fit).observe(stage);
 
@@ -684,9 +704,12 @@ const cover=(c,im,iw,ih,w,h)=>{const k=Math.max(w/iw,h/ih),dw=iw*k,dh=ih*k;c.dra
 const blurBg=()=>{const blue=bg.t==='bluetint'?1:0,sg=bgSig;
  if(sg[0]===bgVer&&sg[1]===CW&&sg[2]===CH&&sg[3]===P.bl&&sg[4]===blue)return;
  sg[0]=bgVer;sg[1]=CW;sg[2]=CH;sg[3]=P.bl;sg[4]=blue;
+ /* sm/bgb ko width/height dene se canvas khud hi poora saaf ho jata hai (spec: size
+    set karne par bitmap reset hoti hai), is liye uske baad ka clearRect bekaar tha -
+    blur slider ke har step par 1400x1200 ka ek poora clear (1.68 M pixel). */
  const f=2+P.bl*1.6,sw=Math.max(2,CW/f|0),sh=Math.max(2,CH/f|0);sm.width=sw;sm.height=sh;
- const sx=smx;sx.clearRect(0,0,sw,sh);cover(sx,origc,W,H,sw,sh);
- bgb.width=CW;bgb.height=CH;const bx=bxc;bx.imageSmoothingEnabled=true;bx.imageSmoothingQuality='high';bx.clearRect(0,0,CW,CH);bx.drawImage(sm,0,0,CW,CH);
+ const sx=smx;cover(sx,origc,W,H,sw,sh);
+ bgb.width=CW;bgb.height=CH;const bx=bxc;bx.imageSmoothingEnabled=true;bx.imageSmoothingQuality='high';bx.drawImage(sm,0,0,CW,CH);
  if(blue){bx.globalAlpha=0.72;bx.fillStyle='#0a5cff';bx.fillRect(0,0,CW,CH);bx.globalAlpha=1}};
 /* tmp par bana composite (outline ring + subject) sirf in cheezon par depend karta
    hai: fgc (fgKey), transform (t[0],t[1],t[2]), outline ki chaudai (r) aur tilt
@@ -793,6 +816,13 @@ const opaqueBg=()=>{if(bg.t==='color'||bg.t==='grad')return true;
  if(bg.t==='blur'||bg.t==='bluetint')return photoOpaque;
  return false};
 function render(fast){if(!od)return;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1;
+ /* "Hold: Original" (compare) me background, uska clearRect aur depth ka gradient
+    sab bekaar the: pehle yahan poora background banta tha aur neeche wala showOrig
+    branch turant poora canvas clear kar deta tha, is liye un teeno ka ek bhi pixel
+    canvas par nahi bachta tha - 1400x1200 par har compare frame me 2 x 1.68 M
+    clearRect + 1.68 M fillRect + background ka poora drawImage (blur background
+    par 1.68 M source pixel). ab showOrig par seedha yahin se laut jate hain. */
+ if(showOrig){cx.clearRect(0,0,CW,CH);drawSubj(origc,fast);return}
  const pm=P.motion/100,pox=-mx*pm*CW*0.010,poy=-my*pm*CH*0.010;
  /* colour/gradient background poore canvas par ek opaque fillRect karta hai, aur
     bina parallax (pox=poy=0) wo bilkul canvas ke kinare se kinare tak dhakta hai -
@@ -818,8 +848,6 @@ function render(fast){if(!od)return;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=
   if(dk[0]!==CW||dk[1]!==CH||dk[2]!==P.depth){const vg=cx.createRadialGradient(CW/2,CH*0.42,Math.min(CW,CH)*0.18,CW/2,CH*0.42,Math.max(CW,CH)*0.72);
    vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,'+(P.depth/100*0.42).toFixed(3)+')');depGrad=vg;dk[0]=CW;dk[1]=CH;dk[2]=P.depth}
   cx.fillStyle=depGrad;cx.fillRect(0,0,CW,CH)}
- /* "Hold: Original" me foreground layer kisi kaam ki nahi - poora putImageData bachta hai */
- if(showOrig){cx.clearRect(0,0,CW,CH);drawSubj(origc,fast);return}
  layer(fast);drawSubj(fgc,fast)}
 const sched=fast=>{if(fast)fastReq=true;if(!raf)raf=requestAnimationFrame(()=>{raf=0;const f=fastReq;fastReq=false;render(f)})};
 /* qr = slider ka fast preview + 160 ms baad poora render. rAF ~16 ms par chalta hai,
@@ -1589,7 +1617,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;POOL.length=0;
  fgKey='';outKey='';bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.33',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.34',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
