@@ -542,9 +542,13 @@ const layer=fast=>{const soft=!fast&&feather>0,key=mver+(soft?'s'+feather:'h');i
  const d=fgi.data;
  let x0,y0,x1,y1,part=false;
  if(fast){
-  /* mask badla hi nahi: pichhla frame abhi bhi sahi hai */
-  if(!DIRT){fgKey=key;return}
-  x0=DIRT[0];y0=DIRT[1];x1=DIRT[2];y1=DIRT[3];part=true;
+  /* mask badla hi nahi: pichhla frame abhi bhi sahi hai. par agar fgc abhi-abhi
+     naya bana hai (trim/nayi photo) to usme kuch bhi sahi nahi hai - pehle yahan
+     fgKey set ho kar wapas laut jata tha aur fgc 1x1/khaali hi reh jata tha,
+     yaani ek fast frame (slider drag / stroke ka pehla frame) subject ko gayab
+     kar deta tha jab tak koi poora render na ho. ab fgFull par poora upload hota hai. */
+  if(!DIRT){if(!fgFull){fgKey=key;return}}
+  else{x0=DIRT[0];y0=DIRT[1];x1=DIRT[2];y1=DIRT[3];part=true}
  }else if(pr){
   x0=Math.max(0,pr[0]-feather);y0=Math.max(0,pr[1]-feather);
   x1=Math.min(W-1,pr[2]+feather);y1=Math.min(H-1,pr[3]+feather);part=true;
@@ -819,10 +823,18 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
   if(rn>2){a=r0-R0[2];b2=g0-G0[2];c2=b0-B0[2];if(a*a+b2*b2+c2*c2<=t2)return true}
   if(rn>3){a=r0-R0[3];b2=g0-G0[3];c2=b0-B0[3];if(a*a+b2*b2+c2*c2<=t2)return true}
   return false};
+ /* add() closure sirf seeds ke liye bacha hai (ns <= 2*(nw+nh), ~2600). BFS ke
+    andar wo har neighbour check par bulaya jata tha - 1400x1200 par ek Auto press
+    me 1.68 M function call. ab wahi teen lines seedhe loop me likhi hain: vis
+    ka check, vis ka set, phir ok(j) - kram bilkul wahi (left, right, up, down),
+    is liye st me pixel usi tarteeb me jate hain aur mask byte-identical rehta hai. */
  const add=j=>{if(vis[j]!==gen){vis[j]=gen;if(ok(j))st[sp++]=j}};
  for(let k=0;k<ns;k++)add(seeds[k]);
- while(sp){const i=st[--sp];bg[i]=1;const x=i%nw;
-  if(x>0)add(i-1);if(x<nw-1)add(i+1);if(i>=nw)add(i-nw);if(i<N-nw)add(i+nw)}
+ while(sp){const i=st[--sp];bg[i]=1;const x=i%nw;let j;
+  if(x>0){j=i-1;if(vis[j]!==gen){vis[j]=gen;if(ok(j))st[sp++]=j}}
+  if(x<nw-1){j=i+1;if(vis[j]!==gen){vis[j]=gen;if(ok(j))st[sp++]=j}}
+  if(i>=nw){j=i-nw;if(vis[j]!==gen){vis[j]=gen;if(ok(j))st[sp++]=j}}
+  if(i<N-nw){j=i+nw;if(vis[j]!==gen){vis[j]=gen;if(ok(j))st[sp++]=j}}}
  /* doosra pass: background ke shade-off hisse (shadow, bokeh rim) bhi le lo,
     par asli object tak mat jao - uska rang har bg colour se kaafi door hota hai */
  const tb=tol*(keepObj?1.35:1.7),t2b=tb*tb;let gp=0;
@@ -834,11 +846,15 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
   if(rn>3){a=r0-R0[3];b2=g0-G0[3];c2=b0-B0[3];if(a*a+b2*b2+c2*c2<=t2b)return true}
   return false};
  for(let i=0;i<N;i++)if(bg[i]){vis2[i]=gen;st2[gp++]=i}
- /* grow pehle while ke andar banta tha, yaani har queue pop par ek naya closure
-    (1400x1200 par ~420k function objects per Auto press). ab ek hi closure bahar. */
- const grow=k=>{if(vis2[k]!==gen&&ok2(k)){vis2[k]=gen;bg[k]=1;st2[gp++]=k}};
- while(gp){const i=st2[--gp],x=i%nw;
-  if(x>0)grow(i-1);if(x<nw-1)grow(i+1);if(i>=nw)grow(i-nw);if(i<N-nw)grow(i+nw)}
+ /* grow pehle while ke andar banta tha (har queue pop par ek naya function
+    object), phir bahar; ab wo bhi BFS ke andar inline hai - har neighbour check
+    par ek call kam (1.68 M per Auto press). ok2 pehle chalta hai aur uske baad
+    vis2 set hota hai, bilkul pehle jaisa, is liye kram aur nateeja same. */
+ while(gp){const i=st2[--gp],x=i%nw;let j;
+  if(x>0){j=i-1;if(vis2[j]!==gen&&ok2(j)){vis2[j]=gen;bg[j]=1;st2[gp++]=j}}
+  if(x<nw-1){j=i+1;if(vis2[j]!==gen&&ok2(j)){vis2[j]=gen;bg[j]=1;st2[gp++]=j}}
+  if(i>=nw){j=i-nw;if(vis2[j]!==gen&&ok2(j)){vis2[j]=gen;bg[j]=1;st2[gp++]=j}}
+  if(i<N-nw){j=i+nw;if(vis2[j]!==gen&&ok2(j)){vis2[j]=gen;bg[j]=1;st2[gp++]=j}}}
  /* island cleanup: background ke andar pade objects bache rahein.
     island ke rang ka jod labelling ke andar hi ho jata hai (alag full scan nahi) */
  /* island stats pehle chaar JS array me push hote the - islands.png par ek Auto
@@ -1196,8 +1212,16 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;POOL.length=0;
  fgKey='';outKey='';bgKey='';SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.25',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
- trim:()=>{dropScratch();if(od)render()},
+window.GlassCut={version:'1.1.26',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+ /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
+    baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
+    tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
+    1.68 M pixel upload, poora fgc. yaani memory pressure ke waqt app ek mehnga
+    render karke memory wapas bhar leta tha. canvas par pichhla frame already
+    sahi hai (dropScratch sirf offscreen caches aur typed arrays chhodta hai),
+    is liye ab koi render nahi hota - agla asli render jo bhi chahiye wapas bana
+    leta hai. */
+ trim:()=>{dropScratch()},
  pause:()=>{shellPaused=true;idleCheck()},resume:()=>{shellPaused=false;idleCheck()},
  back:()=>{const ov=$('#ov');if(ov&&ov.classList.contains('show')){$('#ov').classList.remove('show');return true}
   if(openSh){closeAll();return true}return false}};
