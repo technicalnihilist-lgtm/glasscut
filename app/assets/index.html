@@ -427,7 +427,7 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
   FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS=null;XR=null;DIRT=null;SDIRT=null;MBUF=null;BD=null;
   /* island stats, undo ka khaali buffer aur JPEG flatten canvas bhi pichhli photo
      ke size ke the (jcv CW*CH*4 = 1400x1200 par 6.7 MB) - nayi photo par chhod do */
-  ISL=null;KEMPTY=null;jcv=null;SUB=null;fgFull=true;
+  ISL=null;KEMPTY=null;jcv=null;SUB=null;RUN=null;fgFull=true;
   if(ovUrl){URL.revokeObjectURL(ovUrl);ovUrl=null}
   undo=[];redo=[];POOL.length=0;fgKey=outKey=softKey='';mver++;
   $('#empty').style.display='none';cv.style.display='block';setSize();render();
@@ -939,7 +939,17 @@ const enforce=()=>{if(!keepMask||!keepDirty)return;let ch=false;
 /* scratch buffers: ek hi pair of arrays har wand tap me reuse hota hai (generation
    stamp se reset free), pehle har tap par 5 bytes/pixel naya garbage banta tha */
 let FL=null;
-/* flood ka ek hi caller hai (wand) aur wo hamesha ek hi reference rang deta hai.
+/* Queue me pixel ka index hi rakha jata tha, aur har pop par us index se column
+   nikalne ke liye ek integer division (i%W / i%nw) chalti thi - 1400x1200 par ek
+   wand tap me 1.68 M pop, yaani 1.68 M division. photo ka sabse bada side 1400 hai
+   (pickPhoto ka 1400 cap), is liye W,H <= 1400 aur W*H <= 1,960,000 < 2^21; column
+   bhi 1399 se chhota hai. yaani index (21 bit) aur column (11 bit) ek hi 32-bit
+   entry me aa jate hain: entry = (x<<21)|i, aur pop par i = e&0x1FFFFF,
+   x = e>>>21. `>>>` unsigned hai, is liye 2^31 se bada entry (Int32Array me
+   negative dikhta hai) bhi theek nikalti hai. coarse grid (nw,nh <= 700) par
+   shift 20 kaafi hai. queue ka kram bilkul wahi rehta hai, is liye mask
+   byte-identical.
+   flood ka ek hi caller hai (wand) aur wo hamesha ek hi reference rang deta hai.
    pehle wo rang [[r,g,b]] array-of-array me aata tha, is liye har neighbour check
    par ek array load + teen andar wale load + ek for-loop ka counter chalta tha -
    1400x1200 par 4 x 1.68 M = 6.7 M baar. ab teen scalar (cr,cg,cb) seedhe band
@@ -959,23 +969,23 @@ const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;softKill();
  const u32=OD32;
  const add=j=>{if(vis[j]===g)return;vis[j]=g;if(km&&km[j])return;
   const v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-  const a=(v&255)-cr,b=((v>>>8)&255)-cg,d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=j};
+  const a=(v&255)-cr,b=((v>>>8)&255)-cg,d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=((j%W)<<21)|j};
  for(let k=0;k<seeds.length;k++)add(seeds[k]);
- while(sp){const i=st[--sp],x=i%W;if(mask[i]){mask[i]=0;cnt++}
+ while(sp){const e=st[--sp],i=e&0x1FFFFF,x=e>>>21;if(mask[i]){mask[i]=0;cnt++}
   let j,v,a,b,d;
   if(x>0){j=i-1;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-   a=(v&255)-cr;b=((v>>>8)&255)-cg;d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=j}}}
+   a=(v&255)-cr;b=((v>>>8)&255)-cg;d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=((x-1)<<21)|j}}}
   if(x<W-1){j=i+1;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-   a=(v&255)-cr;b=((v>>>8)&255)-cg;d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=j}}}
+   a=(v&255)-cr;b=((v>>>8)&255)-cg;d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=((x+1)<<21)|j}}}
   if(i>=W){j=i-W;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-   a=(v&255)-cr;b=((v>>>8)&255)-cg;d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=j}}}
+   a=(v&255)-cr;b=((v>>>8)&255)-cg;d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=(x<<21)|j}}}
   if(i<M-W){j=i+W;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-   a=(v&255)-cr;b=((v>>>8)&255)-cg;d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=j}}}}
+   a=(v&255)-cr;b=((v>>>8)&255)-cg;d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=(x<<21)|j}}}}
  mver++;softKill();return cnt};
 /* coarse-to-fine cutout: flood a downscaled copy, then snap the edge back at full res */
 /* boxDown ka output, xmap aur seeds har Auto press par naye bante the (1400x1200 par
    ~1.68 MB + 5.6 KB garbage). ab wahi buffers dobara use hote hain. */
-let SD=null,XM=null,SEEDS=null,XR=null;
+let SD=null,XM=null,SEEDS=null,XR=null,RUN=null;
 /* island labelling ke stats: island ki size aur rang ka jod. buffer sirf tab bada
    hota hai jab islands ki ginti capacity se zyada ho - warna wahi ek set reuse. */
 let ISL=null;
@@ -1130,42 +1140,42 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
     me 1.68 M function call. ab wahi teen lines seedhe loop me likhi hain: vis
     ka check, vis ka set, phir ok(j) - kram bilkul wahi (left, right, up, down),
     is liye st me pixel usi tarteeb me jate hain aur mask byte-identical rehta hai. */
- const add=j=>{if(vis[j]!==gen){vis[j]=gen;if(ok(j))st[sp++]=j}};
+ const add=j=>{if(vis[j]!==gen){vis[j]=gen;if(ok(j))st[sp++]=((j%nw)<<20)|j}};
  for(let k=0;k<ns;k++)add(seeds[k]);
  /* BFS ke andar ok(j) call ab poora hata diya: har neighbour check par ek closure
     call (1400x1200 par 1.68 M) aur uske andar SD32/px ka ek aur call chalta tha.
     ab wahi chaar load aur chaar test seedhe loop me likhe hain - kram bilkul wahi
     (left, right, up, down) aur st me pixel usi tarteeb me jate hain, is liye mask
     byte-identical. */
- while(sp){const i=st[--sp];bg[i]=1;const x=i%nw;let j,v,a,b2,c2,hit;
+ while(sp){const e=st[--sp],i=e&0xFFFFF,x=e>>>20;bg[i]=1;let j,v,a,b2,c2,hit;
  if(x>0){j=i-1;if(vis[j]!==gen){vis[j]=gen;
   v=SD32?SD32[j]:(sd[j*4]|sd[j*4+1]<<8|sd[j*4+2]<<16);
   a=(v&255)-A0;b2=((v>>>8)&255)-B0_;c2=((v>>>16)&255)-C0;hit=a*a+b2*b2+c2*c2<=t2;
   if(!hit&&rn>1){a=(v&255)-A1;b2=((v>>>8)&255)-B1_;c2=((v>>>16)&255)-C1;hit=a*a+b2*b2+c2*c2<=t2}
   if(!hit&&rn>2){a=(v&255)-A2;b2=((v>>>8)&255)-B2_;c2=((v>>>16)&255)-C2;hit=a*a+b2*b2+c2*c2<=t2}
   if(!hit&&rn>3){a=(v&255)-A3;b2=((v>>>8)&255)-B3_;c2=((v>>>16)&255)-C3;hit=a*a+b2*b2+c2*c2<=t2}
-  if(hit)st[sp++]=j}}
+  if(hit)st[sp++]=((x-1)<<20)|j}}
  if(x<nw-1){j=i+1;if(vis[j]!==gen){vis[j]=gen;
   v=SD32?SD32[j]:(sd[j*4]|sd[j*4+1]<<8|sd[j*4+2]<<16);
   a=(v&255)-A0;b2=((v>>>8)&255)-B0_;c2=((v>>>16)&255)-C0;hit=a*a+b2*b2+c2*c2<=t2;
   if(!hit&&rn>1){a=(v&255)-A1;b2=((v>>>8)&255)-B1_;c2=((v>>>16)&255)-C1;hit=a*a+b2*b2+c2*c2<=t2}
   if(!hit&&rn>2){a=(v&255)-A2;b2=((v>>>8)&255)-B2_;c2=((v>>>16)&255)-C2;hit=a*a+b2*b2+c2*c2<=t2}
   if(!hit&&rn>3){a=(v&255)-A3;b2=((v>>>8)&255)-B3_;c2=((v>>>16)&255)-C3;hit=a*a+b2*b2+c2*c2<=t2}
-  if(hit)st[sp++]=j}}
+  if(hit)st[sp++]=((x+1)<<20)|j}}
  if(i>=nw){j=i-nw;if(vis[j]!==gen){vis[j]=gen;
   v=SD32?SD32[j]:(sd[j*4]|sd[j*4+1]<<8|sd[j*4+2]<<16);
   a=(v&255)-A0;b2=((v>>>8)&255)-B0_;c2=((v>>>16)&255)-C0;hit=a*a+b2*b2+c2*c2<=t2;
   if(!hit&&rn>1){a=(v&255)-A1;b2=((v>>>8)&255)-B1_;c2=((v>>>16)&255)-C1;hit=a*a+b2*b2+c2*c2<=t2}
   if(!hit&&rn>2){a=(v&255)-A2;b2=((v>>>8)&255)-B2_;c2=((v>>>16)&255)-C2;hit=a*a+b2*b2+c2*c2<=t2}
   if(!hit&&rn>3){a=(v&255)-A3;b2=((v>>>8)&255)-B3_;c2=((v>>>16)&255)-C3;hit=a*a+b2*b2+c2*c2<=t2}
-  if(hit)st[sp++]=j}}
+  if(hit)st[sp++]=(x<<20)|j}}
  if(i<N-nw){j=i+nw;if(vis[j]!==gen){vis[j]=gen;
   v=SD32?SD32[j]:(sd[j*4]|sd[j*4+1]<<8|sd[j*4+2]<<16);
   a=(v&255)-A0;b2=((v>>>8)&255)-B0_;c2=((v>>>16)&255)-C0;hit=a*a+b2*b2+c2*c2<=t2;
   if(!hit&&rn>1){a=(v&255)-A1;b2=((v>>>8)&255)-B1_;c2=((v>>>16)&255)-C1;hit=a*a+b2*b2+c2*c2<=t2}
   if(!hit&&rn>2){a=(v&255)-A2;b2=((v>>>8)&255)-B2_;c2=((v>>>16)&255)-C2;hit=a*a+b2*b2+c2*c2<=t2}
   if(!hit&&rn>3){a=(v&255)-A3;b2=((v>>>8)&255)-B3_;c2=((v>>>16)&255)-C3;hit=a*a+b2*b2+c2*c2<=t2}
-  if(hit)st[sp++]=j}}}
+  if(hit)st[sp++]=(x<<20)|j}}}
  /* doosra pass: background ke shade-off hisse (shadow, bokeh rim) bhi le lo,
     par asli object tak mat jao - uska rang har bg colour se kaafi door hota hai */
  const tb=tol*(keepObj?1.35:1.7),t2b=tb*tb;let gp=0;
@@ -1184,42 +1194,42 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
     (warna koi doosra cell usse dobara test kar leta), sirf queue entry bachti hai.
     bg aur mask bilkul wahi rehte hain - seed ka kram pehle jaisa (row chadhte). */
  for(let y=0,y0=0;y<nh;y++,y0+=nw)for(let x=0;x<nw;x++){const i=y0+x;if(bg[i]){vis2[i]=gen;
-  if((x>0&&!bg[i-1])||(x<nw-1&&!bg[i+1])||(y>0&&!bg[i-nw])||(y<nh-1&&!bg[i+nw]))st2[gp++]=i}}
+  if((x>0&&!bg[i-1])||(x<nw-1&&!bg[i+1])||(y>0&&!bg[i-nw])||(y<nh-1&&!bg[i+nw]))st2[gp++]=((x)<<20)|i}}
  /* grow pehle while ke andar banta tha (har queue pop par ek naya function
     object), phir bahar; ab wo bhi BFS ke andar inline hai - har neighbour check
     par ek call kam (1.68 M per Auto press). ok2 pehle chalta hai aur uske baad
     vis2 set hota hai, bilkul pehle jaisa, is liye kram aur nateeja same. */
  /* yahi inline pass 2 me bhi: ok2 ki jagah seedha likha hua test. yahan pehle
     vis2 check hota tha aur uske baad ok2, ab bhi wahi kram hai. */
- while(gp){const i=st2[--gp],x=i%nw;let j,v,a,b2,c2,hit;
+ while(gp){const e=st2[--gp],i=e&0xFFFFF,x=e>>>20;let j,v,a,b2,c2,hit;
  if(x>0){j=i-1;if(vis2[j]!==gen){
   v=SD32?SD32[j]:(sd[j*4]|sd[j*4+1]<<8|sd[j*4+2]<<16);
   a=(v&255)-A0;b2=((v>>>8)&255)-B0_;c2=((v>>>16)&255)-C0;hit=a*a+b2*b2+c2*c2<=t2b;
   if(!hit&&rn>1){a=(v&255)-A1;b2=((v>>>8)&255)-B1_;c2=((v>>>16)&255)-C1;hit=a*a+b2*b2+c2*c2<=t2b}
   if(!hit&&rn>2){a=(v&255)-A2;b2=((v>>>8)&255)-B2_;c2=((v>>>16)&255)-C2;hit=a*a+b2*b2+c2*c2<=t2b}
   if(!hit&&rn>3){a=(v&255)-A3;b2=((v>>>8)&255)-B3_;c2=((v>>>16)&255)-C3;hit=a*a+b2*b2+c2*c2<=t2b}
-  if(hit){vis2[j]=gen;bg[j]=1;st2[gp++]=j}}}
+  if(hit){vis2[j]=gen;bg[j]=1;st2[gp++]=((x-1)<<20)|j}}}
  if(x<nw-1){j=i+1;if(vis2[j]!==gen){
   v=SD32?SD32[j]:(sd[j*4]|sd[j*4+1]<<8|sd[j*4+2]<<16);
   a=(v&255)-A0;b2=((v>>>8)&255)-B0_;c2=((v>>>16)&255)-C0;hit=a*a+b2*b2+c2*c2<=t2b;
   if(!hit&&rn>1){a=(v&255)-A1;b2=((v>>>8)&255)-B1_;c2=((v>>>16)&255)-C1;hit=a*a+b2*b2+c2*c2<=t2b}
   if(!hit&&rn>2){a=(v&255)-A2;b2=((v>>>8)&255)-B2_;c2=((v>>>16)&255)-C2;hit=a*a+b2*b2+c2*c2<=t2b}
   if(!hit&&rn>3){a=(v&255)-A3;b2=((v>>>8)&255)-B3_;c2=((v>>>16)&255)-C3;hit=a*a+b2*b2+c2*c2<=t2b}
-  if(hit){vis2[j]=gen;bg[j]=1;st2[gp++]=j}}}
+  if(hit){vis2[j]=gen;bg[j]=1;st2[gp++]=((x+1)<<20)|j}}}
  if(i>=nw){j=i-nw;if(vis2[j]!==gen){
   v=SD32?SD32[j]:(sd[j*4]|sd[j*4+1]<<8|sd[j*4+2]<<16);
   a=(v&255)-A0;b2=((v>>>8)&255)-B0_;c2=((v>>>16)&255)-C0;hit=a*a+b2*b2+c2*c2<=t2b;
   if(!hit&&rn>1){a=(v&255)-A1;b2=((v>>>8)&255)-B1_;c2=((v>>>16)&255)-C1;hit=a*a+b2*b2+c2*c2<=t2b}
   if(!hit&&rn>2){a=(v&255)-A2;b2=((v>>>8)&255)-B2_;c2=((v>>>16)&255)-C2;hit=a*a+b2*b2+c2*c2<=t2b}
   if(!hit&&rn>3){a=(v&255)-A3;b2=((v>>>8)&255)-B3_;c2=((v>>>16)&255)-C3;hit=a*a+b2*b2+c2*c2<=t2b}
-  if(hit){vis2[j]=gen;bg[j]=1;st2[gp++]=j}}}
+  if(hit){vis2[j]=gen;bg[j]=1;st2[gp++]=(x<<20)|j}}}
  if(i<N-nw){j=i+nw;if(vis2[j]!==gen){
   v=SD32?SD32[j]:(sd[j*4]|sd[j*4+1]<<8|sd[j*4+2]<<16);
   a=(v&255)-A0;b2=((v>>>8)&255)-B0_;c2=((v>>>16)&255)-C0;hit=a*a+b2*b2+c2*c2<=t2b;
   if(!hit&&rn>1){a=(v&255)-A1;b2=((v>>>8)&255)-B1_;c2=((v>>>16)&255)-C1;hit=a*a+b2*b2+c2*c2<=t2b}
   if(!hit&&rn>2){a=(v&255)-A2;b2=((v>>>8)&255)-B2_;c2=((v>>>16)&255)-C2;hit=a*a+b2*b2+c2*c2<=t2b}
   if(!hit&&rn>3){a=(v&255)-A3;b2=((v>>>8)&255)-B3_;c2=((v>>>16)&255)-C3;hit=a*a+b2*b2+c2*c2<=t2b}
-  if(hit){vis2[j]=gen;bg[j]=1;st2[gp++]=j}}}}
+  if(hit){vis2[j]=gen;bg[j]=1;st2[gp++]=(x<<20)|j}}}}
  /* island cleanup: background ke andar pade objects bache rahein.
     island ke rang ka jod labelling ke andar hi ho jata hai (alag full scan nahi) */
  /* island stats pehle chaar JS array me push hote the - islands.png par ek Auto
@@ -1229,12 +1239,12 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
  let isl=islBuf(1024),isz=isl.sz,isr=isl.sr,isg=isl.sg,isb=isl.sb,drop=isl.drop,ni=0;
  for(let i=0;i<N;i++){if(bg[i]||lab[i]>=0)continue;
   if(ni>=isl.cap){isl=islBuf(ni+1);isz=isl.sz;isr=isl.sr;isg=isl.sg;isb=isl.sb;drop=isl.drop}
-  const id=ni++;let h=0,t=0;lab[i]=id;q3[t++]=i;let n2=0,r0=0,g0=0,b0=0;
-  while(h<t){const j=q3[h++];n2++;const vv=px(j);r0+=vv&255;g0+=(vv>>>8)&255;b0+=(vv>>>16)&255;const x=j%nw;let k;
-   if(x>0){k=j-1;if(!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=k}}
-   if(x<nw-1){k=j+1;if(!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=k}}
-   if(j>=nw){k=j-nw;if(!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=k}}
-   if(j<N-nw){k=j+nw;if(!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=k}}}
+  const id=ni++;let h=0,t=0;lab[i]=id;q3[t++]=((i%nw)<<20)|i;let n2=0,r0=0,g0=0,b0=0;
+  while(h<t){const e=q3[h++],j=e&0xFFFFF,x=e>>>20;n2++;const vv=px(j);r0+=vv&255;g0+=(vv>>>8)&255;b0+=(vv>>>16)&255;let k;
+   if(x>0){k=j-1;if(!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=((x-1)<<20)|k}}
+   if(x<nw-1){k=j+1;if(!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=((x+1)<<20)|k}}
+   if(j>=nw){k=j-nw;if(!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=(x<<20)|k}}
+   if(j<N-nw){k=j+nw;if(!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=(x<<20)|k}}}
   isz[id]=n2;isr[id]=r0;isg[id]=g0;isb[id]=b0}
  if(ni>1){
   const total=N;
@@ -1287,14 +1297,29 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
     cells me ho sakta hai - unka full-res failaav hi naya MB hai. ye hisaab usi
     loop me ho jata hai jo pehle se har cell par chal raha tha. */
  let mbx0=W,mby0=H,mbx1=-1,mby1=-1;
+ /* poore canvas ka scan har pixel par ek coarse column ka kaam dobara karta tha:
+    1200 row x 700 column = 840k baar "ye cell bg hai? inner hai?" ka jawab, aur
+    seen ka ek byte ek-ek karke likhna. ek coarse row ke saath-saath chalne wale
+    columns ka kind ek hi hota hai (bg+inner / bg+kinara / non-bg), is liye ab har
+    coarse row ke runs ek hi baar bante hain (420k column check) aur unhe wo saare
+    rows dobara use karte hain jin ka cy wahi hai; inner run par seen ek hi
+    seen.fill() (memset) se likha jata hai aur mask sirf usi contiguous range par
+    saaf hota hai. kram bilkul wahi rehta hai - y chadhte hue, phir x chadhte hue -
+    is liye q me pixel usi tarteeb me jate hain aur mask byte-identical rehta hai.
+    lev sirf queue me jane wale pixel ke liye likha jata hai (inner pixel BFS me
+    aata hi nahi, uska lev kabhi padha nahi jata). */
+ if(!RUN||RUN.length<nw*3)RUN=new Int32Array(nw*3);
+ const run=RUN;let rcy=-1,rn3=0;
  for(let y=0;y<H;y++){const cy=Math.min(nh-1,y*nh/H|0),row=cy*nw,base=y*W;
-  for(let c2=0;c2<nw;c2++){const c=row+c2,x1=xr[c2+1];if(bg[c]){
-   /* lev sirf queue me jane wale pixel ke liye likhna padta hai - andar ka
-      (inner) pixel BFS me kabhi aata hi nahi, is liye uska lev kabhi padha
-      nahi jata. pehle wo 1.68 M baar likha jata tha. */
-   if(inner[c]){for(let x=xr[c2];x<x1;x++){const i=base+x;seen[i]=gen;if(mask[i]){mask[i]=0;cnt++}}}
-   else{for(let x=xr[c2];x<x1;x++){const i=base+x;seen[i]=gen;lev[i]=0;q[sp2++]=i}}}
-   else{const cxx=xr[c2];if(cxx<mbx0)mbx0=cxx;if(x1-1>mbx1)mbx1=x1-1;if(y<mby0)mby0=y;mby1=y}}}
+  if(cy!==rcy){rcy=cy;rn3=0;let i=0;
+   while(i<nw){const k=!bg[row+i]?2:(inner[row+i]?0:1);let j=i+1;
+    while(j<nw&&(!bg[row+j]?2:(inner[row+j]?0:1))===k)j++;
+    run[rn3*3]=xr[i];run[rn3*3+1]=xr[j];run[rn3*3+2]=k;rn3++;i=j}}
+  for(let r=0;r<rn3;r++){const x0=run[r*3],x1=run[r*3+1],k=run[r*3+2];
+   if(k===0){seen.fill(gen,base+x0,base+x1);
+    for(let x=x0;x<x1;x++){const i=base+x;if(mask[i]){mask[i]=0;cnt++}}}
+   else if(k===1){for(let x=x0;x<x1;x++){const i=base+x;seen[i]=gen;lev[i]=0;q[sp2++]=(x<<21)|i}}
+   else{if(x0<mbx0)mbx0=x0;if(x1-1>mbx1)mbx1=x1-1;if(y<mby0)mby0=y;mby1=y}}}
  /* per-pixel closure allocation hata di: har pixel par ek naya function banta tha */
  /* har pixel ka rang ab ek hi baar padha jata hai: pehle near() har neighbour
     check par i*4 dobara ginta tha aur od se teen byte phir padhta tha (1.68 M
@@ -1303,18 +1328,18 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
     - 1.68 M pixel par 4 neighbour check ke saath. BE par u32 null hai aur wahi
     purana byte raasta chalta hai; dono par value bilkul wahi. */
  const u32=OD32;
- while(hd<sp2){const i=q[hd++],l=lev[i];if(mask[i]){mask[i]=0;cnt++}
+ while(hd<sp2){const e=q[hd++],i=e&0x1FFFFF,l=lev[i];if(mask[i]){mask[i]=0;cnt++}
   if(l>=K)continue;
   const vi=u32?u32[i]:(od[i*4]|od[i*4+1]<<8|od[i*4+2]<<16),
-   r0=vi&255,g0=(vi>>>8)&255,b0=(vi>>>16)&255,x=i%W,l1=l+1;let j,v,a,b2,c;
+   r0=vi&255,g0=(vi>>>8)&255,b0=(vi>>>16)&255,x=e>>>21,l1=l+1;let j,v,a,b2,c;
   if(x>0){j=i-1;if(seen[j]!==gen){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-   a=r0-(v&255);b2=g0-((v>>>8)&255);c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
+   a=r0-(v&255);b2=g0-((v>>>8)&255);c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=((x-1)<<21)|j}}}
   if(x<W-1){j=i+1;if(seen[j]!==gen){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-   a=r0-(v&255);b2=g0-((v>>>8)&255);c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
+   a=r0-(v&255);b2=g0-((v>>>8)&255);c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=((x+1)<<21)|j}}}
   if(i>=W){j=i-W;if(seen[j]!==gen){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-   a=r0-(v&255);b2=g0-((v>>>8)&255);c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}
+   a=r0-(v&255);b2=g0-((v>>>8)&255);c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=(x<<21)|j}}}
   if(i<M-W){j=i+W;if(seen[j]!==gen){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-   a=r0-(v&255);b2=g0-((v>>>8)&255);c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=j}}}}
+   a=r0-(v&255);b2=g0-((v>>>8)&255);c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=(x<<21)|j}}}}
  enforce();
  /* keepMask me paint kiya hua hissa cutout ke box se bahar ho sakta hai (enforce
     wahan 255 likhta hai) - us haalat me poora box hi surakshit hai */
@@ -1614,10 +1639,10 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
    flatten canvas, island buffers) chhod diya jata hai aur fgc/outc/bgb/sm
    1x1 ho jate hain - agla render sab kuch wapas bana leta hai, is liye screen
    par kuch nahi badalta. photo khud (origc/fgi/mask) chhui bhi nahi jati. */
-const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;POOL.length=0;
+const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;POOL.length=0;
  fgKey='';outKey='';bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.34',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.35',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
