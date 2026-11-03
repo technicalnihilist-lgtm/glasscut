@@ -1061,16 +1061,21 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
     Int32Array hi rakhe gaye: coarse BFS ka read-modify pattern (vis[j]!==gen, phir
     vis[j]=gen) 8-bit par naap kar dheema nikla (1.68 M check par 1.2 -> 1.8 ms), aur
     wahi buffer cutout ka sabse garma-garam loop hai. */
- if(!CC||CC.n!==N||CC.m!==M){CC={n:N,m:M,vis:new Int32Array(N),st:new Int32Array(N),vis2:new Int32Array(N),
-  st2:new Int32Array(N),lab:new Int32Array(N).fill(-1),q3:new Int32Array(N),bg:new Uint8Array(N),
+ /* st (pass 1), st2 (pass 2), q3 (islands) aur q (full-res snap) ek hi scratch
+    stack hai: chaaron baari-baari chalte hain aur har ek poora khatam hone ke baad
+    hi agla shuru hota hai (sp=0, phir gp=0, phir islands, phir snap). teen alag
+    N-int buffer aur ek M-int buffer rakhne ki zaroorat nahi thi -
+    1400x1200 par st+st2+q3+q = 11.76 MB, ab ek hi max(N,M) int buffer 6.72 MB. */
+ if(!CC||CC.n!==N||CC.m!==M){CC={n:N,m:M,vis:new Int32Array(N),st:new Int32Array(Math.max(N,M)),vis2:new Int32Array(N),
+  lab:new Int32Array(N).fill(-1),bg:new Uint8Array(N),
   inner:new Uint8Array(N),
-  seen:new Uint8Array(M),q:new Int32Array(M),lev:new Uint8Array(M),g:0}}
+  seen:new Uint8Array(M),lev:new Uint8Array(M),g:0}}
  const C=CC;
  /* 8-bit generation 255 par wrap hota hai - tab teeno buffer saaf aur g 1 se dobara.
     stamp sirf "is run me dekha gaya" batata hai, is liye reset se nateeja nahi badalta. */
  if(++C.g>255){C.vis.fill(0);C.vis2.fill(0);C.seen.fill(0);C.g=1}
  const gen=C.g;
- const vis=C.vis,st=C.st,bg=C.bg.fill(0),vis2=C.vis2,st2=C.st2,lab=C.lab,q3=C.q3;
+ const vis=C.vis,st=C.st,bg=C.bg.fill(0),vis2=C.vis2,st2=st,lab=C.lab,q3=st;
  const t2=tol*tol;let sp=0;
  /* coarse grid (downscaled copy) ka rang pehle har neighbour check par p=i*4 ka
     multiply aur teen alag byte load se aata tha - dono BFS pass milakar 3.36 M
@@ -1143,7 +1148,15 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
   if(rn>2){a=r0-A2;b2=g0-B2_;c2=b0-C2;if(a*a+b2*b2+c2*c2<=t2b)return true}
   if(rn>3){a=r0-A3;b2=g0-B3_;c2=b0-C3;if(a*a+b2*b2+c2*c2<=t2b)return true}
   return false};
- for(let i=0;i<N;i++)if(bg[i]){vis2[i]=gen;st2[gp++]=i}
+ /* pass 2 ka seed loop pehle HAR bg cell ko queue me daalta tha (1400x1200 par
+    273,693 seed) aur BFS unme se har ek ko pop kar ke chaar neighbour check karta
+    tha. unme se 272,367 (99.5%) ke chaaron neighbour pehle se bg hain - unka
+    pop kuch nahi karta, kyunki har bg cell vis2 pehle hi gen hai. aise cell ko
+    seed karna hi nahi zaroori. vis2 phir bhi har bg cell par likha jata hai
+    (warna koi doosra cell usse dobara test kar leta), sirf queue entry bachti hai.
+    bg aur mask bilkul wahi rehte hain - seed ka kram pehle jaisa (row chadhte). */
+ for(let y=0,y0=0;y<nh;y++,y0+=nw)for(let x=0;x<nw;x++){const i=y0+x;if(bg[i]){vis2[i]=gen;
+  if((x>0&&!bg[i-1])||(x<nw-1&&!bg[i+1])||(y>0&&!bg[i-nw])||(y<nh-1&&!bg[i+nw]))st2[gp++]=i}}
  /* grow pehle while ke andar banta tha (har queue pop par ek naya function
     object), phir bahar; ab wo bhi BFS ke andar inline hai - har neighbour check
     par ek call kam (1.68 M per Auto press). ok2 pehle chalta hai aur uske baad
@@ -1208,7 +1221,7 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
    drop[k]=keepObj?((fr<0.0015||dm<tol*1.15)?1:0):(isz[k]<isz[big]*0.5?1:0)}
   for(let i=0;i<N;i++){const id=lab[i];if(id>=0){if(drop[id])bg[i]=1;lab[i]=-1}}
  } else for(let i=0;i<N;i++)lab[i]=-1;
- const seen=C.seen,q=C.q,lev=C.lev;
+ const seen=C.seen,q=st,lev=C.lev;
  const step=Math.max(4,Math.round(4+tol*0.15)),s2=step*step,K=3;
  /* coarse column ka pixel range: pehle har full-res pixel par xmap[x] load hota
     tha aur phir bg[c] aur inner[c] dobara padhe jate the - teen load per pixel,
@@ -1525,8 +1538,12 @@ const save=async()=>{
      readAsDataURL throw kare to bhi saveBusy chhut jata hai, aur late aane wala
      FileReader callback dobara save nahi karta. */
   let bdone=false,wd=0;
+  /* native rasta safal hone par kuch bhi nahi dikhata tha: file gallery me chali
+     jati thi par user ko koi confirmation nahi milta (browser/share wale dono
+     raaste "Save ho gaya" dikhate hain, aur pending raaste par native khud
+     GlassCut.saved() bulata hai). ab wahi message yahan bhi. */
   const bfin=ok=>{if(bdone)return;bdone=true;if(wd)clearTimeout(wd);saveBusy=false;
-   if(!ok)fallback(b)};
+   if(!ok)fallback(b);else toast('Save ho gaya')};
   wd=setTimeout(()=>bfin(false),6000);
   hold=true;
   fr.onload=()=>{if(bdone)return;let res=null;
@@ -1572,7 +1589,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;POOL.length=0;
  fgKey='';outKey='';bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.32',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.33',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
