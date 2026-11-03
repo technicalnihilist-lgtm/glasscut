@@ -229,6 +229,13 @@ const LE32=(()=>{try{const a=new ArrayBuffer(4);new Uint32Array(a)[0]=0x0a0b0c0d
  return new Uint8Array(a)[0]===0x0d}catch(_){return false}})();
 let OD32=null;
 const mkOD32=()=>{OD32=(LE32&&od&&(od.byteOffset&3)===0)?new Uint32Array(od.buffer,od.byteOffset,od.length>>>2):null};
+/* layer() mask ka alpha fgi.data me likhta hai. pehle har pixel par d[i*4+3]=v tha -
+   yaani ek index multiply aur ek clamped byte store (1.68 M pixel par). alpha little-
+   endian par wahi 32-bit word ka sabse upar wala byte hai, is liye ek hi word load +
+   mask + store se wahi byte likha jata hai (RGB ke teeno byte wahi rehte hain, kyunki
+   layer sirf alpha badalta hai). BE par purana byte raasta hi chalta hai. */
+let FG32=null;
+const mkFG32=()=>{FG32=(LE32&&fgi&&fgi.data&&(fgi.data.byteOffset&3)===0&&(fgi.data.buffer.byteLength>=W*H*4))?new Uint32Array(fgi.data.buffer,fgi.data.byteOffset,W*H):null};
 /* background ka poora canvas dhakna: photo ke har pixel ka alpha 255 hai ya nahi,
    aur "Apni photo" wale background image ka composite opaque hai ya nahi */
 let photoOpaque=false,imgOpaque=false,imgOpaqueFor=null;
@@ -387,7 +394,7 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
      poore session ke liye. ab fgi hi od hai: layer() sirf alpha byte likhta hai
      (RGB waise hi rehta hai), aur od ka asli alpha sirf neeche mask0 banate waqt
      padha jata hai, jo pehle render se pehle ho jata hai. */
-  fgi=ox.getImageData(0,0,W,H);od=fgi.data;mkOD32();
+  fgi=ox.getImageData(0,0,W,H);od=fgi.data;mkOD32();mkFG32();
   fgc.width=W;fgc.height=H;outc.width=W;outc.height=H;bgb.width=bgb.height=1;bgKey='';
   mask0=new Uint8Array(W*H);let amin=255;
   /* har pixel par i*4 ka multiply aur ek byte load; ab ek hi 32-bit load ka
@@ -523,6 +530,12 @@ const softKill=()=>{softKey='';SDIRT=null};
    hai aur partial upload par sirf badhta hai (conservative, kabhi chhota nahi),
    is liye purana box kabhi kuch clip nahi karta. */
 let SUB=null,fgFull=false;
+/* SUB ko partial upload sirf bada karta hai (conservative). undo/redo ka partial upload
+   SUB ko exact chhodta to wo bada reh jata, aur bada box drawSubj ke source-rect
+   drawImage ko 1/255 alpha farak de deta hai (1:1 par bhi wo bilinear raaste se jata
+   hai). is liye usi ek raaste par SUBX ek poora mask scan maangta hai - wahi scan jo
+   poora upload karta hai, is liye SUB bilkul wahi nikalta hai. */
+let SUBX=false;
 /* box ko 4 source pixel chauda karke bhejte hain taaki scale hone par bilinear
    sampling box ke kinare par wahi pixels dekhe jo poore canvas me dekhta tha */
 const SUBP=[0,0,0,0];
@@ -570,7 +583,16 @@ const layer=fast=>{const soft=!fast&&feather>0,key=mver+(soft?'s'+feather:'h');i
   }
   /* box blur radius r sirf r pixel door tak asar dalta hai, is liye badle hue
      rectangle ko r se bada kar ke hi dobara nikaalna hota hai */
-  else if(SDIRT){pr=SDIRT;blurRect(mask,feather,pr[0]-feather,pr[1]-feather,pr[2]+feather,pr[3]+feather,softM);SDIRT=null}
+  else if(SDIRT){pr=SDIRT;
+   /* SBOX ka matlab hai "iske bahar softM ka har byte pakka 0 hai" - poora-blur wala
+      raasta isi par memset karta hai. partial blur SBOX ke bahar bhi likh sakta hai
+      (jaise Restore se subject badhne par, ya undo ke union box par), is liye SBOX ko
+      bhi utna hi chauda kar diya jata hai, warna wo jagah bad mein stale reh jati. */
+   const sx0=Math.max(0,pr[0]-feather),sy0=Math.max(0,pr[1]-feather),
+         sx1=Math.min(W-1,pr[2]+feather),sy1=Math.min(H-1,pr[3]+feather);
+   blurRect(mask,feather,pr[0]-feather,pr[1]-feather,pr[2]+feather,pr[3]+feather,softM);
+   if(SBOX){if(sx0<SBOX[0])SBOX[0]=sx0;if(sy0<SBOX[1])SBOX[1]=sy0;if(sx1>SBOX[2])SBOX[2]=sx1;if(sy1>SBOX[3])SBOX[3]=sy1}
+   SDIRT=null}
   m=softM}
  /* fgc par jo hissa pehle se sahi hai use dobara upload karna bekaar hai. mask
     sirf DIRT (fast frame) ya SDIRT (stroke ka poora chhua hissa) me badla hai,
@@ -597,17 +619,26 @@ const layer=fast=>{const soft=!fast&&feather>0,key=mver+(soft?'s'+feather:'h');i
     partial upload chhota box likh kar baaki canvas khaali chhod deta. */
  if(part&&fgFull){part=false;DIRT=null}
  if(part){
-  for(let y=y0;y<=y1;y++){const b=y*W;for(let x=x0;x<=x1;x++){const i=b+x;d[i*4+3]=m[i]}}
+  if(FG32){const u=FG32;
+   for(let y=y0;y<=y1;y++){const b=y*W;for(let x=x0;x<=x1;x++){const i=b+x;u[i]=(u[i]&0xffffff)|(m[i]<<24)}}}
+  else for(let y=y0;y<=y1;y++){const b=y*W;for(let x=x0;x<=x1;x++){const i=b+x;d[i*4+3]=m[i]}}
   fgx.putImageData(fgi,0,0,x0,y0,x1-x0+1,y1-y0+1);
-  if(SUB){if(x0<SUB[0])SUB[0]=x0;if(y0<SUB[1])SUB[1]=y0;if(x1>SUB[2])SUB[2]=x1;if(y1>SUB[3])SUB[3]=y1}
+  if(SUBX){SUBX=false;
+   let sx0=W,sy0=H,sx1=-1,sy1=-1;
+   for(let y=0;y<H;y++){const b=y*W;for(let x=0;x<W;x++){if(m[b+x]){if(x<sx0)sx0=x;if(x>sx1)sx1=x;if(sy0===H)sy0=y;sy1=y}}}
+   SUB=sx1<0?null:[sx0,sy0,sx1,sy1];
+  }else if(SUB){if(x0<SUB[0])SUB[0]=x0;if(y0<SUB[1])SUB[1]=y0;if(x1>SUB[2])SUB[2]=x1;if(y1>SUB[3])SUB[3]=y1}
   else SUB=[x0,y0,x1,y1];
  }else{
   /* poora upload: yahin SUB exactly nikalta hai (ek hi pass, wahi loop) */
   let bx0=W,by0=H,bx1=-1,by1=-1;
-  for(let y=0;y<H;y++){const b=y*W;for(let x=0;x<W;x++){const i=b+x,v=m[i];d[i*4+3]=v;
+  if(FG32){const u=FG32;
+   for(let y=0;y<H;y++){const b=y*W;for(let x=0;x<W;x++){const i=b+x,v=m[i];u[i]=(u[i]&0xffffff)|(v<<24);
+    if(v){if(x<bx0)bx0=x;if(x>bx1)bx1=x;if(by0===H)by0=y;by1=y}}}
+  }else for(let y=0;y<H;y++){const b=y*W;for(let x=0;x<W;x++){const i=b+x,v=m[i];d[i*4+3]=v;
    if(v){if(x<bx0)bx0=x;if(x>bx1)bx1=x;if(by0===H)by0=y;by1=y}}}
   fgx.putImageData(fgi,0,0);
-  SUB=bx1<0?null:[bx0,by0,bx1,by1];
+  SUB=bx1<0?null:[bx0,by0,bx1,by1];SUBX=false;
  }
  fgFull=false;DIRT=null;fgKey=key};
 /* xf() ko har frame aur har pointermove par bulaya jata hai - ek hi array reuse hota
@@ -751,7 +782,13 @@ function render(fast){if(!od)return;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=
  if(showOrig){cx.clearRect(0,0,CW,CH);drawSubj(origc,fast);return}
  layer(fast);drawSubj(fgc,fast)}
 const sched=fast=>{if(fast)fastReq=true;if(!raf)raf=requestAnimationFrame(()=>{raf=0;const f=fastReq;fastReq=false;render(f)})};
-const qr=()=>{sched(true);clearTimeout(rt);rt=setTimeout(()=>render(false),160)};
+/* qr = slider ka fast preview + 160 ms baad poora render. rAF ~16 ms par chalta hai,
+   par jab page throttle ho (background tab, slow WebView) to wo 160 ms se baad bhi aa
+   sakta hai - tab poora render pehle ho jata hai aur uske baad rAF wala *fast* frame
+   usi canvas par chadh jata hai (hard edge, outline ke sirf 8 shift). yaani screen par
+   wahi reh jata tha jo file me save nahi hota. ab poora render aate waqt pending fast
+   frame cancel ho jata hai. */
+const qr=()=>{sched(true);clearTimeout(rt);rt=setTimeout(()=>{if(raf){cancelAnimationFrame(raf);raf=0;fastReq=false}render(false)},160)};
 
 /* mask tools */
 /* undo snapshot: keepMask par jab tak kuch paint nahi hua (aam haal) uski copy
@@ -773,7 +810,7 @@ const snap=()=>{const a=bufOf();a.set(mask);
    (memset, koi allocation nahi). snapshots hamesha copy rakhte hain, is liye buffer
    share hone se koi purana snapshot kharab nahi hota. */
 let KEMPTY=null;
-const restore=s=>{mask=s[0];keepDirty=!!s[1];softKill();
+const restore=s=>{mask=s[0];keepDirty=!!s[1];
  const sb=s[2];
  if(sb){MB[0]=sb[0];MB[1]=sb[1];MB[2]=sb[2];MB[3]=sb[3]}else mbAll();
  if(s[1])keepMask=s[1];
@@ -1234,8 +1271,23 @@ cmp.addEventListener('pointerdown',cmpOn);
 ['pointerup','pointerleave','pointercancel'].forEach(ev=>cmp.addEventListener(ev,cmpOff));
 cmp.oncontextmenu=e=>e.preventDefault();
 window.addEventListener('pointerup',cmpOff);window.addEventListener('blur',cmpOff);
-$('#bUndo').onclick=need(()=>{if(undo.length){const old=mask;redo.push(snap());restore(undo.pop());mver++;render();recycleMask(old)}else toast('Undo ke liye kuch nahi')});
-$('#bRedo').onclick=need(()=>{if(redo.length){const old=mask;undo.push(snap());restore(redo.pop());mver++;render();recycleMask(old)}else toast('Redo ke liye kuch nahi')});
+/* undo/redo par mask do box ke bahar bilkul nahi badalta: purane mask ka MB aur
+   snapshot ka MB. un dono ke bahar mask 0 hai aur fgc ka alpha bhi wahan 0 hai, is
+   liye poore canvas (1.68 M pixel) ki jagah sirf usi union box ka soft blur aur
+   upload chahiye. pehle yahan softKill() poora softM phenk deta tha aur render poora
+   W*H blur + poora upload karta tha - har press par. union box bahut bada ho (aadhe
+   canvas se zyada) to purana poora raasta hi sasta hai, aur wahi SUB ko exact rakhta
+   hai (partial upload SUB ko sirf bada karta hai). */
+const hist=(from,to)=>{const old=mask,o0=MB[0],o1=MB[1],o2=MB[2],o3=MB[3];
+ to.push(snap());restore(from.pop());mver++;
+ let x0,y0,x1,y1;
+ if(o2>=o0&&MB[2]>=MB[0]){x0=Math.min(o0,MB[0]);y0=Math.min(o1,MB[1]);x1=Math.max(o2,MB[2]);y1=Math.max(o3,MB[3])}
+ else if(o2>=o0){x0=o0;y0=o1;x1=o2;y1=o3}
+ else if(MB[2]>=MB[0]){x0=MB[0];y0=MB[1];x1=MB[2];y1=MB[3]}
+ if(x0!==undefined&&(x1-x0+1)*(y1-y0+1)<W*H*0.5){SDIRT=[x0,y0,x1,y1];SUBX=true}else softKill();
+ render();recycleMask(old)};
+$('#bUndo').onclick=need(()=>{if(undo.length)hist(undo,redo);else toast('Undo ke liye kuch nahi')});
+$('#bRedo').onclick=need(()=>{if(redo.length)hist(redo,undo);else toast('Redo ke liye kuch nahi')});
 document.addEventListener('keydown',e=>{
  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'&&od){e.preventDefault();if(e.shiftKey)$('#bRedo').click();else $('#bUndo').click()}
  else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='y'&&od){e.preventDefault();$('#bRedo').click()}
@@ -1350,7 +1402,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;POOL.length=0;
  fgKey='';outKey='';bgKey='';SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.28',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.29',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
