@@ -658,8 +658,17 @@ const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
   else for(let y=y0;y<=y1;y++){const b=y*W;for(let x=x0;x<=x1;x++){const i=b+x;d[i*4+3]=m[i]}}
   fgx.putImageData(fgi,0,0,x0,y0,x1-x0+1,y1-y0+1);
   if(SUBX){SUBX=false;
+   /* exact bbox poore canvas ki jagah sirf MB par scan karne se bilkul wahi
+      nikalta hai: MB har us jagah se chauda hota hai jahan mask me 255 likha ja
+      sakta hai, is liye MB ke bahar m ka har byte pakka 0 hai aur wo bbox ko
+      chhota nahi kar sakta. MB poora canvas ho to purana poora scan hi chalta hai.
+      undo/redo ke baad (jahan SUBX lagta hai) subject aam taur par canvas ka
+      chhota hissa hota hai, is liye 1400x1200 par 1.68 M pixel ka scan MB ke
+      area jitna hi reh jata hai. */
    let sx0=W,sy0=H,sx1=-1,sy1=-1;
-   for(let y=0;y<H;y++){const b=y*W;for(let x=0;x<W;x++){if(m[b+x]){if(x<sx0)sx0=x;if(x>sx1)sx1=x;if(sy0===H)sy0=y;sy1=y}}}
+   let bx0=0,by0=0,bx1=W-1,by1=H-1;
+   if(MB[2]>=MB[0]&&MB[3]>=MB[1]){bx0=MB[0];by0=MB[1];bx1=MB[2];by1=MB[3]}
+   for(let y=by0;y<=by1;y++){const b=y*W;for(let x=bx0;x<=bx1;x++){if(m[b+x]){if(x<sx0)sx0=x;if(x>sx1)sx1=x;if(sy0===H)sy0=y;sy1=y}}}
    SUB=sx1<0?null:[sx0,sy0,sx1,sy1];
   }else if(SUB){if(x0<SUB[0])SUB[0]=x0;if(y0<SUB[1])SUB[1]=y0;if(x1>SUB[2])SUB[2]=x1;if(y1>SUB[3])SUB[3]=y1}
   else SUB=[x0,y0,x1,y1];
@@ -1426,8 +1435,24 @@ const stamp2=(t1,v1,t2,v2,cx0,cy0,r)=>{
    if(t2[i]!==v2){t2[i]=v2;ch++}}
   else for(let x=a;x<=e;x++){const i=b+x;if(t1[i]!==v1){t1[i]=v1;ch++}}}
  return ch};
+/* ek stroke ke andar har pointermove ka pehla stamp pichhle move ke aakhri stamp
+   par hi padta tha - stroke(a,b,c,d) me a,b hamesha pichhle call ka c,d hota hai,
+   yaani wahi centre, wahi radius (r sirf brush aur k par depend karta hai, aur k
+   ek stroke ke andar nahi badalta), wahi value. stamp2 us circle ka har pixel
+   pehle se set paata tha, is liye wo poora circle scan (brush 140 par ek stamp
+   ~15k pixel) bekaar jata tha - ek 100-move stroke me 100 poore circle. ab wahi
+   stamp skip hota hai (px/py/r exactly barabar hone par), aur kyunki skip wala
+   stamp ch=0 hi deta tha, ginti, DIRT/SDIRT/MB/KMB box aur nateeja bilkul wahi
+   rehta hai. pehla (i=0) aur aakhri (i=n) stamp seedhe ungli ki position par
+   padta hai, is liye tulna exact hoti hai (a+(c-a)*n/n aur c me 1 ULP ka farak
+   ho sakta hai, jo skip ko kabhi galat nahi karta - bas mauka chhoot jata hai).
+   stroke ke shuru me (pointerdown) stR reset hota hai, is liye do alag stroke
+   (mode/brush badalne ke baad) kabhi ek doosre ka stamp nahi chhodte. */
+let stX=NaN,stY=NaN,stR=-1;
 const stroke=(a,b,c,d,k)=>{const r=Math.max(2,brush*k/2),keep=mode==='keep',v=keep||mode!=='erase'?255:0,n=Math.max(1,Math.ceil(Math.hypot(c-a,d-b)/Math.max(1,r/3)));let ch=0;
- for(let i=0;i<=n;i++){const px=a+(c-a)*i/n,py=b+(d-b)*i/n;
+ for(let i=0;i<=n;i++){const px=i===0?a:i===n?c:a+(c-a)*i/n,py=i===0?b:i===n?d:b+(d-b)*i/n;
+  if(px===stX&&py===stY&&r===stR)continue;
+  stX=px;stY=py;stR=r;
   if(keep)ch+=stamp2(keepMask,255,mask,255,px,py,r);
   if(keep&&ch){keepDirty=true}
   else if(v===0)ch+=stamp2(mask,0,keepDirty?keepMask:null,0,px,py,r);
@@ -1460,7 +1485,7 @@ cv.addEventListener('pointerdown',e=>{if(!od||drawing)return;
  if(e.button>0)return;e.preventDefault();refreshRect();const p=pt(e);
  if(mode==='wand'){if(p[0]<0||p[1]<0||p[0]>=W||p[1]>=H)return;
   push();if(!wand(p[0],p[1])){recycle(undo.pop());abortPush();mver++;toast('Kuch nahi hata. Tolerance badhao ya Wand use karo')}render();return}
- push();strokeCh=0;drawing=true;pid=e.pointerId;lastX=p[0];lastY=p[1];try{cv.setPointerCapture(e.pointerId)}catch(_){}
+ push();strokeCh=0;stR=-1;drawing=true;pid=e.pointerId;lastX=p[0];lastY=p[1];try{cv.setPointerCapture(e.pointerId)}catch(_){}
  const rs=ringSize()+'px';ring.style.width=ring.style.height=rs;ring.style.display='block';moveRing(e);strokeCh+=stroke(p[0],p[1],p[0],p[1],p[2])});
 cv.addEventListener('pointermove',e=>{if(!drawing||e.pointerId!==pid)return;const p=pt(e);moveRing(e);strokeCh+=stroke(lastX,lastY,p[0],p[1],p[2]);lastX=p[0];lastY=p[1]});
 /* ek hi ungli ek waqt: doosri ungli ka pointer is stroke ko nahi todta */
@@ -1701,7 +1726,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;STK=null;POOL.length=0;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.38',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.39',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
