@@ -909,10 +909,20 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
  const dep=P.depth/100;
  if(P.sh||dep>0){if(shColK!==P.depth){shColK=P.depth;shColS='rgba(0,0,0,'+(0.45+dep*0.30).toFixed(2)+')'}
    cx.shadowColor=shColS;cx.shadowBlur=CW*(0.04+dep*0.07);cx.shadowOffsetY=CW*(0.015+dep*0.03);cx.shadowOffsetX=mx*dep*CW*0.012}
- /* composite poore canvas par: source-rect wala drawImage 1:1 par bhi bilinear
-    raaste se jata hai aur alpha composite me 1/255 ka farak chhod deta hai, is
-    liye wahi purana poora draw rakha gaya hai (nateeja byte-identical). */
- cx.drawImage(tmp,0,0);
+ /* composite sirf TDB box par: tmp ka content (silhouette ring + subject) sirf
+    usi box me hai, aur box ke bahar tmp ka har pixel transparent hai - source-over
+    me transparent pixel likhne se destination par kuch nahi badalta, is liye poore
+    canvas (1400x1050 par 1.47 M pixel) ki jagah box (aam taur par ~0.32 M) bhejna
+    nateeje me ek byte bhi nahi badalta. 1:1 source-rect drawImage purane Chromium
+    par bilinear raasta leta tha, par aaj ka Skia isse exact copy karta hai - 1400x1050
+    canvas par shadow ke saath aur bina shadow, dono par pixel-by-pixel 0 farak
+    naapa gaya (420..980 x 180..820 ka box, 1.47 M pixel compare). shadow bhi
+    dest rect ke bahar hi girta hai (blur support tak), is liye box wala draw
+    shadow ko kaat bhi nahi sakta. TFULL (box poora canvas) par purana poora draw
+    hi chalta hai. Asli fayda shadow par hai: Skia ka blur layer drawn bounds par
+    banta hai, is liye wahan area 1.47 M se 0.32 M pixel par aa jata hai. */
+ if(!TFULL&&TDB[2]>0&&TDB[3]>0)cx.drawImage(tmp,TDB[0],TDB[1],TDB[2],TDB[3],TDB[0],TDB[1],TDB[2],TDB[3]);
+ else cx.drawImage(tmp,0,0);
  cx.restore()};
 /* kya ye background canvas ke har pixel ko dhak deta hai? */
 const opaqueBg=()=>{if(bg.t==='color'||bg.t==='grad')return true;
@@ -1847,7 +1857,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;STK=null;POOL.length=0;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.41',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.42',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full

@@ -129,8 +129,20 @@ public class MainActivity extends Activity {
                 try {
                     startActivityForResult(Intent.createChooser(i, "Photo chuno"), REQ_FILE);
                 } catch (Exception e) {
+                    /* Pehle yahan pendingFiles ko null kar ke false lauta diya jata
+                       tha. false ka matlab WebView ke liye "maine handle nahi
+                       kiya", par humne callback pehle hi le liya tha - yaani
+                       <input type=file> ka ValueCallback hamesha ke liye
+                       unanswered reh jata tha: page ka onchange kabhi nahi
+                       chalta, e.target.value='' kabhi nahi chalta, aur us
+                       activity me photo chunne ka rasta bilkul band ho jata
+                       tha (koi message bhi nahi). Ab callback ka jawab null
+                       se de diya jata hai aur true lautaya jata hai - WebView
+                       ko intezaar nahi karna padta aur input apni normal
+                       "kuch nahi chuna" haalat me chala jata hai. */
+                    try { cb.onReceiveValue(null); } catch (Exception ignored) { }
                     pendingFiles = null;
-                    return false;
+                    return true;
                 }
                 return true;
             }
@@ -158,6 +170,15 @@ public class MainActivity extends Activity {
                         top = insets.getSystemWindowInsetTop();
                         bottom = insets.getSystemWindowInsetBottom();
                     }
+                    /* Android ye callback keyboard/rotation animation ke dauraan
+                       har frame par bulata hai, aur har call ek naya JS string
+                       banati thi jo WebView ke thread par evaluate hoti thi -
+                       wahi do value baar-baar. Value badli na ho to page ko
+                       dobara batane ki zaroorat nahi (CSS variable ki value
+                       wahi rehti hai). onPageFinished alag se pushInsets bulata
+                       hai, is liye page reload par variable phir bhi set hote
+                       hain - guard sirf isi listener me hai, pushInsets me nahi. */
+                    if (top == lastTop && bottom == lastBottom) return insets;
                     pushInsets(top, bottom);
                     return insets;
                 }
@@ -176,7 +197,17 @@ public class MainActivity extends Activity {
         web.post(new Runnable() {
             @Override
             public void run() {
-                web.evaluateJavascript(js, null);
+                /* Ye runnable baad me chalta hai, aur tab tak activity destroy ho
+                   sakti hai (insets ka callback aakhri frame par aata hai, aur
+                   onDestroy web ko null kar deta hai) - us haalat me seedha
+                   web.evaluateJavascript NPE deta tha, yaani app band hone ke
+                   waqt ek crash. notifyPage() aur trimPage() pehle se isi tarah
+                   guard karte hain; ab insets bhi. */
+                WebView w = web;
+                if (w == null) return;
+                try {
+                    w.evaluateJavascript(js, null);
+                } catch (Exception ignored) { }
             }
         });
     }
