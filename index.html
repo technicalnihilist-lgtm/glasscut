@@ -765,6 +765,16 @@ const blurBg=()=>{const blue=bg.t==='bluetint'?1:0,sg=bgSig;
 let tiltK=-1,tiltCs=1,tiltSh=0;
 const tiltUpd=()=>{if(tiltK!==P.tilt){tiltK=P.tilt;const th=P.tilt*Math.PI/180;
  tiltCs=Math.cos(th*0.85);tiltSh=Math.sin(th*0.5)*0.55}};
+/* outline ke ring shift (cos/sin) har tmp build par dobara nikalte the - n=16 par
+   32 trig call, aur outline ON hone par stroke ke dauraan tmp har frame banta hai.
+   ab wahi value sirf (n, r) badalne par banti hai aur ek Float64Array me rehti hai;
+   Math.cos/Math.sin deterministic hain, is liye table me bilkul wahi double aata
+   hai jo loop me nikalta tha (r ka multiply bhi wahi, wahi kram) - draw byte-identical. */
+let RINGN=0,RINGR=-1,RINGD=null;
+const ringOff=(n,r)=>{if(RINGN!==n||RINGR!==r){const c=new Float64Array(n*2);
+ for(let a=0;a<n;a++){c[a*2]=Math.cos(a*2*Math.PI/n)*r;c[a*2+1]=Math.sin(a*2*Math.PI/n)*r}
+ RINGN=n;RINGR=r;RINGD=c}
+ return RINGD};
 const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
  /* 3D tilt: ek halka shear, jo subject ko axis par ghuma hua dikhata hai */
  tiltUpd();const cs3=tiltCs,sh3=tiltSh;
@@ -884,8 +894,8 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
      rehta hai. src box ko usi tarah shift kiya jata hai, yaani dest pixel p ko
      bilkul wahi source pixel (p - shift) milta hai jo poore SUB wale draw me
      milta tha (scale 1 hai, is liye bilinear ke weight bhi wahi rehte hain). */
-  if(pb){const px1=pb[0]+pb[2]-1,py1=pb[1]+pb[3]-1;
-   for(let a=0;a<n;a++){const dx=Math.cos(a*2*Math.PI/n)*r,dy=Math.sin(a*2*Math.PI/n)*r;
+  if(pb){const px1=pb[0]+pb[2]-1,py1=pb[1]+pb[3]-1,off=ringOff(n,r);
+   for(let a=0;a<n;a++){const dx=off[a*2],dy=off[a*2+1];
     /* poora SUB box redraw box ke andar hai (aam haal) to bilkul purana hi draw */
     if(pb[0]+dx>=bx0&&px1+dx<=bx1&&pb[1]+dy>=by0&&py1+dy<=by1){
      tc.drawImage(outc,pb[0],pb[1],pb[2],pb[3],pb[0]+dx,pb[1]+dy,pb[2],pb[3]);continue}
@@ -893,7 +903,7 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
     const dx1=Math.min(bx1,px1+dx),dy1=Math.min(by1,py1+dy);
     if(dx1<dx0||dy1<dy0)continue;
     tc.drawImage(outc,dx0-dx,dy0-dy,dx1-dx0+1,dy1-dy0+1,dx0,dy0,dx1-dx0+1,dy1-dy0+1)}}
-  else for(let a=0;a<n;a++)tc.drawImage(outc,Math.cos(a*2*Math.PI/n)*r,Math.sin(a*2*Math.PI/n)*r)}
+  else{const off=ringOff(n,r);for(let a=0;a<n;a++)tc.drawImage(outc,off[a*2],off[a*2+1])}}
  if(pb){
   if(pb[0]>=bx0&&pb[0]+pb[2]-1<=bx1&&pb[1]>=by0&&pb[1]+pb[3]-1<=by1)
    tc.drawImage(fgc,pb[0],pb[1],pb[2],pb[3],pb[0],pb[1],pb[2],pb[3]);
@@ -1465,7 +1475,21 @@ if(i<N-nw){j=i+nw;if(vis2[j]!==gen&&MATCH[j]){vis2[j]=gen;bg[j]=1;st2[gp++]=(x<<
     AND do hisson me toota hua tha. AND ka kram matter nahi karta, is liye ab
     wahi 3x3 AND ek hi pass me seedha likha jata hai aur hb array ki zaroorat
     hi nahi rehti - nateeja byte-identical (wahi 9 cell, wahi kinare ke niyam). */
+ /* grid ke andar wale cell ke aath ke aath padosi grid ke andar hi hote hain, is
+    liye unke liye wahi 3x3 AND bina ek bhi bounds check (x===0 / y===nh-1 wale
+    aath compare) chalta hai; kinare wale cell (pehli/aakhri row, pehla/aakhra
+    column) purana expression hi chalate hain. wahi 9 cell, wahi "bahar = koi
+    rukavat nahi" ka niyam - nateeja byte-identical. 1400x1200 par 420k cell me
+    se ~418k andar hote hain, yaani per Auto press ~3.3 M compare kam. */
  for(let y=0;y<nh;y++){const row=y*nw;
+  if(y>0&&y<nh-1&&nw>2){
+   for(let x=1;x<nw-1;x++){const i=row+x;
+    inner[i]=(bg[i]&&bg[i-1]&&bg[i+1]&&bg[i-nw]&&bg[i-nw-1]&&bg[i-nw+1]
+     &&bg[i+nw]&&bg[i+nw-1]&&bg[i+nw+1])?1:0}
+   inner[row]=(bg[row]&&bg[row+1]&&bg[row-nw]&&bg[row-nw+1]&&bg[row+nw]&&bg[row+nw+1])?1:0;
+   const lc=row+nw-1;
+   inner[lc]=(bg[lc]&&bg[lc-1]&&bg[lc-nw]&&bg[lc-nw-1]&&bg[lc+nw]&&bg[lc+nw-1])?1:0;
+  }else
   for(let x=0;x<nw;x++){const i=row+x;
    inner[i]=(bg[i]&&(x===0||bg[i-1])&&(x===nw-1||bg[i+1])
     &&(y===0||(bg[i-nw]&&(x===0||bg[i-nw-1])&&(x===nw-1||bg[i-nw+1])))
@@ -1746,7 +1770,16 @@ document.addEventListener('keydown',e=>{
 
 /* save */
 const fallback=b=>{if(ovUrl)URL.revokeObjectURL(ovUrl);ovUrl=URL.createObjectURL(b);$('#ovImg').src=ovUrl;$('#ov').classList.add('show')};
-$('#ovX').onclick=()=>{$('#ov').classList.remove('show')};
+/* overlay band karte waqt uska blob URL bhi chhod do. pehle sirf class hatti thi,
+   is liye save ka fallback (share aur download dono fail) jo multi-MB blob banata
+   tha wo session ke aakhir tak pinned rehta tha - agla fallback ya nayi photo hi
+   use chhodti thi. #ovImg ka src wahin rehta hai (revoke pehle se load hui image
+   ko nahi hataata), aur overlay sirf fallback() se khulta hai jo naya URL banata
+   hai - is liye dikhne me ek pixel bhi nahi badalta. back button bhi yahi karta
+   hai (pehle wo bhi sirf class hataata tha). */
+const closeOv=()=>{$('#ov').classList.remove('show');
+ if(ovUrl){URL.revokeObjectURL(ovUrl);ovUrl=null}};
+$('#ovX').onclick=closeOv;
 /* toBlob kabhi-kabhi bade canvas par chupchaap null de deta hai (purane WebView /
    kam RAM). pehle save wahin "Save nahi hua" par khatam ho jata tha. ab usi canvas
    se toDataURL try hota hai, aur uska blob bilkul wahi type rakhta hai jo browser ne
@@ -1873,7 +1906,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;STK=null;POOL.length=0;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.43',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.44',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
@@ -1884,7 +1917,7 @@ window.GlassCut={version:'1.1.43',saved:()=>toast('Save ho gaya'),failed:()=>toa
     leta hai. */
  trim:()=>{dropScratch()},
  pause:()=>{shellPaused=true;idleCheck()},resume:()=>{shellPaused=false;idleCheck()},
- back:()=>{const ov=$('#ov');if(ov&&ov.classList.contains('show')){$('#ov').classList.remove('show');return true}
+ back:()=>{const ov=$('#ov');if(ov&&ov.classList.contains('show')){closeOv();return true}
   if(openSh){closeAll();return true}return false}};
 })();
 </script>
