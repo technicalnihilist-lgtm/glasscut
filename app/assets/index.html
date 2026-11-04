@@ -217,8 +217,8 @@ const fgc=mk(),fgx=fgc.getContext('2d'),origc=mk(),sm=mk(),tmp=mk(),outc=mk(),bg
    baar le lo, canvas ka size badalne se context mar nahi jata */
 const tcx=tmp.getContext('2d'),oxc=outc.getContext('2d'),bxc=bgb.getContext('2d'),smx=sm.getContext('2d');
 let W=0,H=0,CW=0,CH=0,od=null,fgi=null,mask=null,mask0=null,keepMask=null,undo=[],redo=[],mode='erase',bg={t:'none'},bgImg=null;
-let tol=40,feather=2,brush=36,keepObj=1,ratio='0',fmt='png',showOrig=false,drawing=false,last=null,raf=0,fastReq=false,rt=0,tt=0;
-let mver=0,fgKey='',outKey='',softM=null,softKey='',ovUrl=null;
+let tol=40,feather=2,brush=36,keepObj=1,ratio='0',fmt='png',showOrig=false,drawing=false,lastX=0,lastY=0,raf=0,fastReq=false,rt=0,tt=0;
+let mver=0,fgVer=-1,fgSoft=-1,outV=-1,outS=-1,softM=null,softKey='',ovUrl=null;
 /* bgSig/bgVer: background-blur cache ka signature. pehle har render par ek naya
    string banta tha (CW+'|'+CH+'|'+P.bl+'|'+blue) sirf compare karne ke liye - yaani
    har frame ek string allocation. ab wahi signature paanch number me hai (koi
@@ -247,7 +247,7 @@ const mkFG32=()=>{FG32=(LE32&&fgi&&fgi.data&&(fgi.data.byteOffset&3)===0&&(fgi.d
    aur "Apni photo" wale background image ka composite opaque hai ya nahi */
 let photoOpaque=false,imgOpaque=false,imgOpaqueFor=null,imgOpaqueW=-1,imgOpaqueH=-1;
 /* tmp composite ka cache (drawSubj) - neeche tafseel */
-let THas=false,TFULL=false,Tfg=null,Ts0=0,Ts1=0,Ts2=0,Tr=-1,Tcs=0,Tsh=0,Tn=0;
+let THas=false,TFULL=false,TfgV=-1,TfgS=-1,Ts0=0,Ts1=0,Ts2=0,Tr=-1,Tcs=0,Tsh=0,Tn=0;
 const TPB=[0,0,0,0],TDB=[0,0,0,0];
 const P={s:100,x:0,y:0,f:1,sh:0,line:0,bl:8,op:100,depth:0,tilt:0,motion:0};
 let mx=0,my=0,mraf=0,mt=0,gx=0,gy=0,gyro=false;
@@ -429,7 +429,7 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
      ke size ke the (jcv CW*CH*4 = 1400x1200 par 6.7 MB) - nayi photo par chhod do */
   ISL=null;KEMPTY=null;jcv=null;SUB=null;RUN=null;fgFull=true;
   if(ovUrl){URL.revokeObjectURL(ovUrl);ovUrl=null}
-  undo=[];redo=[];POOL.length=0;fgKey=outKey=softKey='';mver++;
+  undo=[];redo=[];POOL.length=0;fgVer=-1;fgSoft=-1;outV=-1;outS=-1;softKey='';mver++;
   $('#empty').style.display='none';cv.style.display='block';setSize();render();
   setTimeout(()=>{try{auto(true)}catch(_){toast('Auto dabao ya Wand / Erase use karo')}},30)},MAINLOAD)};
 $('#bPick').onclick=()=>$('#fMain').click();
@@ -580,7 +580,13 @@ const subPad=b=>{const x0=b[0]-4<0?0:b[0]-4,y0=b[1]-4<0?0:b[1]-4,x1=b[2]+4>W-1?W
 let MB=[0,0,-1,-1];
 const mbAll=()=>{MB[0]=0;MB[1]=0;MB[2]=W-1;MB[3]=H-1};
 const mbAdd=(x0,y0,x1,y1)=>{if(x0<MB[0])MB[0]=x0;if(y0<MB[1])MB[1]=y0;if(x1>MB[2])MB[2]=x1;if(y1>MB[3])MB[3]=y1};
-const layer=fast=>{const soft=!fast&&feather>0,key=mver+(soft?'s'+feather:'h');if(key===fgKey)return;
+/* fgc ka cache key pehle ek string thi (mver+'s'+feather ya mver+'h') aur wo HAR
+   render frame par banti thi - soft par do concat, hard par ek. mver aur feather
+   dono number hain, is liye ab wahi do value seedhe number ki tarah rakhi aur
+   compare hoti hain (soft na ho to fgSoft = -1), yaani render loop se ek aur
+   per-frame allocation gaya. nateeja wahi: key bhi inhi do value se banti thi. */
+const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
+ if(mver===fgVer&&sv===fgSoft)return;
  if(fgc.width!==W||fgc.height!==H){fgc.width=W;fgc.height=H;fgFull=true}
  let m=mask,pr=null;
  if(soft){
@@ -637,7 +643,7 @@ const layer=fast=>{const soft=!fast&&feather>0,key=mver+(soft?'s'+feather:'h');i
      fgKey set ho kar wapas laut jata tha aur fgc 1x1/khaali hi reh jata tha,
      yaani ek fast frame (slider drag / stroke ka pehla frame) subject ko gayab
      kar deta tha jab tak koi poora render na ho. ab fgFull par poora upload hota hai. */
-  if(!DIRT){if(!fgFull){fgKey=key;return}}
+  if(!DIRT){if(!fgFull){fgVer=mver;fgSoft=sv;return}}
   else{x0=DIRT[0];y0=DIRT[1];x1=DIRT[2];y1=DIRT[3];part=true}
  }else if(pr){
   x0=Math.max(0,pr[0]-feather);y0=Math.max(0,pr[1]-feather);
@@ -690,7 +696,7 @@ const layer=fast=>{const soft=!fast&&feather>0,key=mver+(soft?'s'+feather:'h');i
   }else fgx.putImageData(fgi,0,0);
   SUB=bx1<0?null:[bx0,by0,bx1,by1];SUBX=false;
  }
- fgFull=false;DIRT=null;fgKey=key};
+ fgFull=false;DIRT=null;fgVer=mver;fgSoft=sv};
 /* xf() ko har frame aur har pointermove par bulaya jata hai - ek hi array reuse hota
    hai taaki per-frame garbage na bane (values turant padh li jati hain) */
 const XF=[0,0,0];
@@ -747,7 +753,7 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
  const pb=SUB?subPad(SUB):null;
  const r=P.line>0?P.line/t[0]:0,n=fast?8:16;
  /* tmp ka content tabhi dobara banta hai jab usme kuch sach me badla ho */
- const need=!THas||Tfg!==fgKey||Ts0!==t[0]||Ts1!==t[1]||Ts2!==t[2]||Tr!==r
+ const need=!THas||TfgV!==fgVer||TfgS!==fgSoft||Ts0!==t[0]||Ts1!==t[1]||Ts2!==t[2]||Tr!==r
   ||Tcs!==cs3||Tsh!==sh3||Tn!==n
   ||(pb?(TPB[0]!==pb[0]||TPB[1]!==pb[1]||TPB[2]!==pb[2]||TPB[3]!==pb[3]):false);
  if(need){
@@ -785,12 +791,12 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
      wala draw aur source-in fill dono ab sirf SUB box par chalte hain (copy composite
      sirf source ke bbox par lagta hai, bahar destination waisa hi rehta hai), aur box
      ke bahar ka outc kabhi read nahi hota - nateeja bilkul wahi. */
-  if(P.line>0){if(outKey!==fgKey){const ox=oxc;if(outc.width!==W||outc.height!==H){outc.width=W;outc.height=H}
+  if(P.line>0){if(outV!==fgVer||outS!==fgSoft){const ox=oxc;if(outc.width!==W||outc.height!==H){outc.width=W;outc.height=H}
    ox.setTransform(1,0,0,1,0,0);ox.globalCompositeOperation='copy';
    if(pb)ox.drawImage(fgc,pb[0],pb[1],pb[2],pb[3],pb[0],pb[1],pb[2],pb[3]);else ox.drawImage(fgc,0,0);
    ox.globalCompositeOperation='source-in';ox.fillStyle='#fff';
    if(pb)ox.fillRect(pb[0],pb[1],pb[2],pb[3]);else ox.fillRect(0,0,W,H);
-   ox.globalCompositeOperation='source-over';outKey=fgKey}
+   ox.globalCompositeOperation='source-over';outV=fgVer;outS=fgSoft}
    if(pb)for(let a=0;a<n;a++){const dx=Math.cos(a*2*Math.PI/n)*r,dy=Math.sin(a*2*Math.PI/n)*r;
     tc.drawImage(outc,pb[0],pb[1],pb[2],pb[3],pb[0]+dx,pb[1]+dy,pb[2],pb[3])}
    else for(let a=0;a<n;a++)tc.drawImage(outc,Math.cos(a*2*Math.PI/n)*r,Math.sin(a*2*Math.PI/n)*r)}
@@ -798,7 +804,7 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
   else tc.drawImage(fgc,0,0);
   tc.restore();
   TDB[0]=qx0;TDB[1]=qy0;TDB[2]=qx1-qx0;TDB[3]=qy1-qy0;TFULL=full;THas=true;
-  Tfg=fgKey;Ts0=t[0];Ts1=t[1];Ts2=t[2];Tr=r;Tcs=cs3;Tsh=sh3;Tn=n;
+  TfgV=fgVer;TfgS=fgSoft;Ts0=t[0];Ts1=t[1];Ts2=t[2];Tr=r;Tcs=cs3;Tsh=sh3;Tn=n;
   if(pb){TPB[0]=pb[0];TPB[1]=pb[1];TPB[2]=pb[2];TPB[3]=pb[3]}
  }
  cx.save();cx.globalAlpha=P.op/100;
@@ -849,7 +855,11 @@ function render(fast){if(!od)return;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=
    vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,'+(P.depth/100*0.42).toFixed(3)+')');depGrad=vg;dk[0]=CW;dk[1]=CH;dk[2]=P.depth}
   cx.fillStyle=depGrad;cx.fillRect(0,0,CW,CH)}
  layer(fast);drawSubj(fgc,fast)}
-const sched=fast=>{if(fast)fastReq=true;if(!raf)raf=requestAnimationFrame(()=>{raf=0;const f=fastReq;fastReq=false;render(f)})};
+/* rAF ka callback pehle har schedule par ek naya closure tha (ek frame = ek
+   function object), halanki wo har baar bilkul wahi kaam karta hai. ab ek hi
+   named function hai - schedule karne par koi allocation nahi. */
+const onRaf=()=>{raf=0;const f=fastReq;fastReq=false;render(f)};
+const sched=fast=>{if(fast)fastReq=true;if(!raf)raf=requestAnimationFrame(onRaf)};
 /* qr = slider ka fast preview + 160 ms baad poora render. rAF ~16 ms par chalta hai,
    par jab page throttle ho (background tab, slow WebView) to wo 160 ms se baad bhi aa
    sakta hai - tab poora render pehle ho jata hai aur uske baad rAF wala *fast* frame
@@ -1401,13 +1411,19 @@ const stroke=(a,b,c,d,k)=>{const r=Math.max(2,brush*k/2),keep=mode==='keep',v=ke
 let cRect=null;
 const refreshRect=()=>{const r=cv.getBoundingClientRect();cRect={l:r.left,t:r.top,w:r.width,h:r.height};return cRect};
 const rect=()=>cRect||refreshRect();
+/* pt() har pointermove par chalta hai aur ek naya [x,y,scale] array lauta deta
+   tha, jise pointermove phir last=[p[0],p[1]] me dobara likhta tha - yaani ek
+   stroke me per move do array (400 move = 800 array). ab wahi ek scratch array
+   reuse hota hai (XF ki tarah - value turant padh li jati hai) aur last do
+   scalar hain. */
+const PT=[0,0,0];
 const pt=e=>{const r=rect(),t=xf();
  let ux=((e.clientX-r.l)*CW/r.w-t[1])/t[0]*P.f,uy=((e.clientY-r.t)*CH/r.h-t[2])/t[0];
  /* drawSubj 3D tilt par ek shear (cs3,sh3) lagata hai. pehle pt() us shear ko ulta
     nahi karta tha, is liye tilt chalte waqt erase/restore ungli se 40+ px door
     lagta tha. tilt 0 par sh3=0 hai, to default behaviour bilkul wahi rehta hai. */
  if(P.tilt){tiltUpd();const sh3=tiltSh;if(sh3)ux=(ux-sh3*uy)/tiltCs}
- return[ux+W/2,uy+H/2,CW/r.w/t[0]]};
+ PT[0]=ux+W/2;PT[1]=uy+H/2;PT[2]=CW/r.w/t[0];return PT};
 const ring=$('#ring'),moveRing=e=>{ring.style.left=e.clientX+'px';ring.style.top=e.clientY+'px'};
 const ringSize=()=>{const r=rect(),t=xf();return Math.max(8,Math.round(brush*t[0]*(r.w/CW)))};
 let pid=null,strokeCh=0;
@@ -1417,9 +1433,9 @@ cv.addEventListener('pointerdown',e=>{if(!od||drawing)return;
  if(e.button>0)return;e.preventDefault();refreshRect();const p=pt(e);
  if(mode==='wand'){if(p[0]<0||p[1]<0||p[0]>=W||p[1]>=H)return;
   push();if(!wand(p[0],p[1])){recycle(undo.pop());abortPush();mver++;toast('Kuch nahi hata. Tolerance badhao ya Wand use karo')}render();return}
- push();strokeCh=0;drawing=true;pid=e.pointerId;last=[p[0],p[1]];try{cv.setPointerCapture(e.pointerId)}catch(_){}
+ push();strokeCh=0;drawing=true;pid=e.pointerId;lastX=p[0];lastY=p[1];try{cv.setPointerCapture(e.pointerId)}catch(_){}
  const rs=ringSize()+'px';ring.style.width=ring.style.height=rs;ring.style.display='block';moveRing(e);strokeCh+=stroke(p[0],p[1],p[0],p[1],p[2])});
-cv.addEventListener('pointermove',e=>{if(!drawing||e.pointerId!==pid)return;const p=pt(e);moveRing(e);strokeCh+=stroke(last[0],last[1],p[0],p[1],p[2]);last=[p[0],p[1]]});
+cv.addEventListener('pointermove',e=>{if(!drawing||e.pointerId!==pid)return;const p=pt(e);moveRing(e);strokeCh+=stroke(lastX,lastY,p[0],p[1],p[2]);lastX=p[0];lastY=p[1]});
 /* ek hi ungli ek waqt: doosri ungli ka pointer is stroke ko nahi todta */
 const end=e=>{if(!drawing)return;if(e&&e.pointerId!=null&&pid!=null&&e.pointerId!==pid)return;
  drawing=false;pid=null;ring.style.display='none';
@@ -1611,9 +1627,25 @@ const save=async()=>{
   fr.onerror=()=>bfin(false);
   try{fr.readAsDataURL(b)}catch(_){bfin(false)}
   return}
+ /* navigator.share ka promise share sheet band hone tak pending rehta hai - aur
+    kuch WebView/shell me wo kabhi settle hi nahi hota. pehle us await par latak
+    jane se `finally` kabhi nahi chalta tha, saveBusy hamesha true reh jata tha aur
+    us session me Save dobara kabhi kaam nahi karta (bilkul wahi bug jo toBlob aur
+    FileReader ke liye pehle theek hua). ab 20 s ka guard hai: guard chhoote to
+    saveBusy free ho jata hai aur agla Save chalta hai; share baad me resolve ho
+    to wahi "Save ho gaya" aata hai, aur reject ho to pehle jaisa download rasta
+    chalta hai (file phir bhi disk par pahunchti hai). */
+ let shareDone=false,shw=0;
+ const relShare=()=>{if(shareDone)return;shareDone=true;if(shw)clearTimeout(shw);saveBusy=false};
  try{const f=new File([b],name,{type:mime});
   if(navigator.canShare&&navigator.canShare({files:[f]})&&/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)){
-   await navigator.share({files:[f],title:'GlassCut'});toast('Save ho gaya');return}}catch(err){if(err&&err.name==='AbortError')return}
+   shw=setTimeout(relShare,20000);
+   try{await navigator.share({files:[f],title:'GlassCut'});
+    if(!shareDone){shareDone=true;clearTimeout(shw);saveBusy=false;toast('Save ho gaya')}
+    return}
+   catch(err){relShare();
+    if(err&&err.name==='AbortError')return}}
+ }catch(err){if(err&&err.name==='AbortError')return}
  try{const u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download=name;a.rel='noopener';
   document.body.appendChild(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(u)},4000);
   toast('Save ho gaya');return}catch(_){}
@@ -1640,9 +1672,9 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
    1x1 ho jate hain - agla render sab kuch wapas bana leta hai, is liye screen
    par kuch nahi badalta. photo khud (origc/fgi/mask) chhui bhi nahi jati. */
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;POOL.length=0;
- fgKey='';outKey='';bgVer++;SUB=null;fgFull=true;
+ fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.35',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.36',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full

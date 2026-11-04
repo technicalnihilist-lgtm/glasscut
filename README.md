@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 230 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.35 (versionCode 35) |
+| **Version** | 1.1.36 (versionCode 36) |
 
 ---
 
@@ -185,7 +185,11 @@ Honest limitation: a soft out-of-focus highlight and a soft-edged object look id
 - **Auto's downsample ran a generic loop for a 2×2 block** — the cutout shrinks the photo by half, so nearly every output pixel is the average of exactly four source pixels, yet each one re-ran the generic inner-loop bounds and did three divisions. Those blocks now take four straight loads and a 1021-byte table built through `Uint8ClampedArray` (so it rounds exactly like `r/4`): at 1400×1200 the downsample went 17.9 ms → 6.9 ms (−61%) and the whole Auto press 116.5 ms → 99.4 ms (−15%).
 - **The Keep tool's protection scan covered the whole canvas** — `enforce()` walked all W×H pixels on every stroke release, Grow, Smooth, Invert, Reset and Auto, even though only the painted keep area can be protected. It now keeps a conservative box of that area (like the mask box) and scans only that: 1,680,000 → 5,325 pixels for a single Keep stroke (−99.7%).
 
-Verified in headless Chrome: load → auto → wand → erase → restore → undo → redo → grow/shrink/smooth/invert/reset → keep + erase + undo/redo → feather/outline/opacity/depth/tilt → four backgrounds → blue blur → save (PNG/JPG/WEBP checked on disk) → language switch → close/open → trim, at 1400×1200, 320×274, 1200×1000 and a 4000×3428 photo, with zero console errors and 48 canvas hashes byte-identical to the previous build.
+- **The render loop allocated a string every frame** — `layer()` built its cache key as `mver + 's' + feather` (two concatenations when Edge Softness was on, one otherwise) just to compare it with the previous key. The two values are numbers, so they are now compared as numbers (`fgVer`/`fgSoft`, −1 meaning "hard edge"): the key expression went 98.6 ns → 1.1 ns per frame and allocates nothing. The `requestAnimationFrame` callback had the same problem — a fresh closure per scheduled frame — and is now one named function: 81.0 ns → 2.5 ns per frame. Measured with CDP's heap profiler at sampling interval 1 during a 300-move erase stroke at 1400×1200, the bytes allocated inside `layer()` went 65,536 → 72 and the whole stroke's JS allocation 131,220 → 65,824 bytes (−49.8%).
+- **Every pointermove allocated two arrays** — `pt()` returned a fresh `[x, y, scale]` and the move handler immediately copied it into another `last = [p[0], p[1]]`. Both are now one reused scratch array and two scalars: 85.8 ns → 4.3 ns per move, 800 fewer arrays in a 400-move stroke.
+- **A share sheet that never answered bricked Save** — if `navigator.share` never settles (some WebViews and shells), the `await` hangs, `finally` never runs and `saveBusy` stays `true` for the rest of the session, so no later save does anything. This is the same bug that was fixed for `toBlob` and `FileReader` earlier. There is now a 20 s guard that releases the flag; if the share later resolves the same "Saved" toast appears, if it rejects the download fallback runs. With a stubbed share that never settles, the previous build wrote 0 files for three saves in a row and the new one writes the file on both later saves (18,013 B PNG, magic `89504e47`).
+
+Verified in headless Chrome: load → auto → wand → erase → keep → restore → undo → redo → grow/shrink/smooth/invert → feather/outline/opacity/depth/tilt/scale → four backgrounds + blur + blue blur → crop ratios → hold-original → reset → undo → language switch → close/open → save (PNG/JPG/WEBP checked on disk, byte-identical), at 1400×1200, 1200×1000, 320×274, 900×700 with transparency, 7×5 and a 4000×3428 photo — 63 canvas hashes byte-identical to the previous build, identical saved-file md5s, zero console errors and zero page errors.
 
 ---
 
@@ -193,10 +197,10 @@ Verified in headless Chrome: load → auto → wand → erase → restore → un
 
 Download [`GlassCut.apk`](GlassCut.apk) on the phone, tap it, allow "install unknown apps" for your browser or file manager once. Android 7.0 (API 24) or newer.
 
-**This build has a new signing key again** — `/scratch/saved` was empty again when the 1.1.33 build sandbox came up (it is mounted read-only in this workspace, so a key handed back last run cannot be dropped there either), so `build.sh` generated a fresh keystore. Android will refuse to install it over any earlier build — uninstall the old app once, then install. The keystore is deliberately *not* committed (a signing key is a credential); this run's key is handed back as `glasscut-signing-key.jks` so it can be dropped at `/scratch/saved/glasscut-signing-key.jks`, and every later build in this workspace will reuse it. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate for this build:
+**This build has a new signing key again** — `/scratch/saved` was empty again when the 1.1.36 build sandbox came up (it is mounted read-only in this workspace, so a key handed back last run cannot be dropped there either), so `build.sh` generated a fresh keystore. Android will refuse to install it over any earlier build — uninstall the old app once, then install. The keystore is deliberately *not* committed (a signing key is a credential); this run's key is handed back as `glasscut-signing-key.jks` so it can be dropped at `/scratch/saved/glasscut-signing-key.jks`, and every later build in this workspace will reuse it. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate for this build:
 
 ```
-f7d4da741eac51aa71cb54255899c2f27bcf3b29a887f16e88a27e8417f2be64
+6b47bb609cb0846e250efa9afd73813f277cea1dbb9d3b54d1cc5a8707aacb96
 ```
 
 ## Build it yourself
