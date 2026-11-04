@@ -349,7 +349,11 @@ $('#cBlue').onclick=need(()=>{noSw();const r=$('#sBl');r.value=48;r.dispatchEven
  bg={t:'bluetint'};bgVer++;
  /* portrait mode: sirf insaan, background ka koi tukda nahi */
  keepObj=0;const kk=$('#tKeep');if(kk)kk.setAttribute('aria-checked','false');
- push();const nm=bufOf();nm.set(mask0);mask=nm;mbAll();mver++;softKill();try{cutout()}catch(_){}
+ push();
+ /* purana mask array pool me wapas (bufOf use turant utha leta hai, is liye ye
+    Reset/Blue-blur ab naya 1.3 MB buffer banane ke bajaye wahi reuse karte hain) */
+ const om=mask;if(om&&om!==mask0&&om.length===W*H&&POOL.length<2)POOL.push(om);
+ const nm=bufOf();nm.set(mask0);mask=nm;mbAll();mver++;softKill();try{cutout()}catch(_){}
  render();toast('Blue blur lag gaya - sirf insaan dikhega')});
 $('#bBgImg').onclick=()=>$('#fBg').click();
 /* "Apni photo" wala background cover() se poore canvas par ek hi drawImage se aata
@@ -983,9 +987,19 @@ const stk=n=>{if(!STK||STK.length<n)STK=new Int32Array(n);return STK};
    1400x1200 par 4 x 1.68 M = 6.7 M baar. ab teen scalar (cr,cg,cb) seedhe band
    hue hain aur loop poora hata diya gaya: wahi teen sub, wahi teen multiply, wahi
    compare, is liye flood ka nateeja byte-identical rehta hai. */
-const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;softKill();
+/* Wand ka flood pehle har tap par softKill() karta tha - yaani poora feather blur
+   phenk kar render me W*H par dobara banwata tha, chahe tap ne 20x20 ka ek patch
+   hataya ho. flood ko pata hai kaunse pixel sach me 255 se 0 hue, is liye ab wahi
+   box note hota hai aur layer() usi box (feather se bada karke) ka blur dobara
+   nikaalta hai - bilkul wahi raasta jo stroke ka SDIRT aur undo/redo pehle se use
+   karte hain. box aadhe canvas se bada ho to purana poora blur hi sasta hai.
+   flood ke shuru ka softKill() bhi hata diya: wo SDIRT ko null kar deta tha, is
+   liye partial raasta kabhi chal hi nahi paata. */
+const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;
  if(!FL||FL.n!==M){FL={n:M,vis:new Int32Array(M),st:stk(M),g:0}}
  const vis=FL.vis,st=FL.st,g=++FL.g,t2=t*t;let sp=0,cnt=0;
+ /* sach me badle hue pixel ka box (mask 255 -> 0) */
+ let cx0=W,cy0=H,cx1=-1,cy1=-1;
  /* keepMask sirf tab dekha jata hai jab sach me kuch protect kiya gaya ho
     (keepDirty - keepMask me 255 hai to keepDirty hamesha true hai) */
  const KM=keepDirty?keepMask:null,CR=cr,CG=cg,CB=cb,T2=t2;
@@ -1027,7 +1041,14 @@ const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;softKill();
    a=(v&255)-CR;b=((v>>>8)&255)-CG;d=((v>>>16)&255)-CB;
    if(a*a+b*b+d*d>T2)break;
    xr++}
-  for(let k=xl;k<=xr;k++){j=base+k;vis[j]=g;if(mask[j]){mask[j]=0;cnt++}}
+  /* box sirf badle hue pixel se banta hai. har pixel par chaar compare karne se
+     bada flood (poora background, ~1 M pixel) dheema ho jata tha, is liye ek span
+     ke andar sirf pehla aur aakhri badla hua pixel pakda jata hai - ek compare
+     per badle hue pixel, aur span ke bahar ka hissa box me nahi jata. */
+  const ry=base/W|0;
+  let ka=-1,kb=-1;
+  for(let k=xl;k<=xr;k++){j=base+k;vis[j]=g;if(mask[j]){mask[j]=0;cnt++;if(ka<0)ka=k;kb=k}}
+  if(ka>=0){if(ka<cx0)cx0=ka;if(kb>cx1)cx1=kb;if(ry<cy0)cy0=ry;if(ry>cy1)cy1=ry}
   /* upar aur neeche wali row me span ke neeche har lagataar background run ka
      pehla pixel stack par. vis push ke waqt hi lagta hai, is liye ek pixel
      kabhi do baar push nahi hota (seed bhi) - stack M se bada nahi hota. */
@@ -1051,7 +1072,15 @@ const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;softKill();
      k2++}
     if(vis[j]!==g){vis[j]=g;st[sp++]=(k<<21)|j}
     k=k2+1}}}
- mver++;softKill();return cnt};
+ /* kuch nahi hata: mask waisa hi hai, to softM abhi bhi sahi hai - use phenkna
+    bekaar (aur mver badhana bhi, kyunki upload ke liye kuch naya nahi hai) */
+ if(!cnt)return 0;
+ mver++;
+ if((cx1-cx0+1)*(cy1-cy0+1)<W*H*0.5){
+  if(SDIRT){if(cx0<SDIRT[0])SDIRT[0]=cx0;if(cy0<SDIRT[1])SDIRT[1]=cy0;if(cx1>SDIRT[2])SDIRT[2]=cx1;if(cy1>SDIRT[3])SDIRT[3]=cy1}
+  else SDIRT=[cx0,cy0,cx1,cy1]
+ }else softKill();
+ return cnt};
 /* coarse-to-fine cutout: flood a downscaled copy, then snap the edge back at full res */
 /* boxDown ka output, xmap aur seeds har Auto press par naye bante the (1400x1200 par
    ~1.68 MB + 5.6 KB garbage). ab wahi buffers dobara use hote hain. */
@@ -1567,7 +1596,14 @@ $('#bSmo').onclick=need(()=>{push();
   for(let y=bya;y<=byb;y++){const row=y*W;for(let x=bxa;x<=bxb;x++){const i=row+x,v=(b[i]-128)*3+128;mask[i]=v<0?0:v>255?255:v}}
   mbAdd(bxa,bya,bxb,byb)}
  enforce();mver++;softKill();render()});
-$('#bRst').onclick=need(()=>{push();const nm=bufOf();nm.set(mask0);mask=nm;mbAll();enforce();mver++;softKill();render();toast('Reset ho gaya')});
+/* Reset pehle do naye 1.3 MB buffer banata tha (snapshot ke liye ek, aur mask ke
+   liye ek) aur purana mask seedha garbage chala jata tha. ab purana array pool me
+   jata hai aur bufOf() use hi lauta deta hai - ek allocation kam, aur uska 1.3 MB
+   zero-fill bhi. nateeja wahi: nm.set(mask0) purane array par bhi bilkul wahi
+   value likhta hai. */
+$('#bRst').onclick=need(()=>{push();
+ const om=mask;if(om&&om!==mask0&&om.length===W*H&&POOL.length<2)POOL.push(om);
+ const nm=bufOf();nm.set(mask0);mask=nm;mbAll();enforce();mver++;softKill();render();toast('Reset ho gaya')});
 const cmp=$('#bCmp');
 const cmpOn=e=>{if(!od)return;if(e&&e.cancelable)e.preventDefault();showOrig=true;render()};
 const cmpOff=()=>{if(showOrig){showOrig=false;render()}};
@@ -1726,7 +1762,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;STK=null;POOL.length=0;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.39',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.40',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
