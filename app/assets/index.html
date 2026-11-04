@@ -329,7 +329,7 @@ window.addEventListener('pageshow',idleCheck);
 try{window.addEventListener('deviceorientation',e=>{
  if(e.gamma==null&&e.beta==null)return;gyro=true;gx=(e.gamma||0)/28;gy=((e.beta||0)-45)/28;},{passive:true})}catch(_){}
 seg('tools',v=>{mode=v;toast(v==='wand'?'Photo par tap karo, same color hat jayega':v==='erase'?'Ungli se mitao':v==='keep'?'Object par ungli phero, wo kabhi nahi hatega':'Ungli se wapas lao')});
-seg('ratios',v=>{ratio=v;if(od){setSize();render()}});
+seg('ratios',v=>{ratio=v;if(od){setSize();fullRender()}});
 seg('fmts',v=>fmt=v);
 const applyLang=(l,init)=>{lang=l;const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,{acceptNode:n=>(n.parentNode&&n.parentNode.nodeName==='SCRIPT')?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT});let n;
  while(n=w.nextNode()){if(n.__o===undefined){const c=n.nodeValue.trim();if(!EN[c])continue;n.__o=n.nodeValue}
@@ -347,9 +347,14 @@ const noSw=()=>$$('.sw').forEach(s=>s.classList.remove('on'));
 (()=>{let h='<button class="sw" data-t="none" aria-label="Transparent" style="background:conic-gradient(#ccc 25%,#fff 0 50%,#ccc 0 75%,#fff 0) 0 0/12px 12px"></button><label class="sw" style="background:conic-gradient(#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)"><input type="color" id="cCol" value="#ff6a88"></label>';
  COLORS.forEach(c=>h+=`<button class="sw" data-t="color" data-v="${c}" style="background:${c}"></button>`);$('#cols').innerHTML=h;
  $('#grads').innerHTML=GRADS.map((g,i)=>`<button class="sw" data-t="grad" data-v="${i}" style="background:linear-gradient(135deg,${g[0]},${g[1]})"></button>`).join('')})();
-document.addEventListener('click',e=>{const b=e.target.closest('button.sw');if(!b)return;noSw();b.classList.add('on');bg={t:b.dataset.t,v:b.dataset.v};render()});
-$('#cCol').oninput=function(){noSw();this.parentElement.classList.add('on');bg={t:'color',v:this.value};render()};
-$('#cBlur').onclick=need(()=>{noSw();bg={t:'blur'};bgVer++;render();toast('Blur lag gaya')});
+document.addEventListener('click',e=>{const b=e.target.closest('button.sw');if(!b)return;noSw();b.classList.add('on');bg={t:b.dataset.t,v:b.dataset.v};fullRender()});
+/* rang chunne wala input drag karte waqt har `input` event par ek poora render
+   karta tha - ek hi frame me 20 event aayein to 20 poore render (20 x 1.47 M
+   fillRect + 20 x subject ka composite), jabki screen par sirf aakhri rang dikhta
+   hai. baaki saare sliders pehle se sched() se ek frame me ek render karte hain;
+   ab rang bhi wahi karta hai. nateeja wahi rehta hai, bas ek frame baad. */
+$('#cCol').oninput=function(){noSw();this.parentElement.classList.add('on');bg={t:'color',v:this.value};sched(false)};
+$('#cBlur').onclick=need(()=>{noSw();bg={t:'blur'};bgVer++;fullRender();toast('Blur lag gaya')});
 $('#cBlue').onclick=need(()=>{noSw();const r=$('#sBl');r.value=48;r.dispatchEvent(new Event('input',{bubbles:true}));
  bg={t:'bluetint'};bgVer++;
  /* portrait mode: sirf insaan, background ka koi tukda nahi */
@@ -359,7 +364,7 @@ $('#cBlue').onclick=need(()=>{noSw();const r=$('#sBl');r.value=48;r.dispatchEven
     Reset/Blue-blur ab naya 1.3 MB buffer banane ke bajaye wahi reuse karte hain) */
  const om=mask;if(om&&om!==mask0&&om.length===W*H&&POOL.length<2)POOL.push(om);
  const nm=bufOf();nm.set(mask0);mask=nm;mbAll();mver++;softKill();try{cutout()}catch(_){}
- render();toast('Blue blur lag gaya - sirf insaan dikhega')});
+ fullRender();toast('Blue blur lag gaya - sirf insaan dikhega')});
 $('#bBgImg').onclick=()=>$('#fBg').click();
 /* "Apni photo" wala background cover() se poore canvas par ek hi drawImage se aata
    hai, is liye agar uske har pixel ka alpha 255 hai to wo canvas ko kinare se
@@ -392,7 +397,7 @@ const imgOpaqueCheck=im=>{try{if(!CW||!CH)return false;
 let BGLOAD=null;
 $('#fBg').onchange=e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
  loadImg(f,im=>{bgImg=im;bg={t:'img'};bgVer++;setImgOpaque(im);
-  noSw();render();toast('Background lag gaya')},BGLOAD)};
+  noSw();fullRender();toast('Background lag gaya')},BGLOAD)};
 
 /* image load */
 /* Photo load: na onload na onerror aaye (kharab file, decode OOM, WebView jo
@@ -439,7 +444,7 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
   ISL=null;KEMPTY=null;jcv=null;SUB=null;RUN=null;fgFull=true;
   if(ovUrl){URL.revokeObjectURL(ovUrl);ovUrl=null}
   undo=[];redo=[];POOL.length=0;fgVer=-1;fgSoft=-1;outV=-1;outS=-1;softKey='';mver++;
-  $('#empty').style.display='none';cv.style.display='block';setSize();render();
+  $('#empty').style.display='none';cv.style.display='block';setSize();fullRender();
   setTimeout(()=>{try{auto(true)}catch(_){toast('Auto dabao ya Wand / Erase use karo')}},30)},MAINLOAD)};
 $('#bPick').onclick=()=>$('#fMain').click();
 $('#fMain').onchange=e=>{const f=e.target.files[0];e.target.value='';if(!f)return;pickPhoto(f)};
@@ -993,6 +998,17 @@ const sched=fast=>{if(fast)fastReq=true;if(!raf)raf=requestAnimationFrame(onRaf)
    wahi reh jata tha jo file me save nahi hota. ab poora render aate waqt pending fast
    frame cancel ho jata hai. */
 const qr=()=>{sched(true);clearTimeout(rt);rt=setTimeout(()=>{if(raf){cancelAnimationFrame(raf);raf=0;fastReq=false}render(false)},160)};
+/* fullRender = "poora render, aur uske baad koi purana fast frame na aaye".
+   slider ka fast preview rAF me pending reh jata hai; agar usi frame me koi
+   button dab jaye (Grow/Shrink/Smooth/Invert/Reset/Undo/Redo/Auto/background)
+   to handler pehle poora render karta tha aur uske turant baad pending fast
+   frame usi canvas par chadh jata tha. outline wale fast frame me ring sirf 8
+   shift ka hota hai (poora 16 ka), is liye screen par kuch aur reh jata tha aur
+   save ki file me kuch aur (naapa: wahi sequence, ek baar rAF ka intezaar aur
+   ek baar bina - canvas hash 1588f5b8 vs c3925da0, aur ek extra drawImage).
+   ab har seedha full render pending fast frame ko cancel karta hai - bilkul
+   wahi jo end() aur save() pehle se karte hain. */
+const fullRender=()=>{if(raf){cancelAnimationFrame(raf);raf=0}fastReq=false;clearTimeout(rt);render(false)};
 
 /* mask tools */
 /* undo snapshot: keepMask par jab tak kuch paint nahi hua (aam haal) uski copy
@@ -1550,7 +1566,7 @@ if(i<N-nw){j=i+nw;if(vis2[j]!==gen&&MATCH[j]){vis2[j]=gen;bg[j]=1;st2[gp++]=(x<<
  mver++;softKill();return cnt};
 const auto=(silent)=>{if(!od)return;push();const c=cutout();
  if(c<=0){recycle(undo.pop());abortPush();mver++;if(!silent)toast(c<0?'Background clear nahi hai, Wand try karo':'Kuch nahi hata. Tolerance badhao ya Wand use karo');return}
- render();toast(silent?'Background hata diya - ab naya background chuno':'Ho gaya! Erase / Restore se saaf karo')};
+ fullRender();toast(silent?'Background hata diya - ab naya background chuno':'Ho gaya! Erase / Restore se saaf karo')};
 const wand=(x,y)=>{x=Math.min(W-1,Math.max(0,x|0));y=Math.min(H-1,Math.max(0,y|0));let r=0,g=0,b=0,n=0;
  for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const px=x+dx,py=y+dy;if(px>=0&&py>=0&&px<W&&py<H){const p=(py*W+px)*4;r+=od[p];g+=od[p+1];b+=od[p+2];n++}}
  return flood([y*W+x],r/n,g/n,b/n,tol)};
@@ -1718,9 +1734,9 @@ const morph=g=>{push();
  }else for(let y=0;y<H;y++)for(let x=0;x<W;x++){const i=y*W+x;let v=o[i];if(x>0)v=m(v,o[i-1]);if(x<W-1)v=m(v,o[i+1]);if(y>0)v=m(v,o[i-W]);if(y<H-1)v=m(v,o[i+W]);mask[i]=v}
  /* Grow har taraf ek pixel badhta hai - box bhi ek pixel bada */
  if(g&&MB[2]>=MB[0])mbAdd(Math.max(0,MB[0]-1),Math.max(0,MB[1]-1),Math.min(W-1,MB[2]+1),Math.min(H-1,MB[3]+1));
- enforce();mver++;softKill();render()};
+ enforce();mver++;softKill();fullRender()};
 $('#bGrow').onclick=need(()=>morph(1));$('#bShr').onclick=need(()=>morph(0));
-$('#bInv').onclick=need(()=>{push();for(let i=0;i<mask.length;i++)mask[i]=255-mask[i];mbAll();enforce();mver++;softKill();render()});
+$('#bInv').onclick=need(()=>{push();for(let i=0;i<mask.length;i++)mask[i]=255-mask[i];mbAll();enforce();mver++;softKill();fullRender()});
 /* Smooth ka box blur bhi sirf MB+2 tak: radius 2 ka blur MB se do pixel door ke
    bahar har jagah 0 deta hai, aur 0 par (0-128)*3+128 clamp hokar 0 hi banta hai -
    yaani wahan mask pehle se 0 hai, likhne ki zaroorat nahi. */
@@ -1730,7 +1746,7 @@ $('#bSmo').onclick=need(()=>{push();
   blurTabs(2);const b=blurRect(mask,2,bxa,bya,bxb,byb,BLS.o);
   for(let y=bya;y<=byb;y++){const row=y*W;for(let x=bxa;x<=bxb;x++){const i=row+x,v=(b[i]-128)*3+128;mask[i]=v<0?0:v>255?255:v}}
   mbAdd(bxa,bya,bxb,byb)}
- enforce();mver++;softKill();render()});
+ enforce();mver++;softKill();fullRender()});
 /* Reset pehle do naye 1.3 MB buffer banata tha (snapshot ke liye ek, aur mask ke
    liye ek) aur purana mask seedha garbage chala jata tha. ab purana array pool me
    jata hai aur bufOf() use hi lauta deta hai - ek allocation kam, aur uska 1.3 MB
@@ -1738,10 +1754,10 @@ $('#bSmo').onclick=need(()=>{push();
    value likhta hai. */
 $('#bRst').onclick=need(()=>{push();
  const om=mask;if(om&&om!==mask0&&om.length===W*H&&POOL.length<2)POOL.push(om);
- const nm=bufOf();nm.set(mask0);mask=nm;mbAll();enforce();mver++;softKill();render();toast('Reset ho gaya')});
+ const nm=bufOf();nm.set(mask0);mask=nm;mbAll();enforce();mver++;softKill();fullRender();toast('Reset ho gaya')});
 const cmp=$('#bCmp');
-const cmpOn=e=>{if(!od)return;if(e&&e.cancelable)e.preventDefault();showOrig=true;render()};
-const cmpOff=()=>{if(showOrig){showOrig=false;render()}};
+const cmpOn=e=>{if(!od)return;if(e&&e.cancelable)e.preventDefault();showOrig=true;fullRender()};
+const cmpOff=()=>{if(showOrig){showOrig=false;fullRender()}};
 cmp.addEventListener('pointerdown',cmpOn);
 ['pointerup','pointerleave','pointercancel'].forEach(ev=>cmp.addEventListener(ev,cmpOff));
 cmp.oncontextmenu=e=>e.preventDefault();
@@ -1760,7 +1776,7 @@ const hist=(from,to)=>{const old=mask,o0=MB[0],o1=MB[1],o2=MB[2],o3=MB[3];
  else if(o2>=o0){x0=o0;y0=o1;x1=o2;y1=o3}
  else if(MB[2]>=MB[0]){x0=MB[0];y0=MB[1];x1=MB[2];y1=MB[3]}
  if(x0!==undefined&&(x1-x0+1)*(y1-y0+1)<W*H*0.5){SDIRT=[x0,y0,x1,y1];SUBX=true}else softKill();
- render();recycleMask(old)};
+ fullRender();recycleMask(old)};
 $('#bUndo').onclick=need(()=>{if(undo.length)hist(undo,redo);else toast('Undo ke liye kuch nahi')});
 $('#bRedo').onclick=need(()=>{if(redo.length)hist(redo,undo);else toast('Redo ke liye kuch nahi')});
 document.addEventListener('keydown',e=>{
@@ -1906,7 +1922,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;STK=null;POOL.length=0;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.44',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.45',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
