@@ -462,7 +462,15 @@ const setSize=()=>{if(!od)return;
     tha, 0 hona chahiye). ab size badalne par flag dobara naapa jata hai. */
  if(bgImg&&bg.t==='img'&&(imgOpaqueW!==CW||imgOpaqueH!==CH)){imgOpaqueFor=null;imgOpaque=false;imgOpaqueLater(bgImg)}
  fit()};
-const fit=()=>{if(!od)return;const s=Math.min((stage.clientWidth-4)/CW,(stage.clientHeight-4)/CH);cv.style.width=Math.floor(CW*s)+'px';cv.style.height=Math.floor(CH*s)+'px';cRect=null};
+/* fit: canvas ko stage me "contain" karta hai. bahut patli ya bahut lambi photo
+   par (jaise 1400x1 ya 3x900) chhoti side ka scale 1 se kam ho jata tha aur
+   Math.floor use 0 px bana deta tha - 1400x1 par cv.style.height="0px", 3x900
+   par width="1px". 0 px oonchi canvas par pointer hit area hi nahi hota, yaani
+   us photo par Wand / Erase / Restore kabhi kaam nahi karte (sirf Auto aur Save
+   chalte the). ab har side kam se kam 1 px rehti hai. aam photo par floor ka
+   nateeja pehle se 1 ya usse bada hi hota hai, is liye unka size byte-identical
+   rehta hai (1400x1050, 900x675, 120x90 par CSS size pehle jaisa hi). */
+const fit=()=>{if(!od)return;const s=Math.min((stage.clientWidth-4)/CW,(stage.clientHeight-4)/CH);cv.style.width=Math.max(1,Math.floor(CW*s))+'px';cv.style.height=Math.max(1,Math.floor(CH*s))+'px';cRect=null};
 new ResizeObserver(fit).observe(stage);
 
 /* rendering */
@@ -1333,31 +1341,32 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
     (420k cell, ek hi baar) aur flood me sirf ek bit test bachta hai. expression
     bilkul wahi hai (ref 0, phir 1, 2, 3 - isi kram me), is liye hit/miss ka
     jawab har cell par pehle jaisa hi hai aur mask byte-identical rehta hai. */
+ /* MATCH scan: har cell par strict pass (t2) aur, fail hone par, loose pass (t2b)
+    chalta hai. pehle loose pass wahi teen sub aur wahi do multiply dobara karta
+    tha jo strict pass ne abhi kiye the - sirf radius badalta tha, is liye jo cell
+    strict me fail hui uske liye 2 x rn distance banti thi. ab strict pass hi
+    sabse chhoti distance (mn) yaad rakhta hai; strict me koi ref match na hui to
+    matlab chaaron ref test ho chuke hain, aur loose ka jawab sirf "mn <= t2b"
+    hai - is liye loose pass ke saare distance dobara nikalne ki zaroorat hi
+    nahi. strict ka early-exit aur ref ka kram wahi hai, aur nateeja bhi wahi:
+    m=1 jab koi ref t2 ke andar, warna m=2 jab mn t2b ke andar, warna 0. */
  const MATCH=C.match;
  if(SD32){const U=SD32;
   for(let i=0;i<N;i++){const v=U[i],r0=v&255,g0=(v>>>8)&255,b0=(v>>>16)&255;
-  let a=r0-A0,b2=g0-B0_,c2=b0-C0,m=0;
-  if(a*a+b2*b2+c2*c2<=t2)m=1;
-  if(!m&&rn>1){a=r0-A1;b2=g0-B1_;c2=b0-C1;if(a*a+b2*b2+c2*c2<=t2)m=1}
-  if(!m&&rn>2){a=r0-A2;b2=g0-B2_;c2=b0-C2;if(a*a+b2*b2+c2*c2<=t2)m=1}
-  if(!m&&rn>3){a=r0-A3;b2=g0-B3_;c2=b0-C3;if(a*a+b2*b2+c2*c2<=t2)m=1}
-  if(!m){a=r0-A0;b2=g0-B0_;c2=b0-C0;
-   if(a*a+b2*b2+c2*c2<=t2b)m=2;
-   if(!m&&rn>1){a=r0-A1;b2=g0-B1_;c2=b0-C1;if(a*a+b2*b2+c2*c2<=t2b)m=2}
-   if(!m&&rn>2){a=r0-A2;b2=g0-B2_;c2=b0-C2;if(a*a+b2*b2+c2*c2<=t2b)m=2}
-   if(!m&&rn>3){a=r0-A3;b2=g0-B3_;c2=b0-C3;if(a*a+b2*b2+c2*c2<=t2b)m=2}}
+  let a=r0-A0,b2=g0-B0_,c2=b0-C0,m=0,mn=a*a+b2*b2+c2*c2;
+  if(mn<=t2)m=1;
+  if(!m&&rn>1){a=r0-A1;b2=g0-B1_;c2=b0-C1;const d=a*a+b2*b2+c2*c2;if(d<mn)mn=d;if(d<=t2)m=1}
+  if(!m&&rn>2){a=r0-A2;b2=g0-B2_;c2=b0-C2;const d=a*a+b2*b2+c2*c2;if(d<mn)mn=d;if(d<=t2)m=1}
+  if(!m&&rn>3){a=r0-A3;b2=g0-B3_;c2=b0-C3;const d=a*a+b2*b2+c2*c2;if(d<mn)mn=d;if(d<=t2)m=1}
+  if(!m&&mn<=t2b)m=2;
   MATCH[i]=m}
  }else for(let i=0;i<N;i++){const v=px(i),r0=v&255,g0=(v>>>8)&255,b0=(v>>>16)&255;
-  let a=r0-A0,b2=g0-B0_,c2=b0-C0,m=0;
-  if(a*a+b2*b2+c2*c2<=t2)m=1;
-  if(!m&&rn>1){a=r0-A1;b2=g0-B1_;c2=b0-C1;if(a*a+b2*b2+c2*c2<=t2)m=1}
-  if(!m&&rn>2){a=r0-A2;b2=g0-B2_;c2=b0-C2;if(a*a+b2*b2+c2*c2<=t2)m=1}
-  if(!m&&rn>3){a=r0-A3;b2=g0-B3_;c2=b0-C3;if(a*a+b2*b2+c2*c2<=t2)m=1}
-  if(!m){a=r0-A0;b2=g0-B0_;c2=b0-C0;
-   if(a*a+b2*b2+c2*c2<=t2b)m=2;
-   if(!m&&rn>1){a=r0-A1;b2=g0-B1_;c2=b0-C1;if(a*a+b2*b2+c2*c2<=t2b)m=2}
-   if(!m&&rn>2){a=r0-A2;b2=g0-B2_;c2=b0-C2;if(a*a+b2*b2+c2*c2<=t2b)m=2}
-   if(!m&&rn>3){a=r0-A3;b2=g0-B3_;c2=b0-C3;if(a*a+b2*b2+c2*c2<=t2b)m=2}}
+  let a=r0-A0,b2=g0-B0_,c2=b0-C0,m=0,mn=a*a+b2*b2+c2*c2;
+  if(mn<=t2)m=1;
+  if(!m&&rn>1){a=r0-A1;b2=g0-B1_;c2=b0-C1;const d=a*a+b2*b2+c2*c2;if(d<mn)mn=d;if(d<=t2)m=1}
+  if(!m&&rn>2){a=r0-A2;b2=g0-B2_;c2=b0-C2;const d=a*a+b2*b2+c2*c2;if(d<mn)mn=d;if(d<=t2)m=1}
+  if(!m&&rn>3){a=r0-A3;b2=g0-B3_;c2=b0-C3;const d=a*a+b2*b2+c2*c2;if(d<mn)mn=d;if(d<=t2)m=1}
+  if(!m&&mn<=t2b)m=2;
   MATCH[i]=m}
 
  /* add() closure sirf seeds ke liye bacha hai (ns <= 2*(nw+nh), ~2600). BFS ke
@@ -1573,12 +1582,19 @@ const stamp2=(t1,v1,t2,v2,cx0,cy0,r)=>{
    stroke ke shuru me (pointerdown) stR reset hota hai, is liye do alag stroke
    (mode/brush badalne ke baad) kabhi ek doosre ka stamp nahi chhodte. */
 let stX=NaN,stY=NaN,stR=-1;
+/* Keep tool ek stamp me do baar wahi circle scan kar raha tha. keep branch pehle
+   keepMask aur mask dono par 255 likhta hai, phir `if(keep&&ch)` false hone par
+   (yaani jab ch===0, matlab us circle me dono arrays pehle se 255 the) wahi
+   circle dobara `stamp2(mask,255,null,0,...)` se chalta tha - jo pehle se 255
+   wali jagah par 255 hi likhta hai, is liye uska ch hamesha 0 aur nateeja
+   bilkul wahi rehta tha, par circle ka poora scan (brush 140 par ~15k pixel)
+   bekaar jata tha. ab keep ka fallback nahi chalta: keep ke baad ch 0 hai to
+   likhne ko kuch bacha hi nahi. erase/restore ke raaste chhue nahi gaye. */
 const stroke=(a,b,c,d,k)=>{const r=Math.max(2,brush*k/2),keep=mode==='keep',v=keep||mode!=='erase'?255:0,n=Math.max(1,Math.ceil(Math.hypot(c-a,d-b)/Math.max(1,r/3)));let ch=0;
  for(let i=0;i<=n;i++){const px=i===0?a:i===n?c:a+(c-a)*i/n,py=i===0?b:i===n?d:b+(d-b)*i/n;
   if(px===stX&&py===stY&&r===stR)continue;
   stX=px;stY=py;stR=r;
-  if(keep)ch+=stamp2(keepMask,255,mask,255,px,py,r);
-  if(keep&&ch){keepDirty=true}
+  if(keep){ch+=stamp2(keepMask,255,mask,255,px,py,r);if(ch)keepDirty=true}
   else if(v===0)ch+=stamp2(mask,0,keepDirty?keepMask:null,0,px,py,r);
   else ch+=stamp2(mask,255,null,0,px,py,r)}
  mver++;sched(true);return ch};
@@ -1857,7 +1873,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;STK=null;POOL.length=0;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.42',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.43',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
