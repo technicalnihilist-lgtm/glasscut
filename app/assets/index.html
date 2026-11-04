@@ -249,6 +249,11 @@ let photoOpaque=false,imgOpaque=false,imgOpaqueFor=null,imgOpaqueW=-1,imgOpaqueH
 /* tmp composite ka cache (drawSubj) - neeche tafseel */
 let THas=false,TFULL=false,TfgV=-1,TfgS=-1,Ts0=0,Ts1=0,Ts2=0,Tr=-1,Tcs=0,Tsh=0,Tn=0;
 const TPB=[0,0,0,0],TDB=[0,0,0,0];
+/* FGR = pichhle tmp build ke baad fgc (alpha) me jo rectangle badla hai; null ka
+   matlab "pata nahi" (poora dobara banana hai). layer() ise usi upload ke box se
+   bhar deta hai, drawSubj use karke sirf utna hissa dobara banata hai aur phir
+   null kar deta hai. SB wahi box hai jo ring/fgc ke blits ko source deta hai. */
+let FGR=null;
 const P={s:100,x:0,y:0,f:1,sh:0,line:0,bl:8,op:100,depth:0,tilt:0,motion:0};
 let mx=0,my=0,mraf=0,mt=0,gx=0,gy=0,gyro=false;
 const COLORS=['#ffffff','#f2f2f7','#000000','#ff453a','#ff9f0a','#ffd60a','#32d74b','#64d2ff','#0a84ff','#5e5ce6','#bf5af2','#ff375f'];
@@ -709,6 +714,12 @@ const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
   }else fgx.putImageData(fgi,0,0);
   SUB=bx1<0?null:[bx0,by0,bx1,by1];SUBX=false;
  }
+ if(part){
+  /* partial upload: sirf yahi rectangle badla (part2 wala clear sirf poore upload
+     par hota hai, is liye wahan FGR null hi rehta hai) */
+  if(!FGR)FGR=[x0,y0,x1,y1];
+  else{if(x0<FGR[0])FGR[0]=x0;if(y0<FGR[1])FGR[1]=y0;if(x1>FGR[2])FGR[2]=x1;if(y1>FGR[3])FGR[3]=y1}
+ }else FGR=null;
  fgFull=false;DIRT=null;fgVer=mver;fgSoft=sv};
 /* xf() ko har frame aur har pointermove par bulaya jata hai - ek hi array reuse hota
    hai taaki per-frame garbage na bane (values turant padh li jati hain) */
@@ -770,53 +781,127 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
   ||Tcs!==cs3||Tsh!==sh3||Tn!==n
   ||(pb?(TPB[0]!==pb[0]||TPB[1]!==pb[1]||TPB[2]!==pb[2]||TPB[3]!==pb[3]):false);
  if(need){
-  /* content box: SUB + outline ring (r) + 2 px bilinear pad */
-  let full=!pb,bx0=0,by0=0,bx1=W-1,by1=H-1;
-  if(pb){const pd=r+2;
-   bx0=Math.max(0,Math.floor(pb[0]-pd));by0=Math.max(0,Math.floor(pb[1]-pd));
-   bx1=Math.min(W-1,Math.ceil(pb[0]+pb[2]-1+pd));by1=Math.min(H-1,Math.ceil(pb[1]+pb[3]-1+pd));
-   if(bx0===0&&by0===0&&bx1===W-1&&by1===H-1)full=true}
-  /* image box se device box: wahi transform jo neeche draw hota hai */
-  let qx0=1e9,qy0=1e9,qx1=-1e9,qy1=-1e9;
-  if(!full){const ax0=bx0-W/2,ax1=bx1-W/2,ay0=by0-H/2,ay1=by1-H/2;
-   for(let q=0;q<4;q++){const u=(q&2)?ax1:ax0,v=(q&1)?ay1:ay0;
-    const ex=t[1]+sx*cs3*u,ey=t[2]+t[0]*(sh3*u+v);
-    if(ex<qx0)qx0=ex;if(ex>qx1)qx1=ex;if(ey<qy0)qy0=ey;if(ey>qy1)qy1=ey}
-   qx0=Math.max(0,Math.floor(qx0));qy0=Math.max(0,Math.floor(qy0));
-   qx1=Math.min(CW,Math.ceil(qx1));qy1=Math.min(CH,Math.ceil(qy1));
-   if(qx1<=qx0||qy1<=qy0)full=true}
-  if(full){qx0=0;qy0=0;qx1=CW;qy1=CH}
-  tc.setTransform(1,0,0,1,0,0);
-  if(full)tc.clearRect(0,0,CW,CH);
-  else{
-   /* pichhla content bhi saaf - wo naye box se bahar ho sakta hai. do box ka
-      jod canvas ke bade hisse jitna ho jaye to ek poora clear sasta hai. */
-   let done=false;
-   if(THas){
-    if(TFULL){tc.clearRect(0,0,CW,CH);done=true}
-    else{
-     if(TDB[2]*TDB[3]+(qx1-qx0)*(qy1-qy0)>=CW*CH){tc.clearRect(0,0,CW,CH);done=true}
-     else tc.clearRect(TDB[0],TDB[1],TDB[2],TDB[3])}}
-   if(!done)tc.clearRect(qx0,qy0,qx1-qx0,qy1-qy0)}
+ /* content box: SUB + outline ring (r) + 2 px bilinear pad */
+ let full=!pb,bx0=0,by0=0,bx1=W-1,by1=H-1;
+ if(pb){const pd=r+2;
+  bx0=Math.max(0,Math.floor(pb[0]-pd));by0=Math.max(0,Math.floor(pb[1]-pd));
+  bx1=Math.min(W-1,Math.ceil(pb[0]+pb[2]-1+pd));by1=Math.min(H-1,Math.ceil(pb[1]+pb[3]-1+pd));
+  if(bx0===0&&by0===0&&bx1===W-1&&by1===H-1)full=true}
+ /* Poora SUB box har frame dobara banane ki zaroorat nahi hoti: agar pichhla
+    composite zinda hai (THas) aur uske baad fgc me sirf ek rectangle badla hai
+    (FGR, layer() usi upload ka box), to ring ke liye wahi rectangle r+2 chauda
+    karke dobara banao. Bahar ka tmp pichhle frame se hi bilkul sahi hai -
+    silhouette wahan badla hi nahi, is liye uske shift bhi wahi pixels dete hain.
+    Chhote stroke par ring ke 8-16 blits poore SUB ki jagah sirf stroke ke box
+    par chalte hain; bade stroke ya transform/r/n badalne par purana poora raasta
+    hi chalta hai. Nateeja byte-identical rehta hai (har pixel ke liye wahi
+    source, wahi transform, wahi blend). */
+ let restr=false;
+ if(!full&&THas&&FGR&&TfgS===fgSoft&&Tr===r&&Tn===n&&Tcs===cs3&&Tsh===sh3
+    &&Ts0===t[0]&&Ts1===t[1]&&Ts2===t[2]){
+  const pd=r+2,px1=pb[0]+pb[2]-1,py1=pb[1]+pb[3]-1;
+  /* C = SUB ke andar wo hissa jahan silhouette sach me badla, K = C + r + 2
+     (ring itni door tak asar dalta hai, 2 px bilinear ke liye) */
+  const kx0=Math.max(0,Math.floor(Math.max(pb[0],FGR[0])-pd));
+  const ky0=Math.max(0,Math.floor(Math.max(pb[1],FGR[1])-pd));
+  const kx1=Math.min(W-1,Math.ceil(Math.min(px1,FGR[2])+pd));
+  const ky1=Math.min(H-1,Math.ceil(Math.min(py1,FGR[3])+pd));
+  /* box canvas ke bade hisse jitna ho jaye to poora banane me hi sasta hai */
+  if(kx1>=kx0&&ky1>=ky0&&(kx1-kx0+1)*(ky1-ky0+1)*4<(bx1-bx0+1)*(by1-by0+1)*3){
+   bx0=kx0;by0=ky0;bx1=kx1;by1=ky1;restr=true}
+ }
+ /* image box se device box: wahi transform jo neeche draw hota hai */
+ let qx0=1e9,qy0=1e9,qx1=-1e9,qy1=-1e9;
+ if(!full){const ax0=bx0-W/2,ax1=bx1-W/2,ay0=by0-H/2,ay1=by1-H/2;
+  for(let q=0;q<4;q++){const u=(q&2)?ax1:ax0,v=(q&1)?ay1:ay0;
+   const ex=t[1]+sx*cs3*u,ey=t[2]+t[0]*(sh3*u+v);
+   if(ex<qx0)qx0=ex;if(ex>qx1)qx1=ex;if(ey<qy0)qy0=ey;if(ey>qy1)qy1=ey}
+  qx0=Math.max(0,Math.floor(qx0));qy0=Math.max(0,Math.floor(qy0));
+  qx1=Math.min(CW,Math.ceil(qx1));qy1=Math.min(CH,Math.ceil(qy1));
+  if(qx1<=qx0||qy1<=qy0)full=true}
+ if(full){qx0=0;qy0=0;qx1=CW;qy1=CH}
+ tc.setTransform(1,0,0,1,0,0);
+ if(full)tc.clearRect(0,0,CW,CH);
+ else if(restr){
+  /* sirf naya box saaf hota hai - uske bahar tmp pichhle frame ka sahi content
+     hi rakhta hai, is liye purana box clear karna hi galat hota (wo content
+     dobara banaya hi nahi gaya) */
+  tc.clearRect(qx0,qy0,qx1-qx0,qy1-qy0)}
+ else{
+  /* pichhla content bhi saaf - wo naye box se bahar ho sakta hai. do box ka
+     jod canvas ke bade hisse jitna ho jaye to ek poora clear sasta hai. */
+  let done=false;
+  if(THas){
+   if(TFULL){tc.clearRect(0,0,CW,CH);done=true}
+   else{
+    if(TDB[2]*TDB[3]+(qx1-qx0)*(qy1-qy0)>=CW*CH){tc.clearRect(0,0,CW,CH);done=true}
+    else tc.clearRect(TDB[0],TDB[1],TDB[2],TDB[3])}}
+  if(!done)tc.clearRect(qx0,qy0,qx1-qx0,qy1-qy0)}
   tc.save();tc.translate(t[1],t[2]);tc.scale(sx,t[0]);tc.transform(cs3,sh3,0,1,0,0);tc.translate(-W/2,-H/2);
   /* outc (silhouette) sirf SUB box me padha jata hai - neeche har shift usi box ka
      drawImage karta hai. is liye usse poore W*H par dobara banana bekaar tha: copy
      wala draw aur source-in fill dono ab sirf SUB box par chalte hain (copy composite
      sirf source ke bbox par lagta hai, bahar destination waisa hi rehta hai), aur box
      ke bahar ka outc kabhi read nahi hota - nateeja bilkul wahi. */
-  if(P.line>0){if(outV!==fgVer||outS!==fgSoft){const ox=oxc;if(outc.width!==W||outc.height!==H){outc.width=W;outc.height=H}
-   ox.setTransform(1,0,0,1,0,0);ox.globalCompositeOperation='copy';
-   if(pb)ox.drawImage(fgc,pb[0],pb[1],pb[2],pb[3],pb[0],pb[1],pb[2],pb[3]);else ox.drawImage(fgc,0,0);
-   ox.globalCompositeOperation='source-in';ox.fillStyle='#fff';
-   if(pb)ox.fillRect(pb[0],pb[1],pb[2],pb[3]);else ox.fillRect(0,0,W,H);
-   ox.globalCompositeOperation='source-over';outV=fgVer;outS=fgSoft}
-   if(pb)for(let a=0;a<n;a++){const dx=Math.cos(a*2*Math.PI/n)*r,dy=Math.sin(a*2*Math.PI/n)*r;
-    tc.drawImage(outc,pb[0],pb[1],pb[2],pb[3],pb[0]+dx,pb[1]+dy,pb[2],pb[3])}
-   else for(let a=0;a<n;a++)tc.drawImage(outc,Math.cos(a*2*Math.PI/n)*r,Math.sin(a*2*Math.PI/n)*r)}
-  if(pb)tc.drawImage(fgc,pb[0],pb[1],pb[2],pb[3],pb[0],pb[1],pb[2],pb[3]);
-  else tc.drawImage(fgc,0,0);
-  tc.restore();
-  TDB[0]=qx0;TDB[1]=qy0;TDB[2]=qx1-qx0;TDB[3]=qy1-qy0;TFULL=full;THas=true;
+  if(P.line>0){
+   /* silhouette (outc) sirf wahan badalti hai jahan fgc ka alpha badla. restricted
+      frame me is liye sirf wahi rectangle dobara banti hai - 'copy' composite poori
+      canvas saaf kar deta hai, is liye wahan clearRect + source-over + source-atop
+      chalta hai (source-atop destination ko chhuta hai: rect ke bahar sab waisa hi
+      rehta hai, aur andar white wahin lagta hai jahan alpha hai - nateeja source-in
+      jaisa hi). poore upload par purana copy+source-in raasta hi chalta hai. */
+   if(outV!==fgVer||outS!==fgSoft){const ox=oxc;
+    /* size badalne par canvas khud khaali ho jata hai - tab poora hi banna chahiye */
+    const oFull=outc.width!==W||outc.height!==H;
+    if(oFull){outc.width=W;outc.height=H}
+    ox.setTransform(1,0,0,1,0,0);
+    if(pb&&restr&&FGR&&!oFull){
+     const ax0=Math.max(pb[0],FGR[0]),ay0=Math.max(pb[1],FGR[1]);
+     const ax1=Math.min(pb[0]+pb[2]-1,FGR[2]),ay1=Math.min(pb[1]+pb[3]-1,FGR[3]);
+     if(ax1>=ax0&&ay1>=ay0){
+      const aw=ax1-ax0+1,ah=ay1-ay0+1;
+      ox.clearRect(ax0,ay0,aw,ah);
+      ox.drawImage(fgc,ax0,ay0,aw,ah,ax0,ay0,aw,ah);
+      ox.globalCompositeOperation='source-atop';ox.fillStyle='#fff';ox.fillRect(ax0,ay0,aw,ah);
+      ox.globalCompositeOperation='source-over'}
+    }else{
+     ox.globalCompositeOperation='copy';
+     if(pb)ox.drawImage(fgc,pb[0],pb[1],pb[2],pb[3],pb[0],pb[1],pb[2],pb[3]);else ox.drawImage(fgc,0,0);
+     ox.globalCompositeOperation='source-in';ox.fillStyle='#fff';
+     if(pb)ox.fillRect(pb[0],pb[1],pb[2],pb[3]);else ox.fillRect(0,0,W,H);
+     ox.globalCompositeOperation='source-over'}
+    outV=fgVer;outS=fgSoft}
+  /* har shift ka dest box redraw box (bx0..by1) tak clipped hai: uske bahar kuch
+     nahi likha jata, is liye wahan pichhle frame ka content jaisa tha waisa hi
+     rehta hai. src box ko usi tarah shift kiya jata hai, yaani dest pixel p ko
+     bilkul wahi source pixel (p - shift) milta hai jo poore SUB wale draw me
+     milta tha (scale 1 hai, is liye bilinear ke weight bhi wahi rehte hain). */
+  if(pb){const px1=pb[0]+pb[2]-1,py1=pb[1]+pb[3]-1;
+   for(let a=0;a<n;a++){const dx=Math.cos(a*2*Math.PI/n)*r,dy=Math.sin(a*2*Math.PI/n)*r;
+    /* poora SUB box redraw box ke andar hai (aam haal) to bilkul purana hi draw */
+    if(pb[0]+dx>=bx0&&px1+dx<=bx1&&pb[1]+dy>=by0&&py1+dy<=by1){
+     tc.drawImage(outc,pb[0],pb[1],pb[2],pb[3],pb[0]+dx,pb[1]+dy,pb[2],pb[3]);continue}
+    const dx0=Math.max(bx0,pb[0]+dx),dy0=Math.max(by0,pb[1]+dy);
+    const dx1=Math.min(bx1,px1+dx),dy1=Math.min(by1,py1+dy);
+    if(dx1<dx0||dy1<dy0)continue;
+    tc.drawImage(outc,dx0-dx,dy0-dy,dx1-dx0+1,dy1-dy0+1,dx0,dy0,dx1-dx0+1,dy1-dy0+1)}}
+  else for(let a=0;a<n;a++)tc.drawImage(outc,Math.cos(a*2*Math.PI/n)*r,Math.sin(a*2*Math.PI/n)*r)}
+ if(pb){
+  if(pb[0]>=bx0&&pb[0]+pb[2]-1<=bx1&&pb[1]>=by0&&pb[1]+pb[3]-1<=by1)
+   tc.drawImage(fgc,pb[0],pb[1],pb[2],pb[3],pb[0],pb[1],pb[2],pb[3]);
+  else{const fx0=Math.max(bx0,pb[0]),fy0=Math.max(by0,pb[1]);
+   const fx1=Math.min(bx1,pb[0]+pb[2]-1),fy1=Math.min(by1,pb[1]+pb[3]-1);
+   if(fx1>=fx0&&fy1>=fy0)tc.drawImage(fgc,fx0,fy0,fx1-fx0+1,fy1-fy0+1,fx0,fy0,fx1-fx0+1,fy1-fy0+1)}}
+ else tc.drawImage(fgc,0,0);
+ tc.restore();
+ /* restricted frame me box ke bahar ka purana content abhi bhi valid hai, is liye
+    "kahan content hai" wala box purane aur naye box ka jod hota hai */
+ if(restr&&THas&&!TFULL){
+  const ux0=Math.min(TDB[0],qx0),uy0=Math.min(TDB[1],qy0);
+  const ux1=Math.max(TDB[0]+TDB[2],qx1),uy1=Math.max(TDB[1]+TDB[3],qy1);
+  TDB[0]=ux0;TDB[1]=uy0;TDB[2]=ux1-ux0;TDB[3]=uy1-uy0;TFULL=false}
+ else{TDB[0]=qx0;TDB[1]=qy0;TDB[2]=qx1-qx0;TDB[3]=qy1-qy0;TFULL=full}
+ THas=true;FGR=null;
   TfgV=fgVer;TfgS=fgSoft;Ts0=t[0];Ts1=t[1];Ts2=t[2];Tr=r;Tcs=cs3;Tsh=sh3;Tn=n;
   if(pb){TPB[0]=pb[0];TPB[1]=pb[1];TPB[2]=pb[2];TPB[3]=pb[3]}
  }
@@ -1762,7 +1847,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;STK=null;POOL.length=0;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.40',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.41',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
