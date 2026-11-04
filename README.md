@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 230 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.36 (versionCode 36) |
+| **Version** | 1.1.37 (versionCode 37) |
 
 ---
 
@@ -189,7 +189,11 @@ Honest limitation: a soft out-of-focus highlight and a soft-edged object look id
 - **Every pointermove allocated two arrays** — `pt()` returned a fresh `[x, y, scale]` and the move handler immediately copied it into another `last = [p[0], p[1]]`. Both are now one reused scratch array and two scalars: 85.8 ns → 4.3 ns per move, 800 fewer arrays in a 400-move stroke.
 - **A share sheet that never answered bricked Save** — if `navigator.share` never settles (some WebViews and shells), the `await` hangs, `finally` never runs and `saveBusy` stays `true` for the rest of the session, so no later save does anything. This is the same bug that was fixed for `toBlob` and `FileReader` earlier. There is now a 20 s guard that releases the flag; if the share later resolves the same "Saved" toast appears, if it rejects the download fallback runs. With a stubbed share that never settles, the previous build wrote 0 files for three saves in a row and the new one writes the file on both later saves (18,013 B PNG, magic `89504e47`).
 
-Verified in headless Chrome: load → auto → wand → erase → keep → restore → undo → redo → grow/shrink/smooth/invert → feather/outline/opacity/depth/tilt/scale → four backgrounds + blur + blue blur → crop ratios → hold-original → reset → undo → language switch → close/open → save (PNG/JPG/WEBP checked on disk, byte-identical), at 1400×1200, 1200×1000, 320×274, 900×700 with transparency, 7×5 and a 4000×3428 photo — 63 canvas hashes byte-identical to the previous build, identical saved-file md5s, zero console errors and zero page errors.
+- **JPG saved a black box where the background was transparent** — the flatten pass only ran when the background was "none", so a transparent PNG picked as "My photo" (or a Blur background over a photo with transparent edges) came out black in the file while the screen showed the checkerboard. It now flattens whenever the composite is not opaque, on white, exactly like the no-background case: corner pixels of a 1400×1200 JPG go from `(0,0,0)` to `(255,255,255)` and the subject pixel is unchanged; every opaque case still saves byte-identical files.
+- **Two full-size flood stacks for one job** — the wand's stack (M ints) and the cutout's stack (max(N,M) ints) were separate `Int32Array`s even though they never run at the same time, and the cutout's `vis` array was a third. They now share one buffer and `vis` is gone: live typed-array memory after one wand tap drops from 47.46 MB to 39.84 MB (−7.61 MB, −16%) at 1400×1200, and the same −7.7 MB is still saved after switching to a 320×274 photo, so the old buffers are not kept alive.
+- **Auto's colour test ran inside the flood** — the four-reference, two-threshold test sat in both BFS passes, interleaved with queue and `vis` traffic. Both answers are now precomputed in one linear pass over the grid (bit 0 strict, bit 1 loose-only) and the floods do a single bit test. Interleaved base/new in one browser (min of 14, measured twice): pass 1 13.2/12.7 → 4.6/5.3 ms (−65%/−58%), pass 2 3.4/3.9 → 2.2/2.5 ms (−35%/−36%), the new prepass costs 3.2–3.3 ms, and the whole Auto press 36.8/35.4 → 29.0/31.1 ms (−21%/−12%).
+
+Verified in headless Chrome: load → auto → wand → erase → keep → restore → undo → redo → grow/shrink/smooth/invert → feather/outline/opacity/depth/tilt/scale → four backgrounds + blur + blue blur → crop ratios → hold-original → reset → undo → language switch → close/open → save (PNG/JPG/WEBP checked on disk, byte-identical), at 1400×1200, 1200×1000, 320×274, 900×700 with transparency, 7×5 and a 4000×3428 photo — 173 canvas states byte-identical to the previous build (which is itself identical when run twice), identical saved-file md5s wherever the JPG fix does not apply, zero console errors and zero page errors.
 
 ---
 
@@ -197,10 +201,10 @@ Verified in headless Chrome: load → auto → wand → erase → keep → resto
 
 Download [`GlassCut.apk`](GlassCut.apk) on the phone, tap it, allow "install unknown apps" for your browser or file manager once. Android 7.0 (API 24) or newer.
 
-**This build has a new signing key again** — `/scratch/saved` was empty again when the 1.1.36 build sandbox came up (it is mounted read-only in this workspace, so a key handed back last run cannot be dropped there either), so `build.sh` generated a fresh keystore. Android will refuse to install it over any earlier build — uninstall the old app once, then install. The keystore is deliberately *not* committed (a signing key is a credential); this run's key is handed back as `glasscut-signing-key.jks` so it can be dropped at `/scratch/saved/glasscut-signing-key.jks`, and every later build in this workspace will reuse it. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate for this build:
+**This build has a new signing key again** — `/scratch/saved` was empty again when the 1.1.37 build sandbox came up (it is mounted read-only in this workspace, so a key handed back last run cannot be dropped there either), so `build.sh` generated a fresh keystore. Android will refuse to install it over any earlier build — uninstall the old app once, then install. The keystore is deliberately *not* committed (a signing key is a credential); this run's key is handed back as `glasscut-signing-key.jks` so it can be dropped at `/scratch/saved/glasscut-signing-key.jks`, and every later build in this workspace will reuse it. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate for this build:
 
 ```
-6b47bb609cb0846e250efa9afd73813f277cea1dbb9d3b54d1cc5a8707aacb96
+6e924f6898d1eded4bb0983f7c4efd4451794c8c8d8a855b18afdc85be4351ea
 ```
 
 ## Build it yourself
