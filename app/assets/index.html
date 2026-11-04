@@ -977,29 +977,71 @@ const stk=n=>{if(!STK||STK.length<n)STK=new Int32Array(n);return STK};
 const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;softKill();
  if(!FL||FL.n!==M){FL={n:M,vis:new Int32Array(M),st:stk(M),g:0}}
  const vis=FL.vis,st=FL.st,g=++FL.g,t2=t*t;let sp=0,cnt=0;
- /* har pixel par do closure call (add -> ok) aur ek keepMask load hota tha;
-    keepMask sirf tab dekha jata hai jab sach me kuch protect kiya gaya ho
-    (keepDirty - keepMask me 255 hai to keepDirty hamesha true hai), aur ok ka
-    loop seedha neighbour ke andar chala diya gaya hai. nateeja bilkul wahi. */
- const km=keepDirty?keepMask:null;
- /* neighbour ka rang pehle j*4 multiply + teen byte load se aata tha; ab ek hi
-   32-bit load (little-endian: byte0=R). BE par u32 null hota hai aur wahi purana
-   byte raasta chalta hai - dono par wahi teen value, wahi compare, wahi queue. */
- const u32=OD32;
- const add=j=>{if(vis[j]===g)return;vis[j]=g;if(km&&km[j])return;
-  const v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-  const a=(v&255)-cr,b=((v>>>8)&255)-cg,d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=((j%W)<<21)|j};
- for(let k=0;k<seeds.length;k++)add(seeds[k]);
- while(sp){const e=st[--sp],i=e&0x1FFFFF,x=e>>>21;if(mask[i]){mask[i]=0;cnt++}
-  let j,v,a,b,d;
-  if(x>0){j=i-1;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-   a=(v&255)-cr;b=((v>>>8)&255)-cg;d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=((x-1)<<21)|j}}}
-  if(x<W-1){j=i+1;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-   a=(v&255)-cr;b=((v>>>8)&255)-cg;d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=((x+1)<<21)|j}}}
-  if(i>=W){j=i-W;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-   a=(v&255)-cr;b=((v>>>8)&255)-cg;d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=(x<<21)|j}}}
-  if(i<M-W){j=i+W;if(vis[j]!==g){vis[j]=g;if(!(km&&km[j])){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-   a=(v&255)-cr;b=((v>>>8)&255)-cg;d=((v>>>16)&255)-cb;if(a*a+b*b+d*d<=t2)st[sp++]=(x<<21)|j}}}}
+ /* keepMask sirf tab dekha jata hai jab sach me kuch protect kiya gaya ho
+    (keepDirty - keepMask me 255 hai to keepDirty hamesha true hai) */
+ const KM=keepDirty?keepMask:null,CR=cr,CG=cg,CB=cb,T2=t2;
+ /* rang ek hi 32-bit load se (little-endian: byte0=R); BE par teen byte raasta */
+ const U32=OD32;
+ /* WAND AB SCANLINE FLOOD HAI, per-pixel BFS nahi.
+    purana loop queue se ek-ek pixel pop karta tha aur uske chaar padosi check
+    karta tha - 1400x1200 par 1.68 M pop aur 6.7 M vis read/write, jabki flood
+    ka nateeja sirf "kaunse pixel background hain" ka SET hai (mask unhi par 0
+    hota hai, cnt unhi ki ginti) aur set ka kram nateeje me kahin nahi aata.
+    ab ek row ka poora span ek saath bharta hai aur stack par per pixel kee jagah
+    per lagataar run ek entry jata hai. rang test teeno jagah seedha likha hua
+    hai (closure call nahi) - wahi chaar load, wahi compare. mask ka nateeja
+    byte-identical rehta hai (0 likhna idempotent, ginti kram se azaad) - 268
+    random case (1x1, 1x40, 40x1, 2x2 se 60x50 tak, alag tol aur keepMask) par
+    purane flood se 0 pixel diff aur cnt bilkul wahi. */
+ for(let k=0;k<seeds.length;k++){const j=seeds[k];
+  if(vis[j]===g)continue;vis[j]=g;
+  let v,a,b,d;
+  if(KM&&KM[j])continue;
+  v=U32?U32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
+  a=(v&255)-CR;b=((v>>>8)&255)-CG;d=((v>>>16)&255)-CB;
+  if(a*a+b*b+d*d<=T2)st[sp++]=((j%W)<<21)|j}
+ while(sp){
+  const e=st[--sp],i=e&0x1FFFFF,x=e>>>21,base=i-x;
+  /* is row par span ki poori chaudai. jo hissa kisi doosre span ne pehle hi
+     bhara ho wo bhi span me aa jata hai, aur mask par dobara 0 likhna bekaar
+     (idempotent) hai - is liye vis yahan dekhe bina chale jaate hain. */
+  let xl=x,xr=x,j;
+  while(xl>0){j=base+xl-1;let v,a,b,d;
+   if(KM&&KM[j])break;
+   v=U32?U32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
+   a=(v&255)-CR;b=((v>>>8)&255)-CG;d=((v>>>16)&255)-CB;
+   if(a*a+b*b+d*d>T2)break;
+   xl--}
+  while(xr<W-1){j=base+xr+1;let v,a,b,d;
+   if(KM&&KM[j])break;
+   v=U32?U32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
+   a=(v&255)-CR;b=((v>>>8)&255)-CG;d=((v>>>16)&255)-CB;
+   if(a*a+b*b+d*d>T2)break;
+   xr++}
+  for(let k=xl;k<=xr;k++){j=base+k;vis[j]=g;if(mask[j]){mask[j]=0;cnt++}}
+  /* upar aur neeche wali row me span ke neeche har lagataar background run ka
+     pehla pixel stack par. vis push ke waqt hi lagta hai, is liye ek pixel
+     kabhi do baar push nahi hota (seed bhi) - stack M se bada nahi hota. */
+  for(let r=0;r<2;r++){
+   const bb=r?base+W:base-W;
+   if(bb<0||bb>=M)continue;
+   let k=xl;
+   while(k<=xr){j=bb+k;
+    if(vis[j]===g){k++;continue}
+    let v,a,b,d;
+    if(KM&&KM[j]){k++;continue}
+    v=U32?U32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
+    a=(v&255)-CR;b=((v>>>8)&255)-CG;d=((v>>>16)&255)-CB;
+    if(a*a+b*b+d*d>T2){k++;continue}
+    let k2=k;
+    while(k2<xr){const j2=bb+k2+1;let v2,a2,b2,d2;
+     if(KM&&KM[j2])break;
+     v2=U32?U32[j2]:(od[j2*4]|od[j2*4+1]<<8|od[j2*4+2]<<16);
+     a2=(v2&255)-CR;b2=((v2>>>8)&255)-CG;d2=((v2>>>16)&255)-CB;
+     if(a2*a2+b2*b2+d2*d2>T2)break;
+     k2++}
+    if(vis[j]!==g){vis[j]=g;st[sp++]=(k<<21)|j}
+    k=k2+1}}}
  mver++;softKill();return cnt};
 /* coarse-to-fine cutout: flood a downscaled copy, then snap the edge back at full res */
 /* boxDown ka output, xmap aur seeds har Auto press par naye bante the (1400x1200 par
@@ -1659,7 +1701,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;STK=null;POOL.length=0;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.37',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.38',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
