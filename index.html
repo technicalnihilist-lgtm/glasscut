@@ -471,8 +471,14 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
      (wand flood 8 B/px, cutout ~20 B/px, feather blur 1 B/px) - warna wo bekaar padi rehti hain */
   FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS=null;XR=null;DIRT=null;SDIRT=null;MBUF=null;BD=null;STK=null;
   /* island stats, undo ka khaali buffer aur JPEG flatten canvas bhi pichhli photo
-     ke size ke the (jcv CW*CH*4 = 1400x1200 par 6.7 MB) - nayi photo par chhod do */
-  ISL=null;KEMPTY=null;jcv=null;jcvx=null;SUB=null;RUN=null;fgFull=true;
+     ke size ke the (jcv CW*CH*4 = 1400x1200 par 6.7 MB) - nayi photo par chhod do.
+     KEMPTY isme exception hai: wo kisi ek photo ka data nahi rakhta (har baar
+     restore() use fill(0) kar ke hi deta hai), sirf ek shared khaali W*H buffer
+     hai. pehle use bhi har load par phenk diya jata tha, is liye nayi photo ke
+     baad pehla Undo use dobara allocate karta tha - 1400x1050 par 1.47 MB, theek
+     us waqt jab undo se ek snapshot buffer bhi banta hai. size match kare to
+     rakho, warna chhod do. */
+  ISL=null;if(KEMPTY&&KEMPTY.length!==NP)KEMPTY=null;jcv=null;jcvx=null;SUB=null;RUN=null;fgFull=true;
   if(ovUrl){URL.revokeObjectURL(ovUrl);ovUrl=null}
   /* nayi photo par purana undo/redo stack chhod diya jata tha, yaani uske saare
      snapshot buffers (1400x1050 par har ek 1.47 MB, 10 undo + 10 redo tak) ek
@@ -1856,13 +1862,27 @@ window.addEventListener('pointerup',cmpOff);window.addEventListener('blur',cmpOf
    canvas se zyada) to purana poora raasta hi sasta hai, aur wahi SUB ko exact rakhta
    hai (partial upload SUB ko sirf bada karta hai). */
 const hist=(from,to)=>{const old=mask,o0=MB[0],o1=MB[1],o2=MB[2],o3=MB[3];
+ /* mask khud abhi kisi stack me nahi hai (stack me hamesha copy hoti hai) aur
+    restore() usse turant badal deta hai - yaani ye buffer is kshan free hai.
+    snap() ko pehle naya buffer banane ki zaroorat nahi: use pool me daal do aur
+    bufOf() wahi pop karta hai, phir a.set(mask) me a===mask ho jata hai, jo
+    spec ke mutabik no-op (overlap wala self-copy) hai - snapshot me bilkul wahi
+    content aata hai. pehle har undo/redo press 1400x1050 par 1.47 MB ka naya
+    Uint8Array banata tha (aur usse pehle wala mask alag se recycle hota tha,
+    yaani ek allocation + ek GC kaam) - ab dono zero. nateeja byte-identical
+    rehta hai kyunki buffer ka content wahi hai. */
+ if(old&&old!==mask0&&old.length===W*H&&POOL.length<2)POOL.push(old);
  to.push(snap());restore(from.pop());mver++;
  let x0,y0,x1,y1;
  if(o2>=o0&&MB[2]>=MB[0]){x0=Math.min(o0,MB[0]);y0=Math.min(o1,MB[1]);x1=Math.max(o2,MB[2]);y1=Math.max(o3,MB[3])}
  else if(o2>=o0){x0=o0;y0=o1;x1=o2;y1=o3}
  else if(MB[2]>=MB[0]){x0=MB[0];y0=MB[1];x1=MB[2];y1=MB[3]}
  if(x0!==undefined&&(x1-x0+1)*(y1-y0+1)<W*H*0.5){SDIRT=[x0,y0,x1,y1];SUBX=true}else softKill();
- fullRender();recycleMask(old)};
+ /* `old` yahan recycle NAHI hota: snap() use pool se le chuka ho to wo ab `to`
+    stack ka live snapshot hai, aur use pool me wapas daalna wahi aliasing bug
+    lauta dega jo 1.1.21 me theek hua tha (undo ke baad mask aur redo entry ek hi
+    array par). pool se na mila ho to wo pehle ki tarah garbage hai. */
+ fullRender()};
 $('#bUndo').onclick=need(()=>{if(undo.length)hist(undo,redo);else toast('Undo ke liye kuch nahi')});
 $('#bRedo').onclick=need(()=>{if(redo.length)hist(redo,undo);else toast('Redo ke liye kuch nahi')});
 document.addEventListener('keydown',e=>{
@@ -1902,6 +1922,16 @@ const toBlob=(c,m)=>new Promise(res=>{
     toDataURL se likha jata hai (wahi type, wahi naam ka logic aage). */
  setTimeout(()=>{if(!done)viaUrl()},4000)});
 let jcv=null,jcvx=null,saveBusy=false;
+/* Native (GlassCutAndroid.saveImage) raaste par page bridge ko data de kar laut
+   jata hai. API<29 par native pehle permission maangta hai aur likhne ka kaam
+   baad me karta hai - yaani write fail hone ki khabar tab aati hai jab save()
+   ka blob local variable khatam ho chuka hota hai. us haalat me user ke paas
+   image bachane ka koi raasta nahi tha (sirf ek native "Save nahi hua" toast).
+   ab usi raaste ka blob yahan rakha jata hai taaki GlassCut.failed() usse
+   overlay me dikha sake. sirf native raaste par rakha jata hai (browser/share
+   raaste apna kaam khud kar dete hain) aur safal save par turant chhod diya
+   jata hai, warna multi-MB blob poore session ke liye pinned reh jata. */
+let lastSaveBlob=null;
 const save=async()=>{
  if(!od){toast('Pehle photo choose karo');return}
  /* ek waqt me ek save: do tap ek saath do file gallery me daal dete the.
@@ -1959,9 +1989,9 @@ const save=async()=>{
      raaste "Save ho gaya" dikhate hain, aur pending raaste par native khud
      GlassCut.saved() bulata hai). ab wahi message yahan bhi. */
   const bfin=ok=>{if(bdone)return;bdone=true;if(wd)clearTimeout(wd);saveBusy=false;
-   if(!ok)fallback(b);else toast('Save ho gaya')};
+   if(!ok)fallback(b);else{lastSaveBlob=null;toast('Save ho gaya')}};
   wd=setTimeout(()=>bfin(false),6000);
-  hold=true;
+  hold=true;lastSaveBlob=b;
   fr.onload=()=>{if(bdone)return;let res=null;
    try{res=br.saveImage(String(fr.result),name,mime)}catch(_){res='err'}
    const r=res==null?'':String(res);
@@ -2024,7 +2054,14 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.48',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.49',
+ /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
+    Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
+    tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
+    pehle se dikhta hai - file galley me nahi pahunchi, to image yahan se long-press
+    kar ke save ho sakti hai. */
+ saved:()=>{lastSaveBlob=null;toast('Save ho gaya')},
+ failed:()=>{toast('Save nahi hua');if(lastSaveBlob)fallback(lastSaveBlob)},
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full

@@ -238,7 +238,7 @@ public class MainActivity extends Activity {
             final String d = pendingData, n = pendingName, m = pendingMime;
             pendingData = pendingName = pendingMime = null;
             if (resultCode == RESULT_OK) finishPendingSave(d, n, m);
-            else jsToast("Save nahi hua");
+            else failPage();
             return;
         }
         super.onActivityResult(requestCode, resultCode, data);
@@ -410,14 +410,14 @@ public class MainActivity extends Activity {
     private void finishPendingSave(String data, String name, String mime) {
         final String d = data, n = name, m = mime;
         if (d == null) {
-            jsToast("Save nahi hua");
+            failPage();
             return;
         }
         Thread t = new Thread(new Runnable() {
             @Override
             public void run() {
                 String r = writeToGallery(d, n, m);
-                if (r == null || r.startsWith("err")) jsToast("Save nahi hua");
+                if (r == null || r.startsWith("err")) failPage();
                 else notifyPage();
             }
         }, "glasscut-save");
@@ -431,6 +431,36 @@ public class MainActivity extends Activity {
      * true to say. This is the other half of that deal: tell the page the write
      * really finished so it shows its own "Save ho gaya" exactly once.
      */
+    /**
+     * A save that the shell was going to do has failed (write error, permission
+     * denied, picker cancelled). The page already knows how to hand the picture
+     * over anyway - it keeps the encoded blob for exactly this case and shows it
+     * in its own "long-press to save" overlay - and it can say the message in the
+     * language the user picked. Before this, the shell showed its own hardcoded
+     * Hinglish Toast, so an English-mode user got a Hindi message and, on the
+     * API<29 permission path, got no picture at all: the page had already returned
+     * after "ok:pending", so the blob was gone and there was nothing left to save.
+     */
+    private void failPage() {
+        if (web == null) {
+            jsToast("Save nahi hua");
+            return;
+        }
+        web.post(new Runnable() {
+            @Override
+            public void run() {
+                WebView w = web;
+                if (w == null) return;
+                try {
+                    w.evaluateJavascript(
+                            "window.GlassCut&&GlassCut.failed&&GlassCut.failed();", null);
+                } catch (Exception e) {
+                    jsToast("Save nahi hua");
+                }
+            }
+        });
+    }
+
     private void notifyPage() {
         if (web == null) return;
         web.post(new Runnable() {
@@ -503,7 +533,7 @@ public class MainActivity extends Activity {
             final String d = pendingData, n = pendingName, m = pendingMime;
             pendingData = pendingName = pendingMime = null;
             if (res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED) finishPendingSave(d, n, m);
-            else jsToast("Save nahi hua");
+            else failPage();
         }
     }
 
