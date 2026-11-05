@@ -472,9 +472,22 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
   FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS=null;XR=null;DIRT=null;SDIRT=null;MBUF=null;BD=null;STK=null;
   /* island stats, undo ka khaali buffer aur JPEG flatten canvas bhi pichhli photo
      ke size ke the (jcv CW*CH*4 = 1400x1200 par 6.7 MB) - nayi photo par chhod do */
-  ISL=null;KEMPTY=null;jcv=null;SUB=null;RUN=null;fgFull=true;
+  ISL=null;KEMPTY=null;jcv=null;jcvx=null;SUB=null;RUN=null;fgFull=true;
   if(ovUrl){URL.revokeObjectURL(ovUrl);ovUrl=null}
-  undo=[];redo=[];POOL.length=0;fgVer=-1;fgSoft=-1;outV=-1;outS=-1;softKey='';mver++;
+  /* nayi photo par purana undo/redo stack chhod diya jata tha, yaani uske saare
+     snapshot buffers (1400x1050 par har ek 1.47 MB, 10 undo + 10 redo tak) ek
+     saath garbage ban jate the - theek usi waqt jab nayi photo ka decode + 6.7 MB
+     ImageData bhi memory maang raha hota hai. ab jo buffer naye size ka hi hai wo
+     pool me wapas chala jata hai (recycle length check karta hai aur pool 2 tak
+     seemit hai), is liye same-size photo dobara load karne par (ek hi camera ki
+     doosri photo - aam haalat) agle do stroke ka snapshot bina ek bhi naya
+     Uint8Array banaye banta hai. stack khud dono khaali ho jate hain, is liye koi
+     purana snapshot is pool ko nahi dekhta. */
+  POOL.length=0;
+  if(PEND){for(let i=0;i<PEND.length;i++)recycle(PEND[i]);PEND=null}
+  for(let i=0;i<undo.length;i++){const s=undo[i];if(s&&s[0]!==mask&&s[0]!==mask0)recycle(s)}
+  for(let i=0;i<redo.length;i++){const s=redo[i];if(s&&s[0]!==mask&&s[0]!==mask0)recycle(s)}
+  undo=[];redo=[];fgVer=-1;fgSoft=-1;outV=-1;outS=-1;softKey='';mver++;
   $('#empty').style.display='none';cv.style.display='block';setSize();fullRender();
   setTimeout(()=>{try{auto(true)}catch(_){toast('Auto dabao ya Wand / Erase use karo')}},30)},MAINLOAD)};
 $('#bPick').onclick=()=>$('#fMain').click();
@@ -1695,7 +1708,21 @@ cv.addEventListener('pointerdown',e=>{if(!od||drawing)return;
     button bhi erase stroke shuru kar deta tha (aur undo history me jagah leta tha) */
  if(e.button>0)return;e.preventDefault();refreshRect();const p=pt(e);
  if(mode==='wand'){if(p[0]<0||p[1]<0||p[0]>=W||p[1]>=H)return;
-  push();if(!wand(p[0],p[1])){recycle(undo.pop());abortPush();mver++;toast('Kuch nahi hata. Tolerance badhao ya Wand use karo')}render();return}
+  push();if(!wand(p[0],p[1])){recycle(undo.pop());abortPush();
+   /* kuch nahi hata (tap aise hisse par jo pehle se mitaya hua hai): mask ek byte
+      bhi nahi badla, is liye mver badhane ka matlab tha layer() ka poora W*H upload
+      dobara - 1400x1050 par 1.47 M alpha byte + 6 MB putImageData - bilkul bekaar,
+      kyunki fgc pehle se sahi tha. ab mver sirf tab badhta hai jab pichhla frame ek
+      *hard* preview tha (fgSoft=-1): us haalat me fgc ki alpha hard hai aur use soft
+      banana zaroori hai. warna layer() apne cache par laut jata hai aur nateeja
+      bilkul wahi rehta hai (canvas hash pehle jaisa). */
+   if(feather>0&&fgSoft!==feather)mver++;
+   toast('Kuch nahi hata. Tolerance badhao ya Wand use karo')}
+  /* render() ki jagah fullRender(): slider ka fast preview rAF me pending reh jata
+     hai aur wo is render ke baad chal kar soft frame ko hard edge se dhak deta tha
+     (wahi bug jo 1.1.45 me buttons ke liye theek hua; auto() pehle se fullRender
+     use karta hai) */
+  fullRender();return}
  push();strokeCh=0;stR=-1;drawing=true;pid=e.pointerId;lastX=p[0];lastY=p[1];try{cv.setPointerCapture(e.pointerId)}catch(_){}
  const rs=ringSize()+'px';ring.style.width=ring.style.height=rs;ring.style.display='block';moveRing(e);strokeCh+=stroke(p[0],p[1],p[0],p[1],p[2])});
 cv.addEventListener('pointermove',e=>{if(!drawing||e.pointerId!==pid)return;const p=pt(e);moveRing(e);strokeCh+=stroke(lastX,lastY,p[0],p[1],p[2]);lastX=p[0];lastY=p[1]});
@@ -1846,7 +1873,7 @@ const toBlob=(c,m)=>new Promise(res=>{
     session me Save dobara kabhi kaam nahi karta tha. ab 4 s baad wahi canvas
     toDataURL se likha jata hai (wahi type, wahi naam ka logic aage). */
  setTimeout(()=>{if(!done)viaUrl()},4000)});
-let jcv=null,saveBusy=false;
+let jcv=null,jcvx=null,saveBusy=false;
 const save=async()=>{
  if(!od){toast('Pehle photo choose karo');return}
  /* ek waqt me ek save: do tap ek saath do file gallery me daal dete the.
@@ -1865,9 +1892,22 @@ const save=async()=>{
     off rehta hai - screen aur file dono edit dikhate hain. */
  showOrig=false;render(false);
  let src=cv;
+ /* JPEG me alpha nahi hota, is liye transparent background wali photo ko safed
+    canvas par flatten kiya jata hai. pehle har save par jcv.width/height dobara
+    set hote the - canvas ki width set karna (chahe wahi value ho) poora backing
+    store phenk kar naya banata hai: 1400x1050 par har JPEG save me 5.88 MB ka
+    naya surface + uska zero-fill, jabki usi par turant poora safed fillRect hota
+    hai. saath hi getContext('2d') bhi har save par dobara maanga jata tha. ab
+    canvas aur uska context dono cache hote hain aur size badalne par hi dobara
+    bante hain; state (transform/alpha) saaf likh di jati hai taaki purane save ka
+    koi asar na bache - safed fill + drawImage bilkul wahi kram me, is liye file
+    ke byte wahi rehte hain. */
  if(fmt==='jpeg'&&!opaqueBg()){
-  if(!jcv)jcv=mk();
-  const j=jcv;j.width=CW;j.height=CH;const jx=j.getContext('2d');jx.fillStyle='#fff';jx.fillRect(0,0,CW,CH);jx.drawImage(cv,0,0);src=j}
+  if(!jcv){jcv=mk();jcvx=jcv.getContext('2d');jcv.width=CW;jcv.height=CH}
+  else if(jcv.width!==CW||jcv.height!==CH){jcv.width=CW;jcv.height=CH}
+  const j=jcv,jx=jcvx;
+  jx.setTransform(1,0,0,1,0,0);jx.globalAlpha=1;jx.globalCompositeOperation='source-over';
+  jx.fillStyle='#fff';jx.fillRect(0,0,CW,CH);jx.drawImage(cv,0,0);src=j}
  let mime='image/'+fmt,b=await toBlob(src,mime);
  if(!b&&fmt!=='png'){mime='image/png';b=await toBlob(src,mime)}
  if(!b){toast('Save nahi hua');return}
@@ -1950,13 +1990,13 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
    flatten canvas, island buffers) chhod diya jata hai aur fgc/outc/bgb/sm
    1x1 ho jate hain - agla render sab kuch wapas bana leta hai, is liye screen
    par kuch nahi badalta. photo khud (origc/fgi/mask) chhui bhi nahi jati. */
-const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;STK=null;POOL.length=0;
+const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;jcvx=null;STK=null;POOL.length=0;
  /* opacity probe canvas bhi ek cache hai (CW x CH surface) - trim par chhod do,
     agla check ise dobara bana leta hai */
  opc=null;opx=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.46',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.47',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
