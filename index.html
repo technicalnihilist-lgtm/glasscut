@@ -521,7 +521,14 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
      allocate karta tha - 1400x1050 par 1.47 MB, theek us waqt jab undo se ek
      snapshot buffer bhi banta hai. size match kare to rakho, warna chhod do. */
   if(KEMPTY&&KEMPTY.length!==NP)KEMPTY=null;SUB=null;fgFull=true;
-  if(ovUrl){URL.revokeObjectURL(ovUrl);ovUrl=null}
+  /* nayi photo par purana save-fallback overlay band ho jata hai. pehle yahan
+     sirf blob URL revoke hota tha: overlay khula reh jata tha, uske #ovImg ka src
+     revoked URL par atka rehta tha (yaani nayi photo ke upar toota hua image), aur
+     lastSaveBlob (pichhli photo ka multi-MB blob) bhi pakda rehta tha - usi bug
+     ka teesra raasta jo 1.1.54 me closeOv aur trim par theek hua tha (wahan photo
+     load ka raasta chhoot gaya tha). ab wahi ek closeOv() chalta hai: class hatti
+     hai, URL revoke hota hai aur blob ka reference bhi chhut jata hai. */
+  closeOv()
   /* nayi photo par purana undo/redo stack chhod diya jata tha, yaani uske saare
      snapshot buffers (1400x1050 par har ek 1.47 MB, 10 undo + 10 redo tak) ek
      saath garbage ban jate the - theek usi waqt jab nayi photo ka decode + 6.7 MB
@@ -887,9 +894,22 @@ const blurBg=()=>{const blue=bg.t==='bluetint'?1:0,sg=bgSig;
  /* sm/bgb ko width/height dene se canvas khud hi poora saaf ho jata hai (spec: size
     set karne par bitmap reset hoti hai), is liye uske baad ka clearRect bekaar tha -
     blur slider ke har step par 1400x1200 ka ek poora clear (1.68 M pixel). */
- const f=2+P.bl*1.6,sw=Math.max(2,CW/f|0),sh=Math.max(2,CH/f|0);sm.width=sw;sm.height=sh;
+ const f=2+P.bl*1.6,sw=Math.max(2,CW/f|0),sh=Math.max(2,CH/f|0);
+ /* canvas ki width set karna (chahe wahi value ho) poora backing store phenk kar
+    naya banata hai - 1400x1050 par bgb ka 5.88 MB. blur slider ka har step cache
+    key badalta hai (P.bl), is liye har step par do surface (bgb 5.88 MB + sm
+    1.47 MB) allocate + zero-fill hote the, jabki size zyadatar same rehta hai
+    (sirf P.bl badla, CW/CH nahi; aur Blue blur toggle par to sw/sh bhi wahi).
+    size match kare to canvas ko saaf karna usi kaam ko bina allocation karta
+    hai - bgb/sm par agla draw poore canvas ko dhak deta hai (transparent photo
+    par bhi, kyunki fresh canvas ka content bhi transparent hi hota hai), is liye
+    nateeja byte-identical rehta hai. */
+ if(sm.width!==sw||sm.height!==sh){sm.width=sw;sm.height=sh}
+ else{smx.setTransform(1,0,0,1,0,0);smx.globalAlpha=1;smx.clearRect(0,0,sw,sh)}
  const sx=smx;cover(sx,origc,W,H,sw,sh);
- bgb.width=CW;bgb.height=CH;const bx=bxc;bx.imageSmoothingEnabled=true;bx.imageSmoothingQuality='high';bx.drawImage(sm,0,0,CW,CH);
+ if(bgb.width!==CW||bgb.height!==CH){bgb.width=CW;bgb.height=CH}
+ else{bxc.setTransform(1,0,0,1,0,0);bxc.globalAlpha=1;bxc.clearRect(0,0,CW,CH)}
+ const bx=bxc;bx.imageSmoothingEnabled=true;bx.imageSmoothingQuality='high';bx.drawImage(sm,0,0,CW,CH);
  if(blue){bx.globalAlpha=0.72;bx.fillStyle='#0a5cff';bx.fillRect(0,0,CW,CH);bx.globalAlpha=1}};
 /* tmp par bana composite (outline ring + subject) sirf in cheezon par depend karta
    hai: fgc (fgKey), transform (t[0],t[1],t[2]), outline ki chaudai (r) aur tilt
@@ -2220,7 +2240,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.54',
+window.GlassCut={version:'1.1.55',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
