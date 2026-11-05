@@ -667,6 +667,23 @@ let SBOX=null;
    (wand, cutout, grow/shrink, invert, smooth, reset, undo/redo, enforce) softM
    purana pad jata hai - tab poora blur dobara banta hai. */
 const softKill=()=>{softKey='';SDIRT=null};
+/* softTouch(box): mask sirf `box` ke andar badla hai (aur box ke bahar pakka 0 hai).
+   feather wala softM tab poora canvas (1400x1050 par 1.47 M pixel) dobara blur karne
+   aur poora upload karne ke bajaye sirf box+r ka hissa dobara nikaalta hai - box blur
+   radius r se zyada door asar nahi dalta, is liye box+r ke bahar ka purana softM abhi
+   bhi bilkul sahi hai (wahan 0 hi rehta hai). blurRect poore blur ke saath byte-identical
+   hai (wahi tables, wahi integer jod, wahi edge clamp), is liye nateeja ek byte nahi
+   badalta. jab feather 0 ho (koi softM nahi) ya softM hi na ho to purana raasta. */
+const softTouch=(x0,y0,x1,y1)=>{
+ if(x1<x0||y1<y0){softKill();return}
+ /* feather on hai par softM abhi bana hi nahi / kisi aur radius ka hai: agla render
+    use poora dobara banayega, is liye box bekaar hai */
+ if(feather>0&&(!softM||softKey!==feather)){softKill();return}
+ /* yahan ya feather 0 hai (hard mask) ya softM poora valid hai - dono me badla hua
+    box hi kaafi hai */
+ if(SDIRT){if(x0<SDIRT[0])SDIRT[0]=x0;if(y0<SDIRT[1])SDIRT[1]=y0;
+  if(x1>SDIRT[2])SDIRT[2]=x1;if(y1>SDIRT[3])SDIRT[3]=y1}
+ else SDIRT=[x0,y0,x1,y1]};
 /* SUB = fgc ke asli alpha ka bounding box (mask ke non-zero pixels ka box).
    fgc par is box ke bahar har pixel transparent hai, is liye drawSubj jab fgc/outc
    draw karta hai to sirf yahi box bhejna bilkul wahi pixels deta hai - poora
@@ -703,6 +720,13 @@ const mbAdd=(x0,y0,x1,y1)=>{if(x0<MB[0])MB[0]=x0;if(y0<MB[1])MB[1]=y0;if(x1>MB[2
    per-frame allocation gaya. nateeja wahi: key bhi inhi do value se banti thi. */
 const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
  if(mver===fgVer&&sv===fgSoft)return;
+ /* feather 0 par softM use hi nahi hota, par mask badal chuka hota hai: yahan
+    softKey khali kar dena zaroori hai. warna feather wapas 2 karne par layer()
+    purane (stale) softM ko valid maan leta aur sirf ek box ka hissa dobara
+    nikaalta - screen par galat edge. buffer chhoda jata hai taaki feather on hone
+    par wahi array reuse ho. feather>0 par yeh line nahi chalti, is liye stroke ke
+    fast frames ka soft cache (aur uski partial blur) pehle jaisa chalta rehta hai. */
+ if(feather<=0)softKey='';
  if(fgc.width!==W||fgc.height!==H){fgc.width=W;fgc.height=H;fgFull=true}
  let m=mask,pr=null;
  if(soft){
@@ -744,6 +768,12 @@ const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
    if(SBOX){if(sx0<SBOX[0])SBOX[0]=sx0;if(sy0<SBOX[1])SBOX[1]=sy0;if(sx1>SBOX[2])SBOX[2]=sx1;if(sy1>SBOX[3])SBOX[3]=sy1}
    SDIRT=null}
   m=softM}
+ /* feather 0 (hard mask) par upar wala soft block chalta hi nahi, is liye badla hua
+    box (SDIRT) wahan tak nahi pahunchta tha aur har op poore MB ko dobara upload
+    karta tha (1400x1050 par 6.7 MB putImageData + 1.47 M alpha byte). alpha box ke
+    bahar bilkul nahi badla, is liye wahi box bhejna bilkul wahi pixels deta hai.
+    fast frame apna DIRT khud rakhta hai, is liye wahan SDIRT chhua nahi jata. */
+ else if(!fast&&SDIRT){pr=SDIRT;SDIRT=null}
  /* fgc par jo hissa pehle se sahi hai use dobara upload karna bekaar hai. mask
     sirf DIRT (fast frame) ya SDIRT (stroke ka poora chhua hissa) me badla hai,
     aur in dono ke bahar ke alpha bytes pehle jaise hi hain - soft preview me bhi,
@@ -1900,7 +1930,12 @@ const morph=g=>{push();
  }else for(let y=0;y<H;y++)for(let x=0;x<W;x++){const i=y*W+x;let v=o[i];if(x>0)v=m(v,o[i-1]);if(x<W-1)v=m(v,o[i+1]);if(y>0)v=m(v,o[i-W]);if(y<H-1)v=m(v,o[i+W]);mask[i]=v}
  /* Grow har taraf ek pixel badhta hai - box bhi ek pixel bada */
  if(g&&MB[2]>=MB[0])mbAdd(Math.max(0,MB[0]-1),Math.max(0,MB[1]-1),Math.min(W-1,MB[2]+1),Math.min(H-1,MB[3]+1));
- enforce();mver++;softKill();fullRender()};
+ /* Grow/Shrink sirf MB ke andar mask badalta hai (Grow MB ko ek pixel chauda bhi kar
+    deta hai), aur MB ke bahar mask pakka 0 hai - is liye feather wala softM bhi
+    sirf MB+r me dobara nikaalna kaafi hai. enforce() agar keepMask se kuch wapas
+    laata hai to wo khud softKill() kar deta hai, aur us haalat me softTouch purana
+    poora raasta hi leta hai. */
+ enforce();mver++;softTouch(MB[0],MB[1],MB[2],MB[3]);fullRender()};
 $('#bGrow').onclick=need(()=>morph(1));$('#bShr').onclick=need(()=>morph(0));
 $('#bInv').onclick=need(()=>{push();for(let i=0;i<mask.length;i++)mask[i]=255-mask[i];mbAll();enforce();mver++;softKill();fullRender()});
 /* Smooth ka box blur bhi sirf MB+2 tak: radius 2 ka blur MB se do pixel door ke
@@ -1912,7 +1947,9 @@ $('#bSmo').onclick=need(()=>{push();
   blurTabs(2);const b=blurRect(mask,2,bxa,bya,bxb,byb,BLS.o);
   for(let y=bya;y<=byb;y++){const row=y*W;for(let x=bxa;x<=bxb;x++){const i=row+x,v=(b[i]-128)*3+128;mask[i]=v<0?0:v>255?255:v}}
   mbAdd(bxa,bya,bxb,byb)}
- enforce();mver++;softKill();fullRender()});
+ /* Smooth bhi sirf MB+2 tak mask badalta hai (aur mbAdd se MB utna chauda ho jata
+    hai) - wahi tark jo morph me hai */
+ enforce();mver++;softTouch(MB[0],MB[1],MB[2],MB[3]);fullRender()});
 /* Reset pehle do naye 1.3 MB buffer banata tha (snapshot ke liye ek, aur mask ke
    liye ek) aur purana mask seedha garbage chala jata tha. ab purana array pool me
    jata hai aur bufOf() use hi lauta deta hai - ek allocation kam, aur uska 1.3 MB
@@ -2128,7 +2165,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.52',
+window.GlassCut={version:'1.1.53',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
