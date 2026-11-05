@@ -272,7 +272,15 @@ win.addEventListener('animationend',e=>{if(e.target!==win)return;
 $('#bClose').onclick=()=>{if(win.classList.contains('closing'))return;closeAll();win.classList.add('closing');
  /* band window par 4D Motion ka timer chalte rehna bekaar hai */
  winClosed=true;idleCheck()};
-$('#launch').onclick=()=>{$('#launch').classList.remove('show');win.classList.remove('hidden');void win.offsetWidth;win.classList.add('opening');
+$('#launch').onclick=()=>{$('#launch').classList.remove('show');
+ /* band hone ki animation (wclose .6s) abhi chal rahi ho to us par 'opening'
+    add karna kaam nahi karta: CSS me .closing .opening ke baad aata hai, is liye
+    wclose hi chalti rehti hai aur uska animationend phir window ko hidden kar
+    deta hai - yaani band hone ke 600 ms ke andar dobara kholne par app band hi
+    dikhta rehta hai (launch button wapas aa jata hai) aur koi raasta nahi bachta.
+    'closing' hata dene se wo animation radd ho jati hai (animationcancel, koi
+    animationend nahi) aur wopen shuru se chalti hai. */
+ win.classList.remove('hidden','closing');void win.offsetWidth;win.classList.add('opening');
  winClosed=false;idleCheck()};
 
 /* sheets */
@@ -1149,7 +1157,7 @@ const recycleMask=old=>{if(!old||old===mask||old===mask0||old.length!==W*H||POOL
    (1400x1200 par test: redo ke baad canvas purane state par hi atka rehta tha).
    ab redo ke buffers sirf agle push par recycle hote hain - tab tak wo stack ya to
    abort se wapas aa chuka hota hai (PEND null ho jata hai) ya pakka bekaar hai. */
-const push=()=>{if(PEND){for(let i=0;i<PEND.length;i++)recycle(PEND[i]);PEND=null}
+const push=()=>{stopDraw();if(PEND){for(let i=0;i<PEND.length;i++)recycle(PEND[i]);PEND=null}
  PEND=redo.length?redo:null;redo=[];
  undo.push(snap());if(undo.length>10)recycle(undo.shift())};
 /* operation kuch nahi badla: redo stack wapas, aur uske buffers chhue bhi nahi */
@@ -1829,6 +1837,16 @@ const end=e=>{if(!drawing)return;if(e&&e.pointerId!=null&&pid!=null&&e.pointerId
     tha - screen aur save ki file alag dikhti thi. ab wo pending frame cancel hota hai
     aur sirf ek full render bachta hai. */
  if(raf){cancelAnimationFrame(raf);raf=0}fastReq=false;render()};
+/* stroke ke dauraan `mask` wahi array hota hai jise push() ne snapshot me copy kiya
+   tha. us waqt doosri ungli se Undo / Redo / Auto / Reset / Grow / Shrink / Smooth /
+   Blue blur dab jaye to restore() mask ko kisi purane snapshot array par le jata hai
+   aur bachi hui pointermoves usi array me likhti rehti hain - yaani wo array stack
+   par live mask ban jata hai (wahi aliasing jo 1.1.21 me theek hui thi, doosre
+   raaste se). naapa: stroke ke beech Undo dabane par release ke baad Redo us state
+   par nahi lauta (canvas hash 1093664802 badle -108470714) aur agla Undo shuru wali
+   photo par nahi aaya. ab har history/mask handler pehle stroke ko poora karta hai
+   (release jaisa hi: enforce + render), uske baad hi history chhalti hai. */
+const stopDraw=()=>{if(drawing)end()};
 cv.addEventListener('pointerup',end);cv.addEventListener('pointercancel',end);
 cv.addEventListener('pointerleave',e=>{if(drawing&&!e.buttons)end()});
 /* Stroke sirf tab khatam hota tha jab pointerup/pointercancel theek canvas par
@@ -1917,7 +1935,7 @@ window.addEventListener('pointerup',cmpOff);window.addEventListener('blur',cmpOf
    W*H blur + poora upload karta tha - har press par. union box bahut bada ho (aadhe
    canvas se zyada) to purana poora raasta hi sasta hai, aur wahi SUB ko exact rakhta
    hai (partial upload SUB ko sirf bada karta hai). */
-const hist=(from,to)=>{const old=mask,o0=MB[0],o1=MB[1],o2=MB[2],o3=MB[3];
+const hist=(from,to)=>{stopDraw();const old=mask,o0=MB[0],o1=MB[1],o2=MB[2],o3=MB[3];
  /* mask khud abhi kisi stack me nahi hai (stack me hamesha copy hoti hai) aur
     restore() usse turant badal deta hai - yaani ye buffer is kshan free hai.
     snap() ko pehle naya buffer banane ki zaroorat nahi: use pool me daal do aur
@@ -2110,7 +2128,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.51',
+window.GlassCut={version:'1.1.52',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
