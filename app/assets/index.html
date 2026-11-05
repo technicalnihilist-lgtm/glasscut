@@ -264,6 +264,19 @@ const tr=s=>lang==='en'&&EN[s]?EN[s]:s;
 const toast=m=>{const t=$('#toast');t.textContent=tr(m);t.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('show'),2300)};
 const need=f=>(...a)=>{if(!od){toast('Pehle photo choose karo');return}f(...a)};
 const AB=()=>window.GlassCutAndroid||window.AndroidBridge||null;
+/* Android shell safe-area insets. pehle ye sirf onPageFinished par push hote the,
+   yaani page apna pehla frame (aur window ki poori opening animation) --sat/--sab
+   ke bina, yaani env() par 0 par banata tha, aur insets aane par layout ek jhatke
+   me neeche khisak jata tha. ab shell ek synchronous bridge getter deta hai jo
+   wahi value lauta deta hai jo pushInsets bhejta hai; page use script chalte hi
+   (pehle paint se pehle) laga leta hai. bridge na ho, getter na ho ya insets
+   abhi pata na ho (khali string) to kuch nahi hota aur purana pushInsets raasta
+   jaisa hai waisa hi chalta hai. */
+const applyInsets=()=>{const b=AB();if(!b||!b.insets)return;
+ try{const v=String(b.insets());if(!v)return;const i=v.indexOf('|');if(i<0)return;
+  const t=+v.slice(0,i),u=+v.slice(i+1);
+  if(t>=0&&u>=0){root.setProperty('--sat',t+'px');root.setProperty('--sab',u+'px')}}catch(_){}};
+applyInsets();
 
 /* window open/close */
 win.addEventListener('animationend',e=>{if(e.target!==win)return;
@@ -1584,15 +1597,50 @@ if(i<N-nw){j=i+nw;if(!bg[j]&&MATCH[j]){bg[j]=1;st2[gp++]=(x<<20)|j}}}
     press me 4457 push. ab capacity ke saath badhne wale typed buffers reuse hote
     hain, aur lab ka reset usi scan me ho jata hai jo drop lagata hai (pehle
     alag lab.fill(-1) poora N chal raha tha). */
+ /* ISLAND LABELLING AB SCANLINE FILL HAI, per-pixel BFS nahi - wahi badlav jo
+    1.1.51 me wand ke flood par hua tha. purana loop har pixel ko queue se ek-ek
+    pop karta tha aur uske chaar padosi check karta tha, yaani ek island ke
+    N pixel par N pop aur 4N padosi check. is pass ka nateeja sirf yeh hai ki
+    kaunse pixel kis island me hain (id, size, rang ka jod) - andar ka kram
+    kahin nahi jata. ab ek row ka poora lagataar span ek saath bharta hai aur
+    queue me per-pixel kee jagah per-run entry jati hai.
+    id ka kram bilkul wahi rehta hai: bahar ka loop row-major chalta hai, is liye
+    island ki id uske sabse pehle (row-major) pixel par banti hai - chahe andar
+    ka traversal koi bhi ho. island ka pixel-set bhi wahi hai (4-connectivity),
+    is liye isz/isr/isg/isb bilkul wahi, aur r0/g0/b0 integer jod hain (255*N
+    tak, double me exact) - kram se inka jod nahi badalta. is liye drop[] aur
+    bg[] byte-identical, aur mask/render bhi.
+    ginti ka dhyan: pixel ko push ke waqt (run ka pehla) ya span failaate waqt
+    theek ek baar mark kiya jata hai, aur jod sirf naye mark hue pixel ka hota
+    hai - is liye koi pixel do baar nahi ginta (purana flood-span jaisa hissa
+    dobara chalta hai, par wahan mask par dobara 0 likhna idempotent tha; yahan
+    dobara ginna galat hota). */
  let isl=islBuf(1024),isz=isl.sz,isr=isl.sr,isg=isl.sg,isb=isl.sb,drop=isl.drop,ni=0;
+ const isU=SD32;
  for(let i=0;i<N;i++){if(bg[i]||lab[i]>=0)continue;
   if(ni>=isl.cap){isl=islBuf(ni+1);isz=isl.sz;isr=isl.sr;isg=isl.sg;isb=isl.sb;drop=isl.drop}
-  const id=ni++;let h=0,t=0;lab[i]=id;q3[t++]=((i%nw)<<20)|i;let n2=0,r0=0,g0=0,b0=0;
-  while(h<t){const e=q3[h++],j=e&0xFFFFF,x=e>>>20;n2++;const vv=px(j);r0+=vv&255;g0+=(vv>>>8)&255;b0+=(vv>>>16)&255;let k;
-   if(x>0){k=j-1;if(!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=((x-1)<<20)|k}}
-   if(x<nw-1){k=j+1;if(!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=((x+1)<<20)|k}}
-   if(j>=nw){k=j-nw;if(!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=(x<<20)|k}}
-   if(j<N-nw){k=j+nw;if(!bg[k]&&lab[k]<0){lab[k]=id;q3[t++]=(x<<20)|k}}}
+  const id=ni++;let t=0;lab[i]=id;q3[t++]=((i%nw)<<20)|i;let n2=0,r0=0,g0=0,b0=0;
+  while(t){const e=q3[--t],j=e&0xFFFFF,x=e>>>20,base=j-x;
+   /* push ke waqt yahi pixel mark hua tha, is liye ginti/jod yahin se shuru */
+   let vv=isU?isU[j]:(sd[j*4]|sd[j*4+1]<<8|sd[j*4+2]<<16);
+   n2++;r0+=vv&255;g0+=(vv>>>8)&255;b0+=(vv>>>16)&255;
+   let xl=x,xr=x,k;
+   while(xl>0){k=base+xl-1;if(bg[k]||lab[k]>=0)break;xl--;lab[k]=id;
+    vv=isU?isU[k]:(sd[k*4]|sd[k*4+1]<<8|sd[k*4+2]<<16);
+    n2++;r0+=vv&255;g0+=(vv>>>8)&255;b0+=(vv>>>16)&255}
+   while(xr<nw-1){k=base+xr+1;if(bg[k]||lab[k]>=0)break;xr++;lab[k]=id;
+    vv=isU?isU[k]:(sd[k*4]|sd[k*4+1]<<8|sd[k*4+2]<<16);
+    n2++;r0+=vv&255;g0+=(vv>>>8)&255;b0+=(vv>>>16)&255}
+   /* upar aur neeche wali row me span ke neeche har lagataar khaali run ka
+      pehla pixel queue me - wahi seed jo per-pixel BFS har pixel ke liye
+      alag-alag daalta tha */
+   for(let r=0;r<2;r++){const bb=r?base+nw:base-nw;
+    if(bb<0||bb>=N)continue;
+    let q=xl;
+    while(q<=xr){const j2=bb+q;
+     if(bg[j2]||lab[j2]>=0){q++;continue}
+     let q2=q;while(q2<xr){const j3=bb+q2+1;if(bg[j3]||lab[j3]>=0)break;q2++}
+     lab[j2]=id;q3[t++]=(q<<20)|j2;q=q2+1}}}
   isz[id]=n2;isr[id]=r0;isg[id]=g0;isb[id]=b0}
  if(ni>1){
   const total=N;
@@ -2011,7 +2059,14 @@ const fallback=b=>{if(ovUrl)URL.revokeObjectURL(ovUrl);ovUrl=URL.createObjectURL
    hai - is liye dikhne me ek pixel bhi nahi badalta. back button bhi yahi karta
    hai (pehle wo bhi sirf class hataata tha). */
 const closeOv=()=>{$('#ov').classList.remove('show');
- if(ovUrl){URL.revokeObjectURL(ovUrl);ovUrl=null}};
+ if(ovUrl){URL.revokeObjectURL(ovUrl);ovUrl=null}
+ /* fallback overlay band hone par uska blob bhi chhod do. native raasta fail hone
+    par save() usi blob ko lastSaveBlob me rakhta hai taaki failed() overlay dikha
+    sake - par overlay band karne ke baad wo blob sirf pada rehta tha (multi-MB,
+    agle safal save tak) aur failed() usi purani image ko dobara dikha deta tha.
+    ab overlay band karte hi reference chala jata hai; agla save apna blob khud
+    rakhta hai. */
+ lastSaveBlob=null};
 $('#ovX').onclick=closeOv;
 /* toBlob kabhi-kabhi bade canvas par chupchaap null de deta hai (purane WebView /
    kam RAM). pehle save wahin "Save nahi hua" par khatam ho jata tha. ab usi canvas
@@ -2162,10 +2217,10 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;jcvx=null;STK=null;POOL.length=0;
  /* opacity probe canvas bhi ek cache hai (CW x CH surface) - trim par chhod do,
     agla check ise dobara bana leta hai */
- opc=null;opx=null;
+ opc=null;opx=null;lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.53',
+window.GlassCut={version:'1.1.54',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par

@@ -51,7 +51,9 @@ public class MainActivity extends Activity {
     private WebView web;
     private FrameLayout root;
     private ValueCallback<Uri[]> pendingFiles;
-    private int lastTop = -1, lastBottom = -1;
+    /* volatile: page inhe JavaBridge ke apne thread se padhta hai (insets()), jabki
+       ye UI thread par likhe jate hain - warna page ko purani value mil sakti hai. */
+    private volatile int lastTop = -1, lastBottom = -1;
     private String pendingData;   // image waiting for a storage permission
     private String pendingName;
     private String pendingMime;
@@ -247,6 +249,25 @@ public class MainActivity extends Activity {
     /* ---------------- save to gallery ---------------- */
 
     public class Bridge {
+        /**
+         * Safe-area insets ka synchronous read, page ke pehle frame ke liye.
+         *
+         * Pehle insets sirf onPageFinished par push hote the (CSS variable ek JS
+         * call se). Us waqt tak page apna pehla frame --sat/--sab ke bina bana
+         * chuka hota tha, yaani padding 0 se shuru ho kar baad me ek jhatke me
+         * badalti thi. Ye getter wahi value deta hai jo pushInsets bhejta hai
+         * ("top|bottom", dp me), taaki page script chalte hi use laga le.
+         * Insets abhi pata na hon to khali string - page tab purane push raaste
+         * par chalta hai, is liye kuch tootta nahi.
+         */
+        @JavascriptInterface
+        public String insets() {
+            int t = lastTop, b = lastBottom;
+            if (t < 0) return "";
+            float d = getResources().getDisplayMetrics().density;
+            return (t / d) + "|" + (b / d);
+        }
+
         /** Called from the page: base64 data URL + file name + mime type. */
         @JavascriptInterface
         public String saveImage(String dataUrl, String name, String mime) {
