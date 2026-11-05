@@ -1262,7 +1262,20 @@ const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;
      per badle hue pixel, aur span ke bahar ka hissa box me nahi jata. */
   const ry=base/W|0;
   let ka=-1,kb=-1;
-  for(let k=xl;k<=xr;k++){j=base+k;vis[j]=g;if(mask[j]){mask[j]=0;cnt++;if(ka<0)ka=k;kb=k}}
+  /* span ka vis stamp ek memset se. pehle yeh span ke har pixel par ek typed-array
+     store karta tha (poore background par ~1.4 M store ek tap me); vis me span ke
+     sab pixel par bilkul wahi value g likhi jati hai, is liye fill ka nateeja
+     byte-identical hai. */
+  vis.fill(g,base+xl,base+xr+1);
+  /* mask ka content sirf MB ke andar hota hai - MB ke bahar mask ka har byte
+     pakka 0 hai, is liye wahan 0 likhna (aur cnt ginna) bekaar hai. ab mask ka
+     scan span aur MB ke jod par hi chalta hai, span poora MB se bahar ho to
+     poora loop chhoot jata hai. MB ki yeh guarantee wahi hai jispar Grow/Shrink,
+     Smooth aur enforce pehle se chalte hain, aur flood mask me sirf 0 likhta hai
+     (255 kabhi nahi), is liye box ko chauda karne ki zaroorat bhi nahi. */
+  const mx0=xl>MB[0]?xl:MB[0],mx1=xr<MB[2]?xr:MB[2];
+  if(mx0<=mx1&&ry>=MB[1]&&ry<=MB[3])
+   for(let k=mx0;k<=mx1;k++){j=base+k;if(mask[j]){mask[j]=0;cnt++;if(ka<0)ka=k;kb=k}}
   if(ka>=0){if(ka<cx0)cx0=ka;if(kb>cx1)cx1=kb;if(ry<cy0)cy0=ry;if(ry>cy1)cy1=ry}
   /* upar aur neeche wali row me span ke neeche har lagataar background run ka
      pehla pixel stack par. vis push ke waqt hi lagta hai, is liye ek pixel
@@ -1409,16 +1422,22 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
  for(let a=0;a<rn;a++){const o=CND[a]<<2,c=bk[o];R0[a]=bk[o+1]/c;G0[a]=bk[o+2]/c;B0[a]=bk[o+3]/c}
  /* seen bhi sirf ek generation stamp rakhta hai, koi value nahi - is liye usme 32-bit
     ki jagah 8-bit kaafi hai (1..255, 0 khaali). 1400x1200 par seen 6.72 MB -> 1.68 MB
-    aur full-res seed scan har pixel par 4 byte ki jagah 1 byte likhta hai. vis/vis2
-    Int32Array hi rakhe gaye: coarse BFS ka read-modify pattern (vis[j]!==gen, phir
+    aur full-res seed scan har pixel par 4 byte ki jagah 1 byte likhta hai. vis
+    Int32Array hi rakha gaya: coarse BFS ka read-modify pattern (vis[j]!==gen, phir
     vis[j]=gen) 8-bit par naap kar dheema nikla (1.68 M check par 1.2 -> 1.8 ms), aur
-    wahi buffer cutout ka sabse garma-garam loop hai. */
+    wahi buffer cutout ka sabse garma-garam loop hai.
+    pass 2 ka apna vis2 buffer ab poora hata diya gaya: us pass me "dekha gaya" ka
+    matlab hamesha bg[j]===1 hi tha (vis2 gen usi pal likha jata tha jab bg[j]=1 hota
+    tha, aur pass 1 ke bg cell seed loop me pehle hi gen the) - yaani vis2[j]!==gen
+    aur !bg[j] ek hi shart thi, do jagah likhi hui. ab sirf bg dekha jata hai, is liye
+    N (coarse grid, 1400x1050 par 700x525 = 367,500 cell) ka ek Int32Array
+    (1.47 MB) kam, aur seed loop me har bg cell par ek store kam. bg ka kram, st2 ka kram aur mask bilkul wahi rehta hai. */
  /* st (pass 1), st2 (pass 2), q3 (islands) aur q (full-res snap) ek hi scratch
     stack hai: chaaron baari-baari chalte hain aur har ek poora khatam hone ke baad
     hi agla shuru hota hai (sp=0, phir gp=0, phir islands, phir snap). teen alag
     N-int buffer aur ek M-int buffer rakhne ki zaroorat nahi thi -
     1400x1200 par st+st2+q3+q = 11.76 MB, ab ek hi max(N,M) int buffer 6.72 MB. */
- if(!CC||CC.n!==N||CC.m!==M){CC={n:N,m:M,st:stk(Math.max(N,M)),vis2:new Int32Array(N),
+ if(!CC||CC.n!==N||CC.m!==M){CC={n:N,m:M,st:stk(Math.max(N,M)),
   match:new Uint8Array(N),
   lab:new Int32Array(N).fill(-1),bg:new Uint8Array(N),
   inner:new Uint8Array(N),
@@ -1426,9 +1445,9 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
  const C=CC;
  /* 8-bit generation 255 par wrap hota hai - tab teeno buffer saaf aur g 1 se dobara.
     stamp sirf "is run me dekha gaya" batata hai, is liye reset se nateeja nahi badalta. */
- if(++C.g>255){C.vis2.fill(0);C.seen.fill(0);C.g=1}
+ if(++C.g>255){C.seen.fill(0);C.g=1}
  const gen=C.g;
- const st=C.st,bg=C.bg.fill(0),vis2=C.vis2,st2=st,lab=C.lab,q3=st;
+ const st=C.st,bg=C.bg.fill(0),st2=st,lab=C.lab,q3=st;
  const t2=tol*tol;let sp=0;
  const tb=tol*(keepObj?1.35:1.7),t2b=tb*tb;
  /* coarse grid (downscaled copy) ka rang pehle har neighbour check par p=i*4 ka
@@ -1504,23 +1523,23 @@ const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.ma
  /* pass 2 ka seed loop pehle HAR bg cell ko queue me daalta tha (1400x1200 par
     273,693 seed) aur BFS unme se har ek ko pop kar ke chaar neighbour check karta
     tha. unme se 272,367 (99.5%) ke chaaron neighbour pehle se bg hain - unka
-    pop kuch nahi karta, kyunki har bg cell vis2 pehle hi gen hai. aise cell ko
-    seed karna hi nahi zaroori. vis2 phir bhi har bg cell par likha jata hai
-    (warna koi doosra cell usse dobara test kar leta), sirf queue entry bachti hai.
-    bg aur mask bilkul wahi rehte hain - seed ka kram pehle jaisa (row chadhte). */
- for(let y=0,y0=0;y<nh;y++,y0+=nw)for(let x=0;x<nw;x++){const i=y0+x;if(bg[i]){vis2[i]=gen;
+    pop kuch nahi karta, kyunki unka har padosi pehle se bg hai. aise cell ko
+    seed karna hi nahi zaroori. bg aur mask bilkul wahi rehte hain - seed ka kram
+    pehle jaisa (row chadhte). */
+ for(let y=0,y0=0;y<nh;y++,y0+=nw)for(let x=0;x<nw;x++){const i=y0+x;if(bg[i]){
   if((x>0&&!bg[i-1])||(x<nw-1&&!bg[i+1])||(y>0&&!bg[i-nw])||(y<nh-1&&!bg[i+nw]))st2[gp++]=((x)<<20)|i}}
  /* grow pehle while ke andar banta tha (har queue pop par ek naya function
     object), phir bahar; ab wo bhi BFS ke andar inline hai - har neighbour check
     par ek call kam (1.68 M per Auto press). ok2 pehle chalta hai aur uske baad
-    vis2 set hota hai, bilkul pehle jaisa, is liye kram aur nateeja same. */
- /* yahi inline pass 2 me bhi: ok2 ki jagah seedha likha hua test. yahan pehle
-    vis2 check hota tha aur uske baad ok2, ab bhi wahi kram hai. */
+    bg set hota hai, bilkul pehle jaisa, is liye kram aur nateeja same. */
+ /* yahi inline pass 2 me bhi: ok2 ki jagah seedha likha hua test. "dekha gaya"
+    yahan bg[j] khud hai (upar vis2 hataane ki wajah dekho), is liye check wahi
+    hai jo pehle do jagah likha tha. */
  while(gp){const e=st2[--gp],i=e&0xFFFFF,x=e>>>20;let j,v,a,b2,c2,hit;
- if(x>0){j=i-1;if(vis2[j]!==gen&&MATCH[j]){vis2[j]=gen;bg[j]=1;st2[gp++]=((x-1)<<20)|j}}
-if(x<nw-1){j=i+1;if(vis2[j]!==gen&&MATCH[j]){vis2[j]=gen;bg[j]=1;st2[gp++]=((x+1)<<20)|j}}
-if(i>=nw){j=i-nw;if(vis2[j]!==gen&&MATCH[j]){vis2[j]=gen;bg[j]=1;st2[gp++]=(x<<20)|j}}
-if(i<N-nw){j=i+nw;if(vis2[j]!==gen&&MATCH[j]){vis2[j]=gen;bg[j]=1;st2[gp++]=(x<<20)|j}}}
+ if(x>0){j=i-1;if(!bg[j]&&MATCH[j]){bg[j]=1;st2[gp++]=((x-1)<<20)|j}}
+if(x<nw-1){j=i+1;if(!bg[j]&&MATCH[j]){bg[j]=1;st2[gp++]=((x+1)<<20)|j}}
+if(i>=nw){j=i-nw;if(!bg[j]&&MATCH[j]){bg[j]=1;st2[gp++]=(x<<20)|j}}
+if(i<N-nw){j=i+nw;if(!bg[j]&&MATCH[j]){bg[j]=1;st2[gp++]=(x<<20)|j}}}
  /* island cleanup: background ke andar pade objects bache rahein.
     island ke rang ka jod labelling ke andar hi ho jata hai (alag full scan nahi) */
  /* island stats pehle chaar JS array me push hote the - islands.png par ek Auto
@@ -2091,7 +2110,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.50',
+window.GlassCut={version:'1.1.51',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
