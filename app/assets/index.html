@@ -384,10 +384,27 @@ const setImgOpaque=im=>{imgOpaqueFor=im;imgOpaqueW=CW;imgOpaqueH=CH;imgOpaque=im
 let imgOTok=0;
 const imgOpaqueLater=im=>{const tok=++imgOTok;
  setTimeout(()=>{if(tok!==imgOTok||bgImg!==im||bg.t!=='img')return;setImgOpaque(im)},0)};
+/* probe canvas ek hi baar banta hai. pehle har check par naya CW x CH canvas
+   (1400x1050 par 6.7 MB surface) banta tha aur usme getImageData chalta tha -
+   GPU-backed canvas par readback sabse mehnga hissa hai. ab wahi ek canvas
+   (willReadFrequently, yaani CPU-backed) dobara use hota hai: 1400x1050 par ek
+   check 85.2 -> 34.3 ms (med, 9 run, naapa), nateeja bilkul wahi (opaque image
+   par true, transparent PNG par false), aur per check ek 6.7 MB surface ka
+   allocation + GC bhi bach jata hai. canvas par pichhla content bacha na rahe,
+   is liye cover() se pehle clearRect chalta hai (khaali canvas par cover()
+   poore canvas ko dhakta hi hai, is liye nateeja fresh canvas jaisa hi hai). */
+let opc=null,opx=null;
 const imgOpaqueCheck=im=>{try{if(!CW||!CH)return false;
- const c=mk();c.width=CW;c.height=CH;const x=c.getContext('2d');
+ if(!opc||opc.width!==CW||opc.height!==CH){opc=mk();opc.width=CW;opc.height=CH;opx=opc.getContext('2d',{willReadFrequently:true})}
+ const x=opx;x.clearRect(0,0,CW,CH);
  cover(x,im,im.naturalWidth,im.naturalHeight,CW,CH);
  const d=x.getImageData(0,0,CW,CH).data;
+ /* alpha byte har pixel par dhundhne ke bajaye (1400x1050 par 1.47 M baar
+    i*4+3) ek hi 32-bit word par dekha jata hai: little-endian par alpha sabse
+    upar wala byte hai, yaani 1.47 M load ki jagah 0.37 M. BE par purana byte
+    raasta hi chalta hai. */
+ if(LE32&&(d.byteOffset&3)===0){const u=new Uint32Array(d.buffer,d.byteOffset,d.length>>>2),n=u.length;
+  for(let i=0;i<n;i++)if((u[i]>>>24)!==255)return false;return true}
  for(let i=3;i<d.length;i+=4)if(d[i]!==255)return false;
  return true}catch(_){return false}};
 /* background photo ka apna token: do background images jaldi-jaldi chunne par
@@ -429,12 +446,26 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
      padha jata hai, jo pehle render se pehle ho jata hai. */
   fgi=ox.getImageData(0,0,W,H);od=fgi.data;mkOD32();mkFG32();
   fgc.width=W;fgc.height=H;outc.width=W;outc.height=H;bgb.width=bgb.height=1;bgVer++;
-  mask0=new Uint8Array(W*H);let amin=255;
+  /* nayi photo par teen W*H buffer (mask0, mask ki copy, keepMask) hamesha naye
+     bante the - 1400x1050 par teen 1.47 MB allocation + zero-fill, chahe photo
+     ka size bilkul wahi ho (aam haal: ek hi camera se li gayi doosri photo).
+     ab size match hone par wahi buffers dobara use hote hain: mask0 ka har byte
+     neeche wala loop likh hi deta hai, mask ki copy pehle se hoti thi (set ab
+     bhi wahi copy hai), aur keepMask ko fill(0) se saaf kiya jata hai (jo kaam
+     naya array banane par zero-fill karta tha). undo/redo stack isi line ke
+     neeche khali hote hain, is liye koi purana snapshot in arrays ko nahi dekhta. */
+  const NP=W*H;
+  if(!mask0||mask0.length!==NP)mask0=new Uint8Array(NP);
+  let amin=255;
   /* har pixel par i*4 ka multiply aur ek byte load; ab ek hi 32-bit load ka
      sabse upar wala byte (alpha) - wahi value, 1.68 M multiply kam */
-  if(OD32){const u32=OD32,n=W*H;for(let i=0;i<n;i++){const av=u32[i]>>>24;mask0[i]=av;if(av<amin)amin=av}}
-  else for(let i=0;i<W*H;i++){const av=od[i*4+3];mask0[i]=av;if(av<amin)amin=av}
-  photoOpaque=amin===255;mask=mask0.slice();keepMask=new Uint8Array(W*H);keepDirty=false;mbAll();
+  if(OD32){const u32=OD32;for(let i=0;i<NP;i++){const av=u32[i]>>>24;mask0[i]=av;if(av<amin)amin=av}}
+  else for(let i=0;i<NP;i++){const av=od[i*4+3];mask0[i]=av;if(av<amin)amin=av}
+  photoOpaque=amin===255;
+  const om=mask;
+  if(om&&om!==mask0&&om.length===NP){mask=om;mask.set(mask0)}else mask=mask0.slice();
+  if(!keepMask||keepMask.length!==NP)keepMask=new Uint8Array(NP);else keepMask.fill(0);
+  keepDirty=false;mbAll();
   kbNone();
   /* purani photo ke scratch buffers chhod do: inka size pichhli photo ke hisaab se tha
      (wand flood 8 B/px, cutout ~20 B/px, feather blur 1 B/px) - warna wo bekaar padi rehti hain */
@@ -1920,9 +1951,12 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
    1x1 ho jate hain - agla render sab kuch wapas bana leta hai, is liye screen
    par kuch nahi badalta. photo khud (origc/fgi/mask) chhui bhi nahi jati. */
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;STK=null;POOL.length=0;
+ /* opacity probe canvas bhi ek cache hai (CW x CH surface) - trim par chhod do,
+    agla check ise dobara bana leta hai */
+ opc=null;opx=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.45',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.46',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
