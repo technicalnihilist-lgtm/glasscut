@@ -489,7 +489,15 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
   for(let i=0;i<redo.length;i++){const s=redo[i];if(s&&s[0]!==mask&&s[0]!==mask0)recycle(s)}
   undo=[];redo=[];fgVer=-1;fgSoft=-1;outV=-1;outS=-1;softKey='';mver++;
   $('#empty').style.display='none';cv.style.display='block';setSize();fullRender();
-  setTimeout(()=>{try{auto(true)}catch(_){toast('Auto dabao ya Wand / Erase use karo')}},30)},MAINLOAD)};
+  /* yeh 30 ms ka timer photo ke token ke saath bandha hai. pehle timer bas chalta
+     tha: do photo jaldi-jaldi chunne par (ya dheemi decode par) pehli photo ka
+     auto doosri photo par poora cutout chala deta tha - 1400x1050 par ~250 ms ka
+     bekaar long task, aur mask par ek extra kaam jo user ne maanga hi nahi tha
+     (uska Undo bhi usi par khisak jata tha). ab token badal jane par timer chup
+     chhap laut jata hai; nayi photo apna auto khud schedule karti hai. */
+  const at=MAINLOAD.t;
+  setTimeout(()=>{if(MAINLOAD.t!==at)return;
+   try{auto(true)}catch(_){toast('Auto dabao ya Wand / Erase use karo')}},30)},MAINLOAD)};
 $('#bPick').onclick=()=>$('#fMain').click();
 $('#fMain').onchange=e=>{const f=e.target.files[0];e.target.value='';if(!f)return;pickPhoto(f)};
 /* drag & drop / paste on desktop */
@@ -1608,8 +1616,28 @@ if(i<N-nw){j=i+nw;if(vis2[j]!==gen&&MATCH[j]){vis2[j]=gen;bg[j]=1;st2[gp++]=(x<<
     wahan 255 likhta hai) - us haalat me poora box hi surakshit hai */
  if(keepDirty)mbAll();else if(mbx1<0){MB[0]=0;MB[1]=0;MB[2]=-1;MB[3]=-1}else{MB[0]=mbx0;MB[1]=mby0;MB[2]=mbx1;MB[3]=mby1}
  mver++;softKill();return cnt};
-const auto=(silent)=>{if(!od)return;push();const c=cutout();
+/* AK = pichhle safal cutout ka signature [mver,W,H,tol,keepObj]. cutout ka nateeja
+   sirf mask0 (photo), tol, keepObj, keepMask aur us waqt ke mask par depend karta
+   hai - aur mask ya keepMask badalne wala har raasta (stroke, wand, grow/shrink,
+   invert, smooth, reset, undo/redo, blue blur, nayi photo) mver badhata hai.
+   is liye signature match hone ka matlab hai: dobara cutout chalane par mask me
+   ek byte bhi nahi badlega. pehle us haalat me bhi poora cutout chalta tha
+   (boxDown + dono coarse BFS + islands + full-res snap) aur aakhir me cnt=0 par
+   wahi "Kuch nahi hata" message dikhta tha - 1400x1050 par ~250 ms ka long task.
+   yeh sabse aam haalat hai: photo load hote hi auto(true) chal chuka hota hai,
+   aur user Auto dobara dabata hai (ya do baar dabata hai) - dono baar poora
+   cutout bekaar jata tha. ab wahi jawab turant, aur nateeja bilkul wahi
+   (canvas hash base build jaisa, kaam 0). */
+let AK=[-1,-1,-1,-1,-1];
+const auto=(silent)=>{if(!od)return;
+ if(AK[0]===mver&&AK[1]===W&&AK[2]===H&&AK[3]===tol&&AK[4]===keepObj){
+  /* kuch nahi badla: bas wahi message jo cutout ke cnt=0 par aata tha. undo/redo
+     stack aur mver chhue nahi jate - baseline me bhi push+recycle+abortPush ka
+     net asar zero tha, aur mask na badalne par mver badhana sirf bekaar upload tha. */
+  if(!silent)toast('Kuch nahi hata. Tolerance badhao ya Wand use karo');return}
+ push();const c=cutout();
  if(c<=0){recycle(undo.pop());abortPush();mver++;if(!silent)toast(c<0?'Background clear nahi hai, Wand try karo':'Kuch nahi hata. Tolerance badhao ya Wand use karo');return}
+ AK[0]=mver;AK[1]=W;AK[2]=H;AK[3]=tol;AK[4]=keepObj;
  fullRender();toast(silent?'Background hata diya - ab naya background chuno':'Ho gaya! Erase / Restore se saaf karo')};
 const wand=(x,y)=>{x=Math.min(W-1,Math.max(0,x|0));y=Math.min(H-1,Math.max(0,y|0));let r=0,g=0,b=0,n=0;
  for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const px=x+dx,py=y+dy;if(px>=0&&py>=0&&px<W&&py<H){const p=(py*W+px)*4;r+=od[p];g+=od[p+1];b+=od[p+2];n++}}
@@ -1996,7 +2024,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.47',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
+window.GlassCut={version:'1.1.48',saved:()=>toast('Save ho gaya'),failed:()=>toast('Save nahi hua'),
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
