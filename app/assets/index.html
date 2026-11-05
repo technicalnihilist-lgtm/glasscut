@@ -438,14 +438,25 @@ const MAINLOAD=mkLoadBox();
 BGLOAD=mkLoadBox();
 const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWidth,im.naturalHeight));
   W=Math.max(1,Math.round(im.naturalWidth*s));H=Math.max(1,Math.round(im.naturalHeight*s));
-  origc.width=W;origc.height=H;const ox=origc.getContext('2d');ox.drawImage(im,0,0,W,H);
+  /* canvas ki width set karna (chahe wahi value ho) poora backing store phenk kar
+     naya banata hai - 1400x1050 par 5.88 MB, aur wahi teen canvas par (origc,
+     fgc, outc) har photo load par. size match kare to canvas ko saaf karna usi
+     kaam ko bina allocation karta hai; origc par clearRect zaroori hai, warna
+     transparent PNG ka pixel purani photo ke pixel par blend ho jata. */
+  const crs=origc.width!==W||origc.height!==H;
+  if(crs){origc.width=W;origc.height=H}
+  const ox=origc.getContext('2d');
+  if(!crs){ox.setTransform(1,0,0,1,0,0);ox.globalAlpha=1;ox.clearRect(0,0,W,H)}
+  ox.drawImage(im,0,0,W,H);
   /* pehle yahan photo ke pixel do baar rakhe jate the: getImageData ka data (od)
      aur usi ka ek copy jo fgi ka ImageData banta tha - 1400x1200 par 6.7 MB extra
      poore session ke liye. ab fgi hi od hai: layer() sirf alpha byte likhta hai
      (RGB waise hi rehta hai), aur od ka asli alpha sirf neeche mask0 banate waqt
      padha jata hai, jo pehle render se pehle ho jata hai. */
   fgi=ox.getImageData(0,0,W,H);od=fgi.data;mkOD32();mkFG32();
-  fgc.width=W;fgc.height=H;outc.width=W;outc.height=H;bgb.width=bgb.height=1;bgVer++;
+  if(fgc.width!==W||fgc.height!==H){fgc.width=W;fgc.height=H}else{fgx.setTransform(1,0,0,1,0,0);fgx.globalAlpha=1;fgx.clearRect(0,0,W,H)}
+  if(outc.width!==W||outc.height!==H){outc.width=W;outc.height=H}else{oxc.setTransform(1,0,0,1,0,0);oxc.globalAlpha=1;oxc.clearRect(0,0,W,H)}
+  bgb.width=bgb.height=1;bgVer++;
   /* nayi photo par teen W*H buffer (mask0, mask ki copy, keepMask) hamesha naye
      bante the - 1400x1050 par teen 1.47 MB allocation + zero-fill, chahe photo
      ka size bilkul wahi ho (aam haal: ek hi camera se li gayi doosri photo).
@@ -467,18 +478,28 @@ const pickPhoto=f=>{loadImg(f,im=>{const s=Math.min(1,1400/Math.max(im.naturalWi
   if(!keepMask||keepMask.length!==NP)keepMask=new Uint8Array(NP);else keepMask.fill(0);
   keepDirty=false;mbAll();
   kbNone();
-  /* purani photo ke scratch buffers chhod do: inka size pichhli photo ke hisaab se tha
-     (wand flood 8 B/px, cutout ~20 B/px, feather blur 1 B/px) - warna wo bekaar padi rehti hain */
-  FL=null;CC=null;BLS=null;softM=null;softKey='';SD=null;XM=null;SEEDS=null;XR=null;DIRT=null;SDIRT=null;MBUF=null;BD=null;STK=null;
-  /* island stats, undo ka khaali buffer aur JPEG flatten canvas bhi pichhli photo
-     ke size ke the (jcv CW*CH*4 = 1400x1200 par 6.7 MB) - nayi photo par chhod do.
-     KEMPTY isme exception hai: wo kisi ek photo ka data nahi rakhta (har baar
-     restore() use fill(0) kar ke hi deta hai), sirf ek shared khaali W*H buffer
-     hai. pehle use bhi har load par phenk diya jata tha, is liye nayi photo ke
-     baad pehla Undo use dobara allocate karta tha - 1400x1050 par 1.47 MB, theek
-     us waqt jab undo se ek snapshot buffer bhi banta hai. size match kare to
-     rakho, warna chhod do. */
-  ISL=null;if(KEMPTY&&KEMPTY.length!==NP)KEMPTY=null;jcv=null;jcvx=null;SUB=null;RUN=null;fgFull=true;
+  /* scratch buffers: har ek ka apna size guard hai (FL.n!==M, CC.n/N CC.m/M,
+     BLS.n, SD.length, SEEDS.length, XR.W, RUN.length, MBUF.length, BD.w/h/nw/nh,
+     ISL.cap, STK.length, softM.length, jcv ke width/height) aur jab size match
+     na kare to wo khud naya bana leta hai. is liye nayi photo par sab phenkna
+     zaroori nahi tha: size badalne par guard pehle jaise hi naya buffer banata
+     hai, aur size wahi ho (ek hi camera ki doosri photo - aam haalat) to wahi
+     buffer dobara kaam aata hai. pehle same-size reload par 11 buffer (1400x1050
+     par 17.31 MB: STK 5.88, BLS.t/BLS.o 2x1.47, CC ke saat 5.88+2.94, SD 1.47)
+     sirf is liye dobara bante the ki wo agle 30 ms me chahiye hi nahi the - theek
+     us waqt jab nayi photo ka 5.88 MB ImageData bhi allocate ho raha hota hai.
+     jo sach me purani photo ka delta rakhte hain (DIRT, SDIRT, SUB) wo ab bhi
+     chhute hain, aur softKey='' se feather blur apne aap dobara banta hai. */
+  softKey='';DIRT=null;SDIRT=null;XM=null;
+  /* island stats (ISL), undo ka khaali buffer (KEMPTY), JPEG flatten canvas (jcv)
+     aur cutout ka run table (RUN) bhi upar wale niyam se chalta hai: sabka apna
+     size guard hai, is liye sirf KEMPTY ka size yahan check karna kaafi hai. wo
+     kisi ek photo ka data nahi rakhta (har baar restore() use fill(0) kar ke hi
+     deta hai), sirf ek shared khaali W*H buffer hai. pehle use bhi har load par
+     phenk diya jata tha, is liye nayi photo ke baad pehla Undo use dobara
+     allocate karta tha - 1400x1050 par 1.47 MB, theek us waqt jab undo se ek
+     snapshot buffer bhi banta hai. size match kare to rakho, warna chhod do. */
+  if(KEMPTY&&KEMPTY.length!==NP)KEMPTY=null;SUB=null;fgFull=true;
   if(ovUrl){URL.revokeObjectURL(ovUrl);ovUrl=null}
   /* nayi photo par purana undo/redo stack chhod diya jata tha, yaani uske saare
      snapshot buffers (1400x1050 par har ek 1.47 MB, 10 undo + 10 redo tak) ek
@@ -516,7 +537,14 @@ const setSize=()=>{if(!od)return;
  else{const[a,b]=ratio.split(':').map(Number),r=a/b,M=Math.min(1400,Math.max(W,H));
   if(r>=1){CW=M;CH=Math.max(1,Math.round(M/r))}else{CH=M;CW=Math.max(1,Math.round(M*r))}}
  CW=Math.max(1,Math.round(CW));CH=Math.max(1,Math.round(CH));
- cv.width=CW;cv.height=CH;tmp.width=CW;tmp.height=CH;bgVer++;THas=false;
+ /* width set karna (chahe wahi value ho) poora backing store phenk kar naya
+    banata hai: 1400x1050 par do surface (cv aur tmp) = 11.76 MB, aur photo
+    load par setSize hamesha chalta hai. size wahi ho to canvas saaf karna usi
+    kaam ko bina allocation karta hai - render() nateeja waise bhi poora likh
+    deta hai, is liye ek bhi pixel nahi badalta. */
+ if(cv.width!==CW||cv.height!==CH){cv.width=CW;cv.height=CH}else{cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1;cx.clearRect(0,0,CW,CH)}
+ if(tmp.width!==CW||tmp.height!==CH){tmp.width=CW;tmp.height=CH}else{tcx.setTransform(1,0,0,1,0,0);tcx.globalAlpha=1;tcx.clearRect(0,0,CW,CH)}
+ bgVer++;THas=false;
  /* photo ya ratio badalne par CW/CH badal jata hai, aur uske saath cover() ka crop
     bhi - "Apni photo" wala opaque flag purane size ka jawab tha. galat "opaque" par
     render ka clearRect chhoot jata tha, is liye transparent kinare wali background
@@ -1715,7 +1743,16 @@ const stroke=(a,b,c,d,k)=>{const r=Math.max(2,brush*k/2),keep=mode==='keep',v=ke
   if(keep){ch+=stamp2(keepMask,255,mask,255,px,py,r);if(ch)keepDirty=true}
   else if(v===0)ch+=stamp2(mask,0,keepDirty?keepMask:null,0,px,py,r);
   else ch+=stamp2(mask,255,null,0,px,py,r)}
- mver++;sched(true);return ch};
+ /* stroke ne ek bhi pixel nahi badla (ungli pehle se mite hue hisse par ghoom
+    rahi hai - erase ke saath sabse aam haalat): pehle yahan mver badh kar
+    sched(true) chalta tha, yaani har pointermove par ek poora fast frame
+    (layer ka partial alpha upload + drawSubj ka composite) usi canvas par
+    dobara likhta tha jo pehle se bilkul sahi tha. ab jab ch===0 hai to koi
+    frame schedule nahi hota; mask ek byte bhi nahi badla, is liye screen par
+    nateeja wahi rehta hai (ring DOM element alag se chalta hai). DIRT/SDIRT
+    box waise bhi bade hi hote hain, is liye agla asli frame (ch>0) aur
+    release ka poora render pehle jaise hi sahi pixels dete hain. */
+ if(ch){mver++;sched(true)}return ch};
 /* pt() har pointermove par chalta hai. getBoundingClientRect() har call par layout
    force karta tha, isliye ab rect ek baar (stroke ke shuru me / resize par) naapa jata hai. */
 let cRect=null;
@@ -2054,7 +2091,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.49',
+window.GlassCut={version:'1.1.50',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
