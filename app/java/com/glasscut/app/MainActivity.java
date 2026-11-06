@@ -532,9 +532,20 @@ public class MainActivity extends Activity {
         web.post(new Runnable() {
             @Override
             public void run() {
+                /* Ye ek hi evaluateJavascript site hai jispar try/catch nahi tha.
+                   Runnables yahan baad me chalte hain, aur tab tak renderer mar
+                   chuka ho (onRenderProcessGone) ya WebView destroy ho raha ho to
+                   evaluateJavascript IllegalStateException phenkta hai - aur wo
+                   UI thread par hota hai, yaani poora app band. Theek wahi lamha
+                   jab ye chalta hai wo save ka aakhri step hai (thread se notify),
+                   is liye crash us waqt hoti jab user ko "Save ho gaya" milna tha.
+                   pushInsets/trimPage/failPage/pause/resume/back pehle se guarded
+                   hain; ab saaton call sites ek jaise hain (6/7 -> 7/7). */
                 WebView w = web;
                 if (w == null) return;
-                w.evaluateJavascript("window.GlassCut&&GlassCut.saved&&GlassCut.saved();", null);
+                try {
+                    w.evaluateJavascript("window.GlassCut&&GlassCut.saved&&GlassCut.saved();", null);
+                } catch (Exception ignored) { }
             }
         });
     }

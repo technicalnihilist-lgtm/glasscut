@@ -312,10 +312,29 @@ const hideSheet=el=>{if(!el||!el.classList.contains('show')||el.classList.contai
 const closeAll=()=>hideSheet(openSh);
 $('#scrim').onclick=closeAll;
 $('#bOpt').onclick=()=>openSh===$('#shOpt')?closeAll():showSheet($('#shOpt'));
-$$('.grab').forEach(g=>{const sh=g.parentElement;let y0=0,dy=0,on=false;
- g.onpointerdown=e=>{on=true;y0=e.clientY;dy=0;sh.style.transition='none';try{g.setPointerCapture(e.pointerId)}catch(_){}};
- g.onpointermove=e=>{if(!on)return;dy=Math.max(0,e.clientY-y0);sh.style.transform='translateY('+dy+'px)'};
- g.onpointerup=g.onpointercancel=()=>{if(!on)return;on=false;sh.style.transition='';sh.style.transform='';if(dy>90){sh.style.setProperty('--dy',dy+'px');hideSheet(sh)}dy=0}});
+/* Sheet drag (grab handle): stop ab ek hi jagah se hota hai aur har us raaste se
+   juda hai jahan se pointer khatam ho sakta hai. Pehle cleanup sirf grab par aane
+   wale pointerup/pointercancel me tha. setPointerCapture WebView me throw kar sakta
+   hai (try/catch khaali chhod deta tha), aur capture ke bina ungli grab se neeche
+   khisak kar chhoot jaye to up event grab par aata hi nahi - tab `on` hamesha true
+   reh jata tha aur sheet par translateY(...) + transition:none atka reh jata tha:
+   wo sheet dobara khulne par bhi utni hi khiski dikhti thi aur uski opening
+   animation band ho jati thi (naapa: pointerdown + pointermove + capture kho jane
+   par transform 'translateY(30px)' aur transition 'none' bane rehte the, jahan
+   band hone par dono khali hone chahiye). ab lostpointercapture, window-level
+   pointerup/pointercancel aur window blur - teeno wahi ek stop chalate hain,
+   bilkul wahi jo canvas ke stroke par pehle se hai. pointerId bhi yaad rakha jata
+   hai, is liye doosri ungli ka up is drag ko nahi todta. */
+$$('.grab').forEach(g=>{const sh=g.parentElement;let y0=0,dy=0,on=false,gp=null;
+ const stop=e=>{if(!on)return;if(e&&e.pointerId!=null&&gp!=null&&e.pointerId!==gp)return;
+  on=false;gp=null;sh.style.transition='';sh.style.transform='';
+  if(dy>90){sh.style.setProperty('--dy',dy+'px');hideSheet(sh)}dy=0};
+ g.onpointerdown=e=>{if(e.button>0)return;on=true;gp=e.pointerId;y0=e.clientY;dy=0;sh.style.transition='none';try{g.setPointerCapture(e.pointerId)}catch(_){}};
+ g.onpointermove=e=>{if(!on||(gp!=null&&e.pointerId!==gp))return;dy=Math.max(0,e.clientY-y0);sh.style.transform='translateY('+dy+'px)'};
+ g.onpointerup=stop;g.onpointercancel=stop;
+ g.addEventListener('lostpointercapture',stop);
+ window.addEventListener('pointerup',stop);window.addEventListener('pointercancel',stop);
+ window.addEventListener('blur',()=>{if(on)stop()})});
 
 /* controls */
 const slider=(id,fn)=>{const r=$('#'+id),v=$('#'+id+'v'),upd=()=>{r.style.setProperty('--p',(r.value-r.min)/(r.max-r.min)*100+'%');if(v)v.textContent=r.value};upd();r.addEventListener('input',()=>{upd();fn(+r.value)})};
@@ -2264,6 +2283,14 @@ const fallback=b=>{if(ovUrl)URL.revokeObjectURL(ovUrl);ovUrl=URL.createObjectURL
    hai (pehle wo bhi sirf class hataata tha). */
 const closeOv=()=>{$('#ov').classList.remove('show');
  if(ovUrl){URL.revokeObjectURL(ovUrl);ovUrl=null}
+ /* src hataana: URL revoke karna already-decode ho chuki image ko nahi hataata,
+    is liye #ovImg apni decoded bitmap (1400x1200 RGBA par ~6.7 MB) session ke
+    aakhir tak pakde rehta tha - aur overlay sirf tab khulta hai jab save ke dono
+    raaste fail hon, yaani theek us waqt jab memory pehle se tang ho. #ov sirf
+    .show par display hota hai, aur fallback() har baar naya src set karta hai,
+    is liye dikhne me ek pixel bhi nahi badalta (naapa: close ke baad src khali,
+    agle fallback par phir se bhara hua). */
+ const oi=$('#ovImg');if(oi.getAttribute('src'))oi.removeAttribute('src')
  /* fallback overlay band hone par uska blob bhi chhod do. native raasta fail hone
     par save() usi blob ko lastSaveBlob me rakhta hai taaki failed() overlay dikha
     sake - par overlay band karne ke baad wo blob sirf pada rehta tha (multi-MB,
@@ -2424,7 +2451,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.59',
+window.GlassCut={version:'1.1.61',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
