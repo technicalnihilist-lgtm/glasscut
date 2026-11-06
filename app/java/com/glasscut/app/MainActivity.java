@@ -21,6 +21,7 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.webkit.JavascriptInterface;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -80,12 +81,21 @@ public class MainActivity extends Activity {
 
         root = new FrameLayout(this);
         root.setBackgroundColor(0xFF1A1550);
+        setContentView(root);
 
+        /* WebView ka poora setup ek jagah: onCreate ke saath-saath renderer crash ke
+           baad bhi yahi chalta hai (onRenderProcessGone), is liye dono raaste ek hi
+           settings/client/url se guzarte hain - dobara banaya gaya WebView purane
+           jaisa hi hota hai. */
+        buildWebView();
+    }
+
+    /** Creates the WebView, wires it up and loads the page. Safe to call twice. */
+    private void buildWebView() {
         web = new WebView(this);
         web.setBackgroundColor(0xFF1A1550);
         root.addView(web, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        setContentView(root);
 
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
@@ -114,6 +124,34 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView v, String url) {
                 if (lastTop >= 0) pushInsets(lastTop, lastBottom);
+            }
+
+            /**
+             * The WebView renderer is a separate process, and a 1400x1050 canvas plus
+             * its typed arrays is exactly the kind of load that gets it killed on a
+             * low-RAM device. Without this override Android treats that as a fatal
+             * error and takes the whole app down - the user sees the app vanish, with
+             * no message and nothing to recover. Returning true says "handled": the
+             * dead WebView is dropped and a fresh one is built and reloaded, so the
+             * shell survives and the user can pick the photo again.
+             */
+            @Override
+            public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail detail) {
+                if (v != null) {
+                    try { root.removeView(v); } catch (Exception ignored) { }
+                    try { v.destroy(); } catch (Exception ignored) { }
+                }
+                if (web == v) web = null;
+                /* a callback that will never be answered would pin the old WebView */
+                if (pendingFiles != null) {
+                    try { pendingFiles.onReceiveValue(null); } catch (Exception ignored) { }
+                    pendingFiles = null;
+                }
+                pendingData = pendingName = pendingMime = null;
+                lastTop = -1;
+                lastBottom = -1;
+                buildWebView();
+                return true;
             }
         });
 

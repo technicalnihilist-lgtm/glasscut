@@ -2084,20 +2084,41 @@ cv.addEventListener('pointerdown',e=>{if(!od||drawing)return;
   fullRender();return}
  push();strokeCh=0;stR=-1;drawing=true;pid=e.pointerId;lastX=p[0];lastY=p[1];try{cv.setPointerCapture(e.pointerId)}catch(_){}
  const rs=ringSize()+'px';ring.style.width=ring.style.height=rs;ring.style.display='block';moveRing(e);strokeCh+=stroke(p[0],p[1],p[0],p[1],p[2])});
-cv.addEventListener('pointermove',e=>{if(!drawing||e.pointerId!==pid)return;const p=pt(e);moveRing(e);strokeCh+=stroke(lastX,lastY,p[0],p[1],p[2]);lastX=p[0];lastY=p[1]});
+/* coalesced pointer samples: touchscreen 120-240 Hz par sample karti hai, par
+   pointermove ek frame me ek hi baar aata hai. beech ke saare sample WebView
+   getCoalescedEvents() me deta hai, aur pehle unhe chhod diya jata tha - yaani
+   tez flick par ungli ka asli (ghuma hua) raasta do naapon ke beech ki seedhi
+   chord ban jata tha, aur erase/restore wahan se hat jata tha jahan ungli sach
+   me gayi thi. ab har sample par stroke() chalta hai (wahi interpolate, wahi
+   dedupe guard), aur ant me e khud bhi - jo sample list me pehle se hai to
+   stX/stY guard use no-op bana deta hai. sample list na ho (mouse, synthetic
+   event, purana WebView) to neeche ka raasta bilkul pehle jaisa hi hai. */
+cv.addEventListener('pointermove',e=>{if(!drawing||e.pointerId!==pid)return;
+ let cl=null;
+ if(e.getCoalescedEvents){try{cl=e.getCoalescedEvents()}catch(_){cl=null}}
+ if(cl&&cl.length>1){for(let i=0;i<cl.length;i++){const q=cl[i];if(!q)continue;
+  const p=pt(q);strokeCh+=stroke(lastX,lastY,p[0],p[1],p[2]);lastX=p[0];lastY=p[1]}}
+ const p=pt(e);moveRing(e);strokeCh+=stroke(lastX,lastY,p[0],p[1],p[2]);lastX=p[0];lastY=p[1]});
 /* ek hi ungli ek waqt: doosri ungli ka pointer is stroke ko nahi todta */
 const end=e=>{if(!drawing)return;if(e&&e.pointerId!=null&&pid!=null&&e.pointerId!==pid)return;
  drawing=false;pid=null;ring.style.display='none';
  /* jis stroke ne ek bhi pixel nahi badla (khaali jagah par tap, pehle se mitaya hua
     hissa) wo undo history me jagah nahi lete - warna 10 aise tap asli history ko
     dhak dete hain aur Undo kuch karta hua nahi lagta. */
- if(strokeCh===0){recycle(undo.pop());abortPush()}else enforce();
- strokeCh=0;
+ const ch=strokeCh;strokeCh=0;
+ if(ch===0){recycle(undo.pop());abortPush()}else enforce();
  /* stroke ke dauraan fast preview ke liye ek rAF pending reh jata hai; wo release ke
     baad chal kar feather wale final frame ko hard-edge preview se overwrite kar deta
     tha - screen aur save ki file alag dikhti thi. ab wo pending frame cancel hota hai
     aur sirf ek full render bachta hai. */
- if(raf){cancelAnimationFrame(raf);raf=0}fastReq=false;render()};
+ if(raf){cancelAnimationFrame(raf);raf=0;fastReq=false;render()}
+ /* jis stroke ne ek bhi pixel nahi badla uske liye yahan poora render (clearRect +
+    subject ka draw + composite, 1400x1050 par ~2.9 M pixel) hota tha, halanki canvas
+    par pichhla frame pehle se bilkul sahi tha - mask ek byte nahi badla aur koi fast
+    preview pending bhi nahi hai. ab us haalat me render hi nahi hota; DIRT/SDIRT jo
+    stamp2 ne bade (conservative) box ki tarah likhe the, agla asli frame khud use
+    kar leta hai, is liye screen par ek pixel bhi nahi badalta. */
+ else{fastReq=false;if(ch)render()}};
 /* stroke ke dauraan `mask` wahi array hota hai jise push() ne snapshot me copy kiya
    tha. us waqt doosri ungli se Undo / Redo / Auto / Reset / Grow / Shrink / Smooth /
    Blue blur dab jaye to restore() mask ko kisi purane snapshot array par le jata hai
@@ -2403,7 +2424,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.58',
+window.GlassCut={version:'1.1.59',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
