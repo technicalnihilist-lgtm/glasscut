@@ -55,9 +55,16 @@ public class MainActivity extends Activity {
     /* volatile: page inhe JavaBridge ke apne thread se padhta hai (insets()), jabki
        ye UI thread par likhe jate hain - warna page ko purani value mil sakti hai. */
     private volatile int lastTop = -1, lastBottom = -1;
-    private String pendingData;   // image waiting for a storage permission
-    private String pendingName;
-    private String pendingMime;
+    /* volatile: ye teen saveImage() me likhe jate hain, jo WebView ke JavaBridge
+       thread par chalta hai, aur padhe jate hain UI thread par
+       (onRequestPermissionsResult / onActivityResult). Bina volatile ke UI thread
+       ko purani (null) value dikh sakti hai - us haalat me finishPendingSave(null)
+       chalta hai aur page ko "Save nahi hua" milta hai halanki payload taiyar tha,
+       jabki ek asli save me payload kai MB ka hota hai. lastTop/lastBottom par pehle
+       se yahi tark likha hai. */
+    private volatile String pendingData;   // image waiting for a storage permission
+    private volatile String pendingName;
+    private volatile String pendingMime;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -557,16 +564,40 @@ public class MainActivity extends Activity {
         });
     }
 
+    /**
+     * The page's GlassCut.trim() only drops the JS side (typed arrays, the feather
+     * blur buffer, the undo pool, offscreen canvases). The WebView keeps its own
+     * copy of the same picture - decoded image resources and its renderer caches -
+     * and nothing ever asked it to let go. On a canvas-heavy page that second copy
+     * is the bigger half, so memory pressure was answered with half a release.
+     * freeMemory() is the documented hint for exactly this (it drops everything the
+     * WebView can rebuild), and the page is a local asset with no network cache to
+     * lose. Both calls are no-ops when there is nothing cached, so nothing on
+     * screen changes - the next render rebuilds whatever it needs.
+     */
+    private void freeWebMemory(boolean hard) {
+        WebView w = web;
+        if (w == null) return;
+        try { w.freeMemory(); } catch (Exception ignored) { }
+        if (hard) {
+            try { w.clearCache(false); } catch (Exception ignored) { }
+        }
+    }
+
     @Override
     public void onTrimMemory(int level) {
         super.onTrimMemory(level);
-        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) trimPage();
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            trimPage();
+            freeWebMemory(level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE);
+        }
     }
 
     @Override
     public void onLowMemory() {
         super.onLowMemory();
         trimPage();
+        freeWebMemory(true);
     }
 
     private void jsToast(final String msg) {
@@ -604,10 +635,19 @@ public class MainActivity extends Activity {
      */
     @Override
     protected void onPause() {
-        if (web != null) {
-            web.evaluateJavascript(
-                    "window.GlassCut&&GlassCut.pause&&GlassCut.pause();", null);
-            web.onPause();
+        /* Ye do call pehle bina guard ke thi. WebView ka renderer alag process hai;
+           wo mar chuka ho (onRenderProcessGone se theek pehle) ya WebView destroy ho
+           raha ho to evaluateJavascript / onPause IllegalStateException phenkte hain -
+           yaani app theek us waqt crash karti jab user app se bahar nikalta (ya photo
+           picker khulta) hai. notifyPage(), trimPage(), pushInsets() aur failPage()
+           pehle se isi tarah guarded hain; ab pause/resume bhi. */
+        WebView w = web;
+        if (w != null) {
+            try {
+                w.evaluateJavascript(
+                        "window.GlassCut&&GlassCut.pause&&GlassCut.pause();", null);
+            } catch (Exception ignored) { }
+            try { w.onPause(); } catch (Exception ignored) { }
         }
         super.onPause();
     }
@@ -615,10 +655,13 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (web != null) {
-            web.onResume();
-            web.evaluateJavascript(
-                    "window.GlassCut&&GlassCut.resume&&GlassCut.resume();", null);
+        WebView w = web;
+        if (w != null) {
+            try { w.onResume(); } catch (Exception ignored) { }
+            try {
+                w.evaluateJavascript(
+                        "window.GlassCut&&GlassCut.resume&&GlassCut.resume();", null);
+            } catch (Exception ignored) { }
         }
     }
 
