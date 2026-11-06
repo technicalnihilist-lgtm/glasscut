@@ -823,17 +823,35 @@ const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
    for(let y=y0;y<=y1;y++){const b=y*W;for(let x=x0;x<=x1;x++){const i=b+x;u[i]=(u[i]&0xffffff)|(m[i]<<24)}}}
   else for(let y=y0;y<=y1;y++){const b=y*W;for(let x=x0;x<=x1;x++){const i=b+x;d[i*4+3]=m[i]}}
   fgx.putImageData(fgi,0,0,x0,y0,x1-x0+1,y1-y0+1);
+  /* SUB ko sirf bada karna kaafi nahi tha: drawSubj fgc ko SUB ke source-rect se
+     draw karta hai, aur source-rect ka kinara bilinear sampling ko clamp karta hai -
+     yaani box ka origin/hadd ek pixel badalne par kinare ke pixel ki alpha 1-5/255
+     badal jati hai. is liye jo frame screen par baithta hai wo from-scratch rebuild
+     se bilkul wahi nahi hota tha, aur wahi canvas save bhi hota hai. naapa: depth 69
+     + Grow + feather 6 + outline 6 + Smooth ke baad screen aur rebuild me 2-3 pixel
+     (max 5/255) alag, SUB [131,243,1018,1298] vs [132,244,1016,1296].
+     ab har *poora* render (stroke release, Grow/Shrink, Wand, Smooth, undo/redo)
+     partial upload ke baad wahi exact bbox scan karta hai jo pehle sirf undo/redo
+     (SUBX) par chalta tha - MB ke andar, is liye scan MB ke area jitna hi. fast
+     preview frames (ungli dabaye hue) purane sasta merge hi karte hain: wahan box
+     sirf bada hona chahiye taaki naya content clip na ho, aur release ka poora
+     render usi kshan exact kar deta hai. */
+  if(!fast)SUBX=true;
   if(SUBX){SUBX=false;
-   /* exact bbox poore canvas ki jagah sirf MB par scan karne se bilkul wahi
-      nikalta hai: MB har us jagah se chauda hota hai jahan mask me 255 likha ja
-      sakta hai, is liye MB ke bahar m ka har byte pakka 0 hai aur wo bbox ko
-      chhota nahi kar sakta. MB poora canvas ho to purana poora scan hi chalta hai.
-      undo/redo ke baad (jahan SUBX lagta hai) subject aam taur par canvas ka
-      chhota hissa hota hai, is liye 1400x1200 par 1.68 M pixel ka scan MB ke
-      area jitna hi reh jata hai. */
+   /* exact bbox poore canvas ki jagah sirf usi box par scan karne se bilkul wahi
+      nikalta hai jis box par poora upload chalta hai: box ke bahar m ka har byte
+      pakka 0 hai, is liye wo bbox ko chhota nahi kar sakta, aur box poore canvas
+      jitna bada ho to purana poora scan hi chalta hai.
+      box wahi hona chahiye jo neeche poore upload wale raaste me hai - feather ON
+      par softM ka SBOX, warna mask ka MB. pehle yahan sirf MB tha, par feather
+      wala softM MB se `feather` pixel bahar tak 255 rakhta hai (blur ka halo):
+      us halo par scan na karne se SUB halo se chhota nikalta tha, aur drawSubj
+      usi SUB ke source-rect se subject draw karta hai - yaani soft kinara katar
+      jata tha (naapa: feather 6 par 1483 pixel, max 32/255). */
    let sx0=W,sy0=H,sx1=-1,sy1=-1;
    let bx0=0,by0=0,bx1=W-1,by1=H-1;
-   if(MB[2]>=MB[0]&&MB[3]>=MB[1]){bx0=MB[0];by0=MB[1];bx1=MB[2];by1=MB[3]}
+   const bb=(soft?SBOX:MB);
+   if(bb&&bb[2]>=bb[0]&&bb[3]>=bb[1]){bx0=bb[0];by0=bb[1];bx1=bb[2];by1=bb[3]}
    for(let y=by0;y<=by1;y++){const b=y*W;for(let x=bx0;x<=bx1;x++){if(m[b+x]){if(x<sx0)sx0=x;if(x>sx1)sx1=x;if(sy0===H)sy0=y;sy1=y}}}
    SUB=sx1<0?null:[sx0,sy0,sx1,sy1];
   }else if(SUB){if(x0<SUB[0])SUB[0]=x0;if(y0<SUB[1])SUB[1]=y0;if(x1>SUB[2])SUB[2]=x1;if(y1>SUB[3])SUB[3]=y1}
@@ -2240,7 +2258,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.55',
+window.GlassCut={version:'1.1.56',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
