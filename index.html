@@ -248,6 +248,10 @@ const mkFG32=()=>{FG32=(LE32&&fgi&&fgi.data&&(fgi.data.byteOffset&3)===0&&(fgi.d
 let photoOpaque=false,imgOpaque=false,imgOpaqueFor=null,imgOpaqueW=-1,imgOpaqueH=-1;
 /* tmp composite ka cache (drawSubj) - neeche tafseel */
 let THas=false,TFULL=false,TfgV=-1,TfgS=-1,Ts0=0,Ts1=0,Ts2=0,Tr=-1,Tcs=0,Tsh=0,Tn=0;
+/* stroke ke fast frame ke liye: pichhla *seedha* draw (fgc seedha cx par) ka box aur
+   transform. PART = is frame me cx par sirf itna hi hissa dobara likha jayega. */
+let SOK=false,PART=null;
+const SSB=[0,0,0,0],STt=[0,0,0,0,0,0],PB2=[0,0,0,0];
 const TPB=[0,0,0,0],TDB=[0,0,0,0];
 /* FGR = pichhle tmp build ke baad fgc (alpha) me jo rectangle badla hai; null ka
    matlab "pata nahi" (poora dobara banana hai). layer() ise usi upload ke box se
@@ -434,7 +438,14 @@ const imgOpaqueCheck=im=>{try{if(!CW||!CH)return false;
    imgOpaque bhi purani image ka. wahi token jo main photo ke liye hai. */
 let BGLOAD=null;
 $('#fBg').onchange=e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
- loadImg(f,im=>{bgImg=im;bg={t:'img'};bgVer++;setImgOpaque(im);
+ /* im ka opacity check (poore CW x CH canvas ka getImageData + 1.47 M byte scan,
+    1400x1050 par ~34 ms) pehle yahin, usi task me chalta tha jisme fullRender bhi
+    hai - yaani background photo chunne ke baad ka pehla frame us 34 ms ke baad hi
+    banta tha. ab wo wahi raasta leta hai jo ratio/photo badalne par pehle se chalta
+    hai (imgOpaqueLater): pehla render turant hota hai, check agle task me. flag ka
+    "pata nahi" matlab render ka clearRect chalta hai - jo har haalat me sahi hai,
+    is liye pixel ek bhi nahi badalte; check ke baad agle frame se clear bachta hai. */
+ loadImg(f,im=>{bgImg=im;bg={t:'img'};bgVer++;imgOpaque=false;imgOpaqueFor=null;imgOpaqueLater(im);
   noSw();fullRender();toast('Background lag gaya')},BGLOAD)};
 
 /* image load */
@@ -572,7 +583,7 @@ const setSize=()=>{if(!od)return;
     deta hai, is liye ek bhi pixel nahi badalta. */
  if(cv.width!==CW||cv.height!==CH){cv.width=CW;cv.height=CH}else{cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1;cx.clearRect(0,0,CW,CH)}
  if(tmp.width!==CW||tmp.height!==CH){tmp.width=CW;tmp.height=CH}else{tcx.setTransform(1,0,0,1,0,0);tcx.globalAlpha=1;tcx.clearRect(0,0,CW,CH)}
- bgVer++;THas=false;
+ bgVer++;THas=false;SOK=false;PART=null;
  /* photo ya ratio badalne par CW/CH badal jata hai, aur uske saath cover() ka crop
     bhi - "Apni photo" wala opaque flag purane size ka jawab tha. galat "opaque" par
     render ka clearRect chhoot jata tha, is liye transparent kinare wali background
@@ -955,6 +966,37 @@ const ringOff=(n,r)=>{if(RINGN!==n||RINGR!==r){const c=new Float64Array(n*2);
  for(let a=0;a<n;a++){c[a*2]=Math.cos(a*2*Math.PI/n)*r;c[a*2+1]=Math.sin(a*2*Math.PI/n)*r}
  RINGN=n;RINGR=r;RINGD=c}
  return RINGD};
+/* Erase / Restore ke dauraan har fast frame poora subject dobara likhta tha
+   (SUB box, 1400x1050 ki photo par ~0.64 M pixel) halanki mask sirf DIRT ke
+   andar badla hai. jab background kuch nahi likhta (bg.t==='none'), depth
+   gradient/shadow/outline nahi, opacity 100 aur transform pichhle frame jaisa
+   hai, to canvas par sirf DIRT ka hissa badal sakta hai - baaki har pixel pehle
+   se sahi hai. us haalat me PART = DIRT ka device box (source me 2 px + device
+   par 2 px chauda), aur draw wahi poora pb source-rect rakh kar sirf usi box par
+   clip kiya jata hai: clip sirf coverage seemit karta hai, sampling badalta
+   nahi, is liye clip ke andar ka har pixel poore draw jaisa hi banta hai.
+   Bahar ka content chhua hi nahi jata (wo pehle se sahi hai). */
+const partBox=fast=>{
+ if(!fast||bg.t!=='none'||P.depth>0||P.sh||P.op<100||P.line>0)return null;
+ if(!SUB||!FGR||!SOK)return null;
+ const t=xf();tiltUpd();
+ if(t[0]*P.f!==STt[0]||t[0]!==STt[1]||t[1]!==STt[2]||t[2]!==STt[3]||tiltCs!==STt[4]||tiltSh!==STt[5])return null;
+ const pb=subPad(SUB);
+ if(pb[0]!==SSB[0]||pb[1]!==SSB[1]||pb[2]!==SSB[2]||pb[3]!==SSB[3])return null;
+ const sx=t[0]*P.f,cs3=tiltCs,sh3=tiltSh;
+ let ux0=FGR[0]-2,uy0=FGR[1]-2,ux1=FGR[2]+2,uy1=FGR[3]+2;
+ if(ux0<pb[0])ux0=pb[0];if(uy0<pb[1])uy0=pb[1];
+ if(ux1>pb[0]+pb[2]-1)ux1=pb[0]+pb[2]-1;if(uy1>pb[1]+pb[3]-1)uy1=pb[1]+pb[3]-1;
+ if(ux1<ux0||uy1<uy0)return null;
+ const ax0=ux0-W/2,ax1=ux1-W/2,ay0=uy0-H/2,ay1=uy1-H/2;
+ let qx0=1e9,qy0=1e9,qx1=-1e9,qy1=-1e9;
+ for(let q=0;q<4;q++){const u=(q&2)?ax1:ax0,v=(q&1)?ay1:ay0;
+  const ex=t[1]+sx*cs3*u,ey=t[2]+t[0]*(sh3*u+v);
+  if(ex<qx0)qx0=ex;if(ex>qx1)qx1=ex;if(ey<qy0)qy0=ey;if(ey>qy1)qy1=ey}
+ qx0=Math.max(0,Math.floor(qx0)-2);qy0=Math.max(0,Math.floor(qy0)-2);
+ qx1=Math.min(CW,Math.ceil(qx1)+2);qy1=Math.min(CH,Math.ceil(qy1)+2);
+ if(qx1<=qx0||qy1<=qy0)return null;
+ PB2[0]=qx0;PB2[1]=qy0;PB2[2]=qx1;PB2[3]=qy1;return PB2};
 const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
  /* 3D tilt: ek halka shear, jo subject ko axis par ghuma hua dikhata hai */
  tiltUpd();const cs3=tiltCs,sh3=tiltSh;
@@ -962,12 +1004,19 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
     bekaar full-canvas copy thi (clear + draw + wapas draw). us haalat me fgc ko
     seedha cx par wahi transform de kar draw karna bilkul same pixels deta hai. */
  if(src!==fgc||(P.line<=0&&P.op>=100&&!P.sh&&P.depth<=0)){
-  cx.save();cx.translate(t[1],t[2]);cx.scale(sx,t[0]);cx.transform(cs3,sh3,0,1,0,0);
   /* fgc ka content sirf SUB ke andar hai - sirf wahi box bhejo */
   const pb=src===fgc&&SUB?subPad(SUB):null;
+  cx.save();
+  if(PART&&src===fgc){cx.beginPath();cx.rect(PART[0],PART[1],PART[2]-PART[0],PART[3]-PART[1]);cx.clip()}
+  cx.translate(t[1],t[2]);cx.scale(sx,t[0]);cx.transform(cs3,sh3,0,1,0,0);
   if(pb)cx.drawImage(src,pb[0],pb[1],pb[2],pb[3],pb[0]-W/2,pb[1]-H/2,pb[2],pb[3]);
   else cx.drawImage(src,-W/2,-H/2);
-  cx.restore();return}
+  cx.restore();
+  /* agla fast frame isi box/transform par PART bana sake - warna poora draw */
+  if(src===fgc&&pb){SSB[0]=pb[0];SSB[1]=pb[1];SSB[2]=pb[2];SSB[3]=pb[3];
+   STt[0]=sx;STt[1]=t[0];STt[2]=t[1];STt[3]=t[2];STt[4]=cs3;STt[5]=sh3;SOK=true}
+  else SOK=false;
+  FGR=null;return}
  const tc=tcx;
  /* outline 16 (fast frame me 8) baar poora W*H silhouette draw karta tha - ek
     render me 30 M source pixel. silhouette (outc) bhi fgc jaisa hi SUB ke bahar
@@ -1121,7 +1170,7 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
     banta hai, is liye wahan area 1.47 M se 0.32 M pixel par aa jata hai. */
  if(!TFULL&&TDB[2]>0&&TDB[3]>0)cx.drawImage(tmp,TDB[0],TDB[1],TDB[2],TDB[3],TDB[0],TDB[1],TDB[2],TDB[3]);
  else cx.drawImage(tmp,0,0);
- cx.restore()};
+ cx.restore();SOK=false};
 /* kya ye background canvas ke har pixel ko dhak deta hai? */
 const opaqueBg=()=>{if(bg.t==='color'||bg.t==='grad')return true;
  if(bg.t==='img')return !!(bgImg&&imgOpaque&&imgOpaqueFor===bgImg);
@@ -1134,7 +1183,7 @@ function render(fast){if(!od)return;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=
     canvas par nahi bachta tha - 1400x1200 par har compare frame me 2 x 1.68 M
     clearRect + 1.68 M fillRect + background ka poora drawImage (blur background
     par 1.68 M source pixel). ab showOrig par seedha yahin se laut jate hain. */
- if(showOrig){cx.clearRect(0,0,CW,CH);drawSubj(origc,fast);return}
+ if(showOrig){cx.clearRect(0,0,CW,CH);PART=null;drawSubj(origc,fast);return}
  const pm=P.motion/100,pox=-mx*pm*CW*0.010,poy=-my*pm*CH*0.010;
  /* colour/gradient background poore canvas par ek opaque fillRect karta hai, aur
     bina parallax (pox=poy=0) wo bilkul canvas ke kinare se kinare tak dhakta hai -
@@ -1146,7 +1195,13 @@ function render(fast){if(!od)return;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=
     photo/image par unke pehle ka clearRect bhi bekaar hai - wahi 1.68 M pixel
     per render. transparent photo ya transparent background image par clear
     pehle jaisa hi hota hai. */
- if(!(opaqueBg()&&pox===0&&poy===0))cx.clearRect(0,0,CW,CH);
+ /* layer() sirf fgc likhta hai (cx ko chhoota nahi), is liye use clear se pehle
+    chalana safe hai - usse pata chalta hai ki is frame me fgc ka kaunsa hissa
+    badla (FGR), jo PART ka faisla karne ke liye chahiye. */
+ layer(fast);
+ PART=partBox(fast);
+ if(PART)cx.clearRect(PART[0],PART[1],PART[2]-PART[0],PART[3]-PART[1]);
+ else if(!(opaqueBg()&&pox===0&&poy===0))cx.clearRect(0,0,CW,CH);
  cx.save();cx.translate(pox,poy);
  if(bg.t==='color'){cx.fillStyle=bg.v;cx.fillRect(0,0,CW,CH)}
  else if(bg.t==='grad'){const gk=bgGK,gv=+bg.v;
@@ -1160,7 +1215,7 @@ function render(fast){if(!od)return;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=
   if(dk[0]!==CW||dk[1]!==CH||dk[2]!==P.depth){const vg=cx.createRadialGradient(CW/2,CH*0.42,Math.min(CW,CH)*0.18,CW/2,CH*0.42,Math.max(CW,CH)*0.72);
    vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,'+(P.depth/100*0.42).toFixed(3)+')');depGrad=vg;dk[0]=CW;dk[1]=CH;dk[2]=P.depth}
   cx.fillStyle=depGrad;cx.fillRect(0,0,CW,CH)}
- layer(fast);drawSubj(fgc,fast)}
+ drawSubj(fgc,fast)}
 /* rAF ka callback pehle har schedule par ek naya closure tha (ek frame = ek
    function object), halanki wo har baar bilkul wahi kaam karta hai. ab ek hi
    named function hai - schedule karne par koi allocation nahi. */
