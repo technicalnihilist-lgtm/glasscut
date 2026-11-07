@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 258 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.70 (versionCode 70) |
+| **Version** | 1.1.71 (versionCode 71) |
 
 ---
 
@@ -224,10 +224,10 @@ Verified in headless Chrome: load → auto → wand → erase → keep → resto
 
 Download [`GlassCut.apk`](GlassCut.apk) on the phone, tap it, allow "install unknown apps" for your browser or file manager once. Android 7.0 (API 24) or newer.
 
-**This build has a new signing key again** — `/scratch/saved` was empty again when the 1.1.70 build came up, so `build.sh` generated a fresh keystore. Android will refuse to install it over any earlier build — uninstall the old app once, then install. The keystore is deliberately *not* committed and not shipped (a signing key is a credential); only `/scratch/saved` survives between runs, so as long as `glasscut-signing-key.jks` is put back there, every later build reuses it and upgrades install cleanly. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate for this build:
+**This build has a new signing key again** — `/scratch/saved` was empty again when the 1.1.71 build came up, so `build.sh` generated a fresh keystore. Android will refuse to install it over any earlier build — uninstall the old app once, then install. The keystore is deliberately *not* committed and not shipped (a signing key is a credential); only `/scratch/saved` survives between runs, so as long as `glasscut-signing-key.jks` is put back there, every later build reuses it and upgrades install cleanly. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate for this build:
 
 ```
-985126dfaf89041547eae367007a01260fee472a01cb33bd3727e3b3dc9f1f04
+f6b49ababc339f440ee89bbf364fc38eb230cbf00982a3afbd7ee3da9edeeeba
 ```
 ## Build it yourself
 

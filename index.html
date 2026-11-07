@@ -2190,6 +2190,18 @@ if(i<N-nw){j=i+nw;if(!bg[j]&&MATCH[j]){bg[j]=1;st2[gp++]=(x<<20)|j}}}
    cutout bekaar jata tha. ab wahi jawab turant, aur nateeja bilkul wahi
    (canvas hash base build jaisa, kaam 0). */
 let AK=[-1,-1,-1,-1,-1];
+/* pehle AK sirf safal (c>0) cutout par likha jata tha, is liye khaali cutout apna
+   signature kabhi chhodta hi nahi tha aur har dobara Auto poora cutout phir se
+   chalata tha. yeh sabse aam haalat hai: ungli se saaf karne ke baad (mver badal
+   gaya, is liye AK invalid) Auto dabana, aur phir wahi Auto dobara dabana - dono
+   baar boxDown + dono coarse BFS + islands + full-res snap bekaar jate the.
+   naapa (1400x1050, headless Chrome, click ke andar performance.now): erase
+   stroke ke baad pehla Auto 569.8 ms aur uske baad wale 95.2 aur 32.4 ms, halanki
+   teeno baar mask me ek byte nahi badla; ab doosra/chauta 0.1-0.2 ms. cutout ka
+   nateeja in paanch values ka hi function hai (mask aur keepMask ka har badlav
+   mver badhata hai), is liye signature match hone par dobara chalane se nateeja
+   bilkul wahi aata. sirf c===0 cache hota hai - c<0 ("background clear nahi") par
+   message doosra hai, is liye wo raasta pehle jaisa hi rehne diya (bina cache). */
 const auto=(silent)=>{if(!od)return;
  if(AK[0]===mver&&AK[1]===W&&AK[2]===H&&AK[3]===tol&&AK[4]===keepObj){
   /* kuch nahi badla: bas wahi message jo cutout ke cnt=0 par aata tha. undo/redo
@@ -2201,7 +2213,13 @@ const auto=(silent)=>{if(!od)return;
     sach me kuch likha ho (cnt||kc). khaali cutout par mask byte-identical hai, is liye
     mver badhana sirf agle frame par bekaar full alpha upload + poora feather blur
     karwata tha - wahi tark jo wand ke cnt=0 raaste par pehle se hai. */
- if(c<=0){recycle(undo.pop());abortPush();if(!silent)toast(c<0?'Background clear nahi hai, Wand try karo':'Kuch nahi hata. Tolerance badhao ya Wand use karo');return}
+ if(c<=0){recycle(undo.pop());abortPush();
+  /* khaali cutout (cnt=0, background clear) ka nateeja bhi yaad rakho - warna isi
+     mask/tol/keepObj par agla Auto phir poora cutout chalata hai (upar ki tippani).
+     cache-hit wala message upar wahi hai jo yahan c===0 par aata hai, is liye
+     screen par kuch nahi badalta. */
+  if(c===0){AK[0]=mver;AK[1]=W;AK[2]=H;AK[3]=tol;AK[4]=keepObj}
+  if(!silent)toast(c<0?'Background clear nahi hai, Wand try karo':'Kuch nahi hata. Tolerance badhao ya Wand use karo');return}
  AK[0]=mver;AK[1]=W;AK[2]=H;AK[3]=tol;AK[4]=keepObj;
  fullRender();toast(silent?'Background hata diya - ab naya background chuno':'Ho gaya! Erase / Restore se saaf karo')};
 const wand=(x,y)=>{x=Math.min(W-1,Math.max(0,x|0));y=Math.min(H-1,Math.max(0,y|0));let r=0,g=0,b=0,n=0;
@@ -2724,7 +2742,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;if(!savePending)lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.70',
+window.GlassCut={version:'1.1.71',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par

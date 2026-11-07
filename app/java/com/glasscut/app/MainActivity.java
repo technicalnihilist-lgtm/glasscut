@@ -283,6 +283,12 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        /* super pehle: pehle ye call sabse aakhir me thi, aur dono early returns
+           (REQ_FILE par pendingFiles null, aur REQ_WRITE ka poora block) use chhod
+           dete the - yaani file-chooser ka result aane par aur permission ke result
+           aane par superclass ko kabhi khabar hi nahi jati thi (ActivityResultRegistry
+           / fragment dispatch wahi se chalta hai). ab har raaste par theek ek baar. */
+        super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQ_FILE) {
             if (pendingFiles == null) return;
             Uri[] out = null;
@@ -314,9 +320,7 @@ public class MainActivity extends Activity {
             pendingData = pendingName = pendingMime = null;
             if (resultCode == RESULT_OK) finishPendingSave(d, n, m);
             else failPage();
-            return;
         }
-        super.onActivityResult(requestCode, resultCode, data);
     }
 
     /* ---------------- save to gallery ---------------- */
@@ -361,8 +365,29 @@ public class MainActivity extends Activity {
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
-                            requestPermissions(
-                                    new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQ_WRITE);
+                            /* requestPermissions aakhri call site hai jispar guard nahi
+                               tha - pushInsets, notifyPage, trimPage, failPage,
+                               pause/resume/back aur onPause ke saath ab ye bhi. Ye
+                               runnable baad me chalta hai, aur tab tak activity
+                               finish ho chuki ho sakti hai (user ne save ke turant
+                               baad back dabaya). Us haalat me requestPermissions
+                               IllegalStateException deta hai UI thread par, yaani
+                               app crash. Aur us se bura: pendingData set reh jata
+                               hai - page ko pehle hi "ok:pending" mil chuka hai,
+                               is liye wo chup baitha hai aur GlassCut.saved()/
+                               failed() ka intezaar karta rehta hai. Natija: na file,
+                               na message, aur agla koi bhi REQ_WRITE result purane
+                               payload ko likh deta. ab exception par payload saaf
+                               hota hai aur page ko wahi fail raasta milta hai jo
+                               baaki har failure par milta hai (message + long-press
+                               overlay; blob page ke paas pehle se hai). */
+                            try {
+                                requestPermissions(
+                                        new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQ_WRITE);
+                            } catch (Exception e) {
+                                pendingData = pendingName = pendingMime = null;
+                                failPage();
+                            }
                         }
                     });
                     return "ok:pending";
