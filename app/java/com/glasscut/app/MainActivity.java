@@ -288,9 +288,17 @@ public class MainActivity extends Activity {
                     }
                 }
             }
-            pendingFiles.onReceiveValue(out);
+            /* Callback pehle hi field se hata do aur uski call ko guard karo:
+               onReceiveValue WebView ke andar post hota hai aur destroy ho chuke
+               WebView par IllegalStateException de sakta hai. Us haalat me pehle
+               pendingFiles kabhi null nahi hota tha (line uske baad thi) aur ek
+               dead callback field me padi rehti thi, aur exception UI thread se
+               bahar nikal kar activity ko gira deti thi. Baaki saare call sites
+               (onShowFileChooser, onRenderProcessGone, onDestroy) pehle se isi
+               tarah guarded hain. */
+            ValueCallback<Uri[]> cb = pendingFiles;
             pendingFiles = null;
-            return;
+            try { cb.onReceiveValue(out); } catch (Exception ignored) { }
         }
         if (requestCode == REQ_WRITE) {
             final String d = pendingData, n = pendingName, m = pendingMime;

@@ -376,8 +376,8 @@ window.addEventListener('pagehide',()=>setIdle(true));
 window.addEventListener('pageshow',idleCheck);
 try{window.addEventListener('deviceorientation',e=>{
  if(e.gamma==null&&e.beta==null)return;gyro=true;gx=(e.gamma||0)/28;gy=((e.beta||0)-45)/28;},{passive:true})}catch(_){}
-seg('tools',v=>{mode=v;toast(v==='wand'?'Photo par tap karo, same color hat jayega':v==='erase'?'Ungli se mitao':v==='keep'?'Object par ungli phero, wo kabhi nahi hatega':'Ungli se wapas lao')});
-seg('ratios',v=>{ratio=v;if(od){setSize();fullRender()}});
+seg('tools',v=>{stopDraw();mode=v;toast(v==='wand'?'Photo par tap karo, same color hat jayega':v==='erase'?'Ungli se mitao':v==='keep'?'Object par ungli phero, wo kabhi nahi hatega':'Ungli se wapas lao')});
+seg('ratios',v=>{stopDraw();ratio=v;if(od){setSize();fullRender()}});
 seg('fmts',v=>fmt=v);
 /* Language toggle pehle har baar poora DOM TreeWalker banata tha aur har text node
    par trim() + String.replace() chalata tha. 197 text node hain, is liye ek toggle
@@ -2525,6 +2525,14 @@ const closeOv=()=>{$('#ov').classList.remove('show');
     blob chhod deta hai. */
  if(!savePending)lastSaveBlob=null};
 $('#ovX').onclick=closeOv;
+/* safal save ka ek hi raasta: overlay band karo, blob chhodo, phir message.
+   pehle safal save sirf toast dikhata tha, is liye ek purane fail hue save ka
+   fallback overlay (jo "long-press karke save karo" kehta hai) safal save ke
+   upar khula reh jata tha - screen par image abhi bhi "save nahi hui" jaisi
+   dikhti thi jabki file gallery me pahunch chuki thi. nateeja wahi, bas overlay
+   uska kaam khatam hone par band ho jata hai (markup/CSS me kuch nahi badla -
+   wahi #ov, wahi class, wahi toast). */
+const savedOk=()=>{lastSaveBlob=null;closeOv();toast('Save ho gaya')};
 /* toBlob kabhi-kabhi bade canvas par chupchaap null de deta hai (purane WebView /
    kam RAM). pehle save wahin "Save nahi hua" par khatam ho jata tha. ab usi canvas
    se toDataURL try hota hai, aur uska blob bilkul wahi type rakhta hai jo browser ne
@@ -2633,7 +2641,7 @@ const save=async()=>{
      raaste "Save ho gaya" dikhate hain, aur pending raaste par native khud
      GlassCut.saved() bulata hai). ab wahi message yahan bhi. */
   const bfin=ok=>{if(bdone)return;bdone=true;if(wd)clearTimeout(wd);saveBusy=false;savePending=false;
-   if(!ok)fallback(b);else{lastSaveBlob=null;toast('Save ho gaya')}};
+   if(!ok)fallback(b);else savedOk()};
   wd=setTimeout(()=>bfin(false),6000);
   /* savePending yahin se true: blob yahan se native write ke jawab tak hi user ki
      image hai. pehle ye sirf "ok:pending" ke baad true hota tha, is liye FileReader
@@ -2665,14 +2673,14 @@ const save=async()=>{
   if(navigator.canShare&&navigator.canShare({files:[f]})&&/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)){
    shw=setTimeout(relShare,20000);
    try{await navigator.share({files:[f],title:'GlassCut'});
-    if(!shareDone){shareDone=true;clearTimeout(shw);saveBusy=false;toast('Save ho gaya')}
+    if(!shareDone){shareDone=true;clearTimeout(shw);saveBusy=false;savedOk()}
     return}
    catch(err){relShare();
     if(err&&err.name==='AbortError')return}}
  }catch(err){if(err&&err.name==='AbortError')return}
  try{const u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download=name;a.rel='noopener';
   document.body.appendChild(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(u)},4000);
-  toast('Save ho gaya');return}catch(_){}
+  savedOk();return}catch(_){}
  fallback(b)
  }finally{if(!hold)saveBusy=false}};
 
@@ -2701,13 +2709,13 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;if(!savePending)lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.68',
+window.GlassCut={version:'1.1.69',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
     pehle se dikhta hai - file galley me nahi pahunchi, to image yahan se long-press
     kar ke save ho sakti hai. */
- saved:()=>{savePending=false;lastSaveBlob=null;toast('Save ho gaya')},
+ saved:()=>{savePending=false;savedOk()},
  failed:()=>{savePending=false;toast('Save nahi hua');if(lastSaveBlob)fallback(lastSaveBlob)},
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
