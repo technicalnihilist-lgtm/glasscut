@@ -504,10 +504,28 @@ BGLOAD=mkLoadBox();
    jo format pata na chale ya createImageBitmap na ho, wahan purana img raasta. */
 const imgDims=async f=>{
  const head=new Uint8Array(await f.slice(0,262144).arrayBuffer()),n=head.length;
- const be=(a,b)=>(head[a]<<8|head[b])>>>0,le=(a)=>head[a]|head[a+1]<<8|head[a+2]<<16|head[a+3]<<24;
+ const be=(a,b)=>(head[a]<<8|head[b])>>>0;
+ /* PNG ka IHDR big-endian hai (JPEG aur WebP/GIF little-endian hain). pehle yahan
+    `head[16]|head[17]<<8|head[18]<<16|head[19]<<24` tha, yaani PNG ke width/height
+    ko little-endian padha jata tha - dono value byte-reverse ho kar ek doosre par
+    chadh jati thi. nateeja sirf itna nahi tha ki photo chhoti/badi lagti hai:
+    dono ka anupat hi badal jata tha. 800x600 PNG par imgDims [509,1400] lauta
+    deta tha, is liye `plain()` ka raasta chhoot kar createImageBitmap resize
+    chalta tha aur canvas 509x1400 banta tha - ek landscape photo portrait me
+    khinch kar 1.75x upscale, yaani galat shape + blurry subject, aur 712,600
+    pixel jahan 480,000 kaafi the. naapa (headless Chrome, canvas = imgDims ka
+    nateeja): 9 PNG size par test kiya - pehle 8 galat, ab 9/9 sahi. 1x1 ->
+    1400x1400 (ab 1x1), 7x1400 -> 82x1400 (ab 7x1400), 800x600 -> 509x1400 (ab
+    800x600), 1200x1200 -> 1400x1400 (ab 1200x1200), 1500x1000 -> 1328x1400 (ab
+    1400x933), 233x317 -> 1400x367 (ab 233x317), 3000x2000 -> 1239x1400 (ab
+    1400x933), 1400x1400 aur 1400x1 pehle se sahi. 800x600 ka load 2257 -> 1488 ms
+    aur renderer peak RSS +42 -> +37 MB; 3000x2000 ka 1593 -> 1316 ms aur
+    +77 -> +63 MB (JPEG ka raasta chhua nahi - 1400x1050 JPEG par canvas hash
+    pehle jaisa, poora 21-step flow byte-identical). */
+ const be4=(a)=>((head[a]<<24)|(head[a+1]<<16)|(head[a+2]<<8)|head[a+3])>>>0;
  try{
   if(n>24&&head[0]===0x89&&head[1]===0x50&&head[2]===0x4E&&head[3]===0x47){ /* PNG IHDR */
-   const w=le(16)>>>0,h=le(20)>>>0;return w>0&&h>0?[w,h]:null}
+   const w=be4(16),h=be4(20);return w>0&&h>0?[w,h]:null}
   if(n>10&&head[0]===0xFF&&head[1]===0xD8){ /* JPEG: pehla SOFn marker */
    let i=2;
    while(i+9<n){
@@ -525,6 +543,20 @@ const imgDims=async f=>{
    const c=head[12]|head[13]<<8|head[14]<<16|head[15]<<24;
    if(c===0x58445650){ /* VP8X */ const w=1+(head[24]|head[25]<<8|head[26]<<16),h=1+(head[27]|head[28]<<8|head[29]<<16);return [w,h]}
    if(c===0x20385056){ /* VP8 (lossy) */ for(let i=20;i+10<n;i++){if(head[i]===0x9D&&head[i+1]===0x01&&head[i+2]===0x2A){const w=(head[i+3]|head[i+4]<<8)&0x3FFF,h=(head[i+5]|head[i+6]<<8)&0x3FFF;return w>0&&h>0?[w,h]:null}}}
+   /* VP8L (lossless WebP): yahan koi branch nahi tha, is liye har lossless WebP
+      imgDims se null lauta kar purane `plain()` raaste par chalti thi - yaani
+      poore size par decode, theek wahi cheez jo 1.1.58 me bade photo ke liye
+      hataayi gayi thi (6000x4000 = 96 MB bitmap, chahe canvas 1400x933 hi ho).
+      "WebP me save karo" wale tools aksar lossless likhte hain, is liye ye format
+      bas lossy se kam aata hai, gayab nahi. VP8L ka size signature byte 0x2F ke
+      baad 14-14 bit me width-1/height-1 hota hai (bitstream little-endian).
+      naapa (6000x4000 lossless WebP, 3 run): createImageBitmap 0 -> 1 call, load
+      6392/6679/7583 -> 3617/3778/3693 ms (~45% kam), renderer peak RSS
+      +218 -> +203 MB (memory bacha nahi - Chromium resize ke saath bhi poora
+      decode karta hai - par samay sach me bacha). */
+   if(c===0x4C385056&&n>25&&head[20]===0x2F){ /* VP8L */
+    const b=(head[21]|head[22]<<8|head[23]<<16|head[24]<<24)>>>0;
+    const w=(b&0x3FFF)+1,h=((b>>>14)&0x3FFF)+1;return w>0&&h>0?[w,h]:null}
    return null}
   if(n>10&&head[0]===0x47&&head[1]===0x49&&head[2]===0x46){ /* GIF */
    const w=head[6]|head[7]<<8,h=head[8]|head[9]<<8;return w>0&&h>0?[w,h]:null}
@@ -2451,7 +2483,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.61',
+window.GlassCut={version:'1.1.62',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
