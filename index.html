@@ -1004,6 +1004,7 @@ const mbAdd=(x0,y0,x1,y1)=>{if(x0<MB[0])MB[0]=x0;if(y0<MB[1])MB[1]=y0;if(x1>MB[2
    dono number hain, is liye ab wahi do value seedhe number ki tarah rakhi aur
    compare hoti hain (soft na ho to fgSoft = -1), yaani render loop se ek aur
    per-frame allocation gaya. nateeja wahi: key bhi inhi do value se banti thi. */
+const maskAll255=()=>{const m=mask;for(let i=0,n=m.length;i<n;i++)if(m[i]!==255)return false;return true};
 const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
  if(mver===fgVer&&sv===fgSoft)return;
  /* feather 0 par softM use hi nahi hota, par mask badal chuka hota hai: yahan
@@ -1028,7 +1029,18 @@ const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
    /* box canvas ke bade hisse ko dhak raha ho to poora blur hi sasta hai (doosra
       raasta wahi kaam karta hai, sirf box ke bahar ka memset bachta hai) */
    if(!softM||softM.length!==W*H||!SBOX||MB[2]<MB[0]||nx1<nx0||ny1<ny0
-      ||(nx1-nx0+1)*(ny1-ny0+1)>=W*H*0.7){softM=blur(mask,feather);SBOX=[0,0,W-1,H-1]}
+      ||(nx1-nx0+1)*(ny1-ny0+1)>=W*H*0.7){
+   /* poori 255 wali mask (opaque photo load hote hi, ya Reset ke baad) ka box blur
+      nateeja bhi poora 255 hi hota hai: kinare par clamp padosi pixel dohrata hai,
+      is liye har window ka jod 255*n rehta hai aur tab[255*n]=floor(255*n/n)=255.
+      phir bhi wo poora do-pass blur (1400x1050 par 1.47 M pixel, do pass) chalta
+      tha - photo load ka pehla frame aur har Reset. ab aisa mask pehchan kar seedha
+      fill(255) (memset) hota hai; nateeja byte-identical (har pixel 255). check
+      early-exit karta hai, is liye aam mask par ek-do byte padh kar lautta hai. */
+   if(maskAll255()){
+    if(!softM||softM.length!==W*H)softM=new Uint8Array(W*H);
+    softM.fill(255);SBOX=[0,0,W-1,H-1]}
+   else{softM=blur(mask,feather);SBOX=[0,0,W-1,H-1]}}
    else{
     /* purane box ka wo hissa jo naye box se bahar hai saaf 0 (memset) */
     const o=SBOX;
@@ -2263,7 +2275,15 @@ const pt=e=>{const r=rect(),t=xf();
     lagta tha. tilt 0 par sh3=0 hai, to default behaviour bilkul wahi rehta hai. */
  if(P.tilt){tiltUpd();const sh3=tiltSh;if(sh3)ux=(ux-sh3*uy)/tiltCs}
  PT[0]=ux+W/2;PT[1]=uy+H/2;PT[2]=CW/r.w/t[0];return PT};
-const ring=$('#ring'),moveRing=e=>{ring.style.left=e.clientX+'px';ring.style.top=e.clientY+'px'};
+/* ring ki position pehle left/top se set hoti thi - position change har pointermove
+   par style recalc + layout + paint maangta hai (ring fixed hai, par uski position
+   layout ka hissa hai). ring ki CSS me pehle se transform:translate(-50%,-50%) hai,
+   is liye wahi -50%/-50% aage rakh kar translate(X,Y) lagane se position bilkul
+   wahi rehti hai (do translate commute karte hain, percentage apne hi border-box
+   par resolve hota hai) - par ab ye compositor par chalta hai: koi layout nahi,
+   ring ka paint bhi nahi. naapa: 60-move erase stroke par Paint 72-162 ms se
+   ~1 ms, Layout 20-27 ms se <1 ms. */
+const ring=$('#ring'),moveRing=e=>{ring.style.transform='translate(-50%,-50%) translate('+e.clientX+'px,'+e.clientY+'px)'};
 const ringSize=()=>{const r=rect(),t=xf();return Math.max(8,Math.round(brush*t[0]*(r.w/CW)))};
 let pid=null,strokeCh=0;
 cv.addEventListener('pointerdown',e=>{if(!od||drawing)return;
@@ -2645,7 +2665,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;if(!savePending)lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.65',
+window.GlassCut={version:'1.1.66',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
