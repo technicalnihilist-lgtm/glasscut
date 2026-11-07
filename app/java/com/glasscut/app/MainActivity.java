@@ -131,6 +131,17 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView v, String url) {
                 if (lastTop >= 0) pushInsets(lastTop, lastBottom);
+                /* Renderer crash ke baad (onRenderProcessGone) naya WebView banta hai
+                   aur lastTop/lastBottom -1 ho jate hain, is liye upar wali line
+                   kuch push hi nahi karti. Insets listener root par hai aur root
+                   window se juda hi rehta hai, yaani onAttachedToWindow dobara nahi
+                   chalta aur naye page ko --sat/--sab kabhi nahi milte jab tak koi
+                   insets badalne wali cheez (rotation, keyboard) na ho - yaani
+                   header status bar ke neeche aur dock nav bar ke neeche chipka
+                   rehta hai. requestApplyInsets() wahi delivery dobara maangta hai;
+                   listener ka guard (top == lastTop) repeat call ko no-op bana deta
+                   hai, is liye har page load par iska koi extra kaam nahi. */
+                try { root.requestApplyInsets(); } catch (Exception ignored) { }
             }
 
             /**

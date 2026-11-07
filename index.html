@@ -2513,8 +2513,17 @@ const closeOv=()=>{$('#ov').classList.remove('show');
     sake - par overlay band karne ke baad wo blob sirf pada rehta tha (multi-MB,
     agle safal save tak) aur failed() usi purani image ko dobara dikha deta tha.
     ab overlay band karte hi reference chala jata hai; agla save apna blob khud
-    rakhta hai. */
- lastSaveBlob=null};
+    rakhta hai.
+    EK APWAAD: jab tak native write ka jawab nahi aaya (savePending) wo blob hi
+    user ki image ki ekmatra copy hai. drawPhoto() nayi photo par closeOv() bulata
+    hai, is liye API<29 par permission wale raaste me photo chunte hi blob chala
+    jata tha, aur write fail hone par GlassCut.failed() ke paas dikhane ke liye
+    kuch nahi bachta tha (naapa, fake bridge se: nayi photo ke baad failed() par
+    overlay khula hi nahi, jabki trim() wale raaste par khulta hai kyunki
+    dropScratch pehle se savePending dekhta hai). ab yahan bhi wahi shart hai -
+    jawab aate hi (saved/failed) savePending false ho jata hai aur agla closeOv
+    blob chhod deta hai. */
+ if(!savePending)lastSaveBlob=null};
 $('#ovX').onclick=closeOv;
 /* toBlob kabhi-kabhi bade canvas par chupchaap null de deta hai (purane WebView /
    kam RAM). pehle save wahin "Save nahi hua" par khatam ho jata tha. ab usi canvas
@@ -2626,7 +2635,10 @@ const save=async()=>{
   const bfin=ok=>{if(bdone)return;bdone=true;if(wd)clearTimeout(wd);saveBusy=false;savePending=false;
    if(!ok)fallback(b);else{lastSaveBlob=null;toast('Save ho gaya')}};
   wd=setTimeout(()=>bfin(false),6000);
-  hold=true;lastSaveBlob=b;
+  /* savePending yahin se true: blob yahan se native write ke jawab tak hi user ki
+     image hai. pehle ye sirf "ok:pending" ke baad true hota tha, is liye FileReader
+     ke chalu rehne wale daur me aayi trim()/closeOv() usi blob ko chhod deti thi. */
+  hold=true;lastSaveBlob=b;savePending=true;
   fr.onload=()=>{if(bdone)return;let res=null;
    try{res=br.saveImage(String(fr.result),name,mime)}catch(_){res='err'}
    const r=res==null?'':String(res);
@@ -2689,7 +2701,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;if(!savePending)lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.67',
+window.GlassCut={version:'1.1.68',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
