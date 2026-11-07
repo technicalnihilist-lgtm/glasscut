@@ -1457,7 +1457,11 @@ const opaqueBg=()=>{if(bg.t==='color'||bg.t==='grad')return true;
  if(bg.t==='img')return !!(bgImg&&imgOpaque&&imgOpaqueFor===bgImg);
  if(bg.t==='blur'||bg.t==='bluetint')return photoOpaque;
  return false};
-function render(fast){if(!od)return;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1;
+/* RFULL = "canvas par abhi wahi frame hai jo poore render se banta hai". ise
+   render() khud likhta hai (fast frame par false, poore render par true). save()
+   isi par bharosa kar ke apna poora render chhod deta hai - dekho save() me. */
+let RFULL=false;
+function render(fast){if(!od)return;RFULL=!fast;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1;
  /* "Hold: Original" (compare) me background, uska clearRect aur depth ka gradient
     sab bekaar the: pehle yahan poora background banta tha aur neeche wala showOrig
     branch turant poora canvas clear kar deta tha, is liye un teeno ka ek bhi pixel
@@ -1617,9 +1621,17 @@ const kbAll=()=>{KMB[0]=0;KMB[1]=0;KMB[2]=W-1;KMB[3]=H-1};
 /* khaali box: W,H se shuru, warna pehla kbAdd x0=0 par atak jata (0 < 0 galat) */
 const kbNone=()=>{KMB[0]=W;KMB[1]=H;KMB[2]=-1;KMB[3]=-1};
 const kbAdd=(x0,y0,x1,y1)=>{if(x0<KMB[0])KMB[0]=x0;if(y0<KMB[1])KMB[1]=y0;if(x1>KMB[2])KMB[2]=x1;if(y1>KMB[3])KMB[3]=y1};
-const enforce=()=>{if(!keepMask||!keepDirty)return;let ch=false;
+/* bx (optional): mask sirf isi box ke andar badla hai (stroke release). us haalat
+   me KMB poore canvas ka ho (undo ke baad kbAll hota hai) to bhi sirf KMB ∩ bx
+   scan hota hai - box ke bahar mask wahi hai jo pichhle enforce ke baad tha, is
+   liye wahan koi violation ban hi nahi sakta. nateeja byte-identical. */
+const enforce=(bx)=>{if(!keepMask||!keepDirty)return;let ch=false;
  if(KMB[2]<KMB[0]||KMB[3]<KMB[1])return;
- const kx0=KMB[0],kx1=KMB[2],ky0=KMB[1],ky1=KMB[3];
+ let kx0=KMB[0],kx1=KMB[2],ky0=KMB[1],ky1=KMB[3];
+ if(bx&&bx[2]>=bx[0]&&bx[3]>=bx[1]){
+  if(bx[0]>kx0)kx0=bx[0];if(bx[1]>ky0)ky0=bx[1];
+  if(bx[2]<kx1)kx1=bx[2];if(bx[3]<ky1)ky1=bx[3];
+  if(kx1<kx0||ky1<ky0)return}
  for(let y=ky0;y<=ky1;y++){const b=y*W;
   for(let x=kx0;x<=kx1;x++){const i=b+x;if(keepMask[i]&&mask[i]!==255){mask[i]=255;ch=true}}}
  /* kuch badla hi nahi to softM abhi bhi sahi hai - poora blur dobara mat banao */
@@ -2330,7 +2342,7 @@ const end=e=>{if(!drawing)return;if(e&&e.pointerId!=null&&pid!=null&&e.pointerId
     hissa) wo undo history me jagah nahi lete - warna 10 aise tap asli history ko
     dhak dete hain aur Undo kuch karta hua nahi lagta. */
  const ch=strokeCh;strokeCh=0;
- if(ch===0){recycle(undo.pop());abortPush()}else enforce();
+ if(ch===0){recycle(undo.pop());abortPush()}else enforce(SDIRT);
  /* stroke ke dauraan fast preview ke liye ek rAF pending reh jata hai; wo release ke
     baad chal kar feather wale final frame ko hard-edge preview se overwrite kar deta
     tha - screen aur save ki file alag dikhti thi. ab wo pending frame cancel hota hai
@@ -2554,12 +2566,24 @@ const save=async()=>{
     jata hai. wo save ke full render ke baad chalta tha aur screen par hard edge
     chhod deta tha jabki file soft-edge save hoti thi. ab wo frame cancel hota hai
     taaki screen aur file ek hi render se aayein. */
+ /* rt (slider ka 160 ms wala poora render) pending ho to wo render abhi hona
+    chahiye - warna canvas par fast (hard edge) frame hi bacha reh jata hai. */
+ const rtPend=!!rt,rafPend=!!raf;
  if(raf){cancelAnimationFrame(raf);raf=0}fastReq=false;
  clearTimeout(rt);
  /* Hold: Original dabaye hue save karne par render() original photo banata tha,
     is liye file me bina cut ki hui photo jati thi. save ke waqt compare hamesha
     off rehta hai - screen aur file dono edit dikhate hain. */
- showOrig=false;render(false);
+ /* Save pehle hamesha ek poora render karta tha, chahe canvas par pehle se bilkul
+    wahi frame ho jo file me jana hai (aam haalat: user koi button dabata hai, uska
+    fullRender turant chalta hai, phir Save dabata hai). us render ka har draw call
+    bekaar tha: clearRect + background + subject ka composite, aur nateeja byte par
+    byte wahi. ab render sirf tab hota hai jab canvas sach me peeche ho: compare
+    (showOrig) on ho, koi fast frame rAF me pending ho (raf), slider ka poora render
+    (rt) pending ho, ya pichhla render khud fast tha (RFULL=false). teeno haalat me
+    pehle jaisa poora render hi chalta hai, is liye file me ek pixel nahi badalta. */
+ const needR=showOrig||rtPend||rafPend||!RFULL;
+ showOrig=false;if(needR)render(false);
  let src=cv;
  /* JPEG me alpha nahi hota, is liye transparent background wali photo ko safed
     canvas par flatten kiya jata hai. pehle har save par jcv.width/height dobara
@@ -2665,7 +2689,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;if(!savePending)lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.66',
+window.GlassCut={version:'1.1.67',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
