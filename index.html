@@ -379,14 +379,32 @@ try{window.addEventListener('deviceorientation',e=>{
 seg('tools',v=>{mode=v;toast(v==='wand'?'Photo par tap karo, same color hat jayega':v==='erase'?'Ungli se mitao':v==='keep'?'Object par ungli phero, wo kabhi nahi hatega':'Ungli se wapas lao')});
 seg('ratios',v=>{ratio=v;if(od){setSize();fullRender()}});
 seg('fmts',v=>fmt=v);
-const applyLang=(l,init)=>{lang=l;const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,{acceptNode:n=>(n.parentNode&&n.parentNode.nodeName==='SCRIPT')?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT});let n;
- while(n=w.nextNode()){if(n.__o===undefined){const c=n.nodeValue.trim();if(!EN[c])continue;n.__o=n.nodeValue}
-  const base=n.__o,core=base.trim();if(!EN[core])continue;
-  n.nodeValue=l==='en'?base.replace(core,EN[core]):base}
- document.documentElement.lang=l==='en'?'en':'hi';const el=$('#langs');$$('#langs .sg').forEach((b,i)=>{const on=b.dataset.v===l;b.classList.toggle('on',on);if(on)el.style.setProperty('--i',i)});
- try{localStorage.setItem('gc-lang',l)}catch(_){}if(!init)toast(l==='en'?'Language: English':'Language: Hinglish')};
+/* Language toggle pehle har baar poora DOM TreeWalker banata tha aur har text node
+   par trim() + String.replace() chalata tha. 197 text node hain, is liye ek toggle
+   = ek TreeWalker object + 197 trim string + 197 replace string, sab garbage.
+   Markup static hai (page ke load ke baad koi text node add nahi hota), is liye
+   wahi list ek hi baar banai jaati hai: har entry {n,hi,en} hai - dono string
+   wahin ek baar nikal li jaati hain - aur toggle sirf nodeValue likhta hai.
+   nateeja bilkul wahi rehta hai (wahi node, wahi dono string, wahi kram); jo node
+   EN me nahi hai wo pehle bhi chhoot jata tha aur ab table me aata hi nahi.
+   nodeValue se pehle n.__o par likhne ki zaroorat bhi nahi rahi. */
+let LANGT=null,savedLang=null;
+const langTable=()=>{
+ if(LANGT)return LANGT;
+ const out=[];
+ const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,{acceptNode:n=>(n.parentNode&&n.parentNode.nodeName==='SCRIPT')?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT});let n;
+ while(n=w.nextNode()){const base=n.nodeValue,core=base.trim();if(!EN[core])continue;
+  out.push({n:n,hi:base,en:base.replace(core,EN[core])})}
+ return LANGT=out};
+const applyLang=(l,init)=>{lang=l;const t=langTable(),en=l==='en';
+ for(let i=0;i<t.length;i++){const e=t[i];e.n.nodeValue=en?e.en:e.hi}
+ document.documentElement.lang=en?'en':'hi';const el=$('#langs');$$('#langs .sg').forEach((b,i)=>{const on=b.dataset.v===l;b.classList.toggle('on',on);if(on)el.style.setProperty('--i',i)});
+ /* localStorage write synchronous disk kaam hai (WebView me LevelDB) - jab language
+    pehle se wahi ho to likhne ki zaroorat nahi */
+ if(!init&&savedLang!==l){savedLang=l;try{localStorage.setItem('gc-lang',l)}catch(_){}}
+ if(!init)toast(en?'Language: English':'Language: Hinglish')};
 seg('langs',v=>applyLang(v));
-try{const sl=localStorage.getItem('gc-lang');if(sl)applyLang(sl,true)}catch(_){}
+try{const sl=localStorage.getItem('gc-lang');if(sl){savedLang=sl;applyLang(sl,true)}}catch(_){}
 sw('tFlip',v=>{P.f=v?-1:1;sched(false)});sw('tSh',v=>{P.sh=v?1:0;sched(false)});
 sw('tKeep',v=>{keepObj=v?1:0;toast(v?'Objects bachaye jayenge':'Sirf main object rahega')});
 
@@ -1379,7 +1397,17 @@ const qr=()=>{sched(true);clearTimeout(rt);rt=setTimeout(()=>{if(raf){cancelAnim
    ek baar bina - canvas hash 1588f5b8 vs c3925da0, aur ek extra drawImage).
    ab har seedha full render pending fast frame ko cancel karta hai - bilkul
    wahi jo end() aur save() pehle se karte hain. */
-const fullRender=()=>{if(raf){cancelAnimationFrame(raf);raf=0}fastReq=false;clearTimeout(rt);render(false)};
+/* "Apni photo" background ka decoded bitmap poore session ke liye pakda rehta tha -
+   ek 1400x1400 background ~7.8 MB decoded (1400x1050 ke liye ~5.9 MB). jab background
+   kisi aur cheez par chala jaye (rang / gradient / blur / transparent) to us image ko
+   wapas lane ka koi rasta nahi hai: #bBgImg hamesha file dobara chunwata hai, koi
+   swatch purani image ko dobara select nahi karta - yaani wo bitmap sirf dead memory
+   hai, aur wo nayi photo load karne par bhi bachi rehti hai. ab bg.t badalne par use
+   chhod diya jata hai. bg.t==='img' par yeh kabhi nahi chalta, is liye screen ka ek
+   pixel nahi badalta (bgImg sirf bg.t==='img' par padha jata hai - render, cover(),
+   opaqueBg(), setSize() aur imgOpaqueLater(), sab par wahi guard hai). */
+const dropBgImg=()=>{if(bg.t==='img')return;if(bgImg){bgImg=null;imgOpaqueFor=null;imgOpaque=false}};
+const fullRender=()=>{if(raf){cancelAnimationFrame(raf);raf=0}fastReq=false;clearTimeout(rt);dropBgImg();render(false)};
 
 /* mask tools */
 /* undo snapshot: keepMask par jab tak kuch paint nahi hua (aam haal) uski copy
@@ -2361,6 +2389,15 @@ let jcv=null,jcvx=null,saveBusy=false;
    raaste apna kaam khud kar dete hain) aur safal save par turant chhod diya
    jata hai, warna multi-MB blob poore session ke liye pinned reh jata. */
 let lastSaveBlob=null;
+/* Native (API<29) raaste par save permission ka intezaar karta hai: page ko sirf
+   "ok:pending" milta hai aur uska blob ek local variable se yahan aata hai. Android
+   usi waqt onTrimMemory/onLowMemory bhej sakta hai (app background me gaya, ya
+   memory tight hui) -> GlassCut.trim() -> dropScratch(), jo lastSaveBlob null kar
+   deta tha. Uske baad write fail hone par GlassCut.failed() ke paas dikhane ke liye
+   kuch nahi bachta aur photo ka koi bhi copy user ke paas nahi rehti (page ne
+   save() se pehle hi laut diya tha). ab jab tak native ka jawab nahi aata
+   (saved/failed/agla save) blob pakda rehta hai - yeh hi ek copy hai. */
+let savePending=false;
 const save=async()=>{
  if(!od){toast('Pehle photo choose karo');return}
  /* ek waqt me ek save: do tap ek saath do file gallery me daal dete the.
@@ -2417,7 +2454,7 @@ const save=async()=>{
      jati thi par user ko koi confirmation nahi milta (browser/share wale dono
      raaste "Save ho gaya" dikhate hain, aur pending raaste par native khud
      GlassCut.saved() bulata hai). ab wahi message yahan bhi. */
-  const bfin=ok=>{if(bdone)return;bdone=true;if(wd)clearTimeout(wd);saveBusy=false;
+  const bfin=ok=>{if(bdone)return;bdone=true;if(wd)clearTimeout(wd);saveBusy=false;savePending=false;
    if(!ok)fallback(b);else{lastSaveBlob=null;toast('Save ho gaya')}};
   wd=setTimeout(()=>bfin(false),6000);
   hold=true;lastSaveBlob=b;
@@ -2428,7 +2465,7 @@ const save=async()=>{
       pehle page isi par "Save ho gaya" dikha deta tha aur phir native "Save nahi
       hua" - ulta message. ab pending par page chup rehta hai; asli nateeja
       native GlassCut.saved() se aata hai. */
-   if(r.indexOf('ok:pending')===0){bdone=true;if(wd)clearTimeout(wd);saveBusy=false;return}
+   if(r.indexOf('ok:pending')===0){bdone=true;savePending=true;if(wd)clearTimeout(wd);saveBusy=false;return}
    if(!r||r.indexOf('err')===0)bfin(false);else bfin(true)};
   fr.onerror=()=>bfin(false);
   try{fr.readAsDataURL(b)}catch(_){bfin(false)}
@@ -2480,17 +2517,17 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;jcvx=null;STK=null;POOL.length=0;
  /* opacity probe canvas bhi ek cache hai (CW x CH surface) - trim par chhod do,
     agla check ise dobara bana leta hai */
- opc=null;opx=null;lastSaveBlob=null;
+ opc=null;opx=null;if(!savePending)lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.62',
+window.GlassCut={version:'1.1.63',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
     pehle se dikhta hai - file galley me nahi pahunchi, to image yahan se long-press
     kar ke save ho sakti hai. */
- saved:()=>{lastSaveBlob=null;toast('Save ho gaya')},
- failed:()=>{toast('Save nahi hua');if(lastSaveBlob)fallback(lastSaveBlob)},
+ saved:()=>{savePending=false;lastSaveBlob=null;toast('Save ho gaya')},
+ failed:()=>{savePending=false;toast('Save nahi hua');if(lastSaveBlob)fallback(lastSaveBlob)},
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
