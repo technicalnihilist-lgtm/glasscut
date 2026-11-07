@@ -177,8 +177,17 @@ public class MainActivity extends Activity {
             @Override
             public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb,
                                              FileChooserParams params) {
+                /* Chauthe call site par bhi wahi guard. Ye line pehle bina try/catch
+                   thi, jabki onActivityResult, onRenderProcessGone aur onDestroy
+                   teeno ise guard karte hain. Renderer mar chuka ho
+                   (onRenderProcessGone) ya WebView destroy ho raha ho to
+                   onReceiveValue IllegalStateException phenkta hai - aur ye WebView
+                   ka hi callback hai, yaani exception UI thread se seedha activity
+                   tak jati hai aur app band. Theek wahi lamha jab ye chalta hai wo
+                   doosri baar "photo chuno" dabana hai jab pehla picker abhi band
+                   hua ho. Ab dead callback ko chhod diya jata hai. */
                 if (pendingFiles != null) {
-                    pendingFiles.onReceiveValue(null);
+                    try { pendingFiles.onReceiveValue(null); } catch (Exception ignored) { }
                 }
                 pendingFiles = cb;
                 Intent i = new Intent(Intent.ACTION_GET_CONTENT);

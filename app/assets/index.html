@@ -1520,7 +1520,7 @@ const sched=fast=>{if(fast)fastReq=true;if(!raf)raf=requestAnimationFrame(onRaf)
    usi canvas par chadh jata hai (hard edge, outline ke sirf 8 shift). yaani screen par
    wahi reh jata tha jo file me save nahi hota. ab poora render aate waqt pending fast
    frame cancel ho jata hai. */
-const qr=()=>{sched(true);clearTimeout(rt);rt=setTimeout(()=>{if(raf){cancelAnimationFrame(raf);raf=0;fastReq=false}render(false)},160)};
+const qr=()=>{sched(true);clearTimeout(rt);rt=setTimeout(()=>{rt=0;if(raf){cancelAnimationFrame(raf);raf=0;fastReq=false}render(false)},160)};
 /* fullRender = "poora render, aur uske baad koi purana fast frame na aaye".
    slider ka fast preview rAF me pending reh jata hai; agar usi frame me koi
    button dab jaye (Grow/Shrink/Smooth/Invert/Reset/Undo/Redo/Auto/background)
@@ -1548,7 +1548,7 @@ const qr=()=>{sched(true);clearTimeout(rt);rt=setTimeout(()=>{if(raf){cancelAnim
 const dropBgImg=()=>{if(bg.t==='img')return;if(bgImg){const o=bgImg;bgImg=null;imgOpaqueFor=null;imgOpaque=false;
  if(o.close){try{o.close()}catch(_){}}}
  opc=null;opx=null};
-const fullRender=()=>{if(raf){cancelAnimationFrame(raf);raf=0}fastReq=false;clearTimeout(rt);dropBgImg();render(false)};
+const fullRender=()=>{if(raf){cancelAnimationFrame(raf);raf=0}fastReq=false;clearTimeout(rt);rt=0;dropBgImg();render(false)};
 
 /* mask tools */
 /* undo snapshot: keepMask par jab tak kuch paint nahi hua (aam haal) uski copy
@@ -1635,7 +1635,10 @@ const enforce=(bx)=>{if(!keepMask||!keepDirty)return;let ch=false;
  for(let y=ky0;y<=ky1;y++){const b=y*W;
   for(let x=kx0;x<=kx1;x++){const i=b+x;if(keepMask[i]&&mask[i]!==255){mask[i]=255;ch=true}}}
  /* kuch badla hi nahi to softM abhi bhi sahi hai - poora blur dobara mat banao */
- if(ch)softKill()};
+ /* ch wapas: cutout isi se pata karta hai ki enforce ne kuch likha ya nahi (warna
+    ek khaali cutout par bhi softM/fgc ka cache gira diya jata). baaki callers return
+    value ko ignore karte hain - unka behaviour bilkul wahi hai. */
+ if(ch)softKill();return ch};
 /* scratch buffers: ek hi pair of arrays har wand tap me reuse hota hai (generation
    stamp se reset free), pehle har tap par 5 bytes/pixel naya garbage banta tha */
 let FL=null;
@@ -1852,7 +1855,7 @@ let CC=null;
    refs ke teen scalar buffer - sab size se azaad hain, is liye ek hi baar bante hain */
 const BK=new Int32Array(2048),CND=new Int32Array(512),CNDC=new Int32Array(512);
 const REF={r:new Float64Array(4),g:new Float64Array(4),b:new Float64Array(4)};
-const cutout=()=>{softKill();const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.round(H/f)),N=nw*nh,M=W*H;
+const cutout=()=>{const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.round(H/f)),N=nw*nh,M=W*H;
  if(!SD||SD.length!==N*4)SD=new Uint8ClampedArray(N*4);
  const sd=boxDown(od,W,H,nw,nh,SD);
  /* border seed colours: pehle har seed ek {n,r,g,b} object me jata tha aur baad me
@@ -2161,11 +2164,19 @@ if(i<N-nw){j=i+nw;if(!bg[j]&&MATCH[j]){bg[j]=1;st2[gp++]=(x<<20)|j}}}
    a=r0-(v&255);b2=g0-((v>>>8)&255);c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=(x<<21)|j}}}
   if(i<M-W){j=i+W;if(seen[j]!==gen){v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
    a=r0-(v&255);b2=g0-((v>>>8)&255);c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=(x<<21)|j}}}}
- enforce();
+ const kc=enforce();
  /* keepMask me paint kiya hua hissa cutout ke box se bahar ho sakta hai (enforce
     wahan 255 likhta hai) - us haalat me poora box hi surakshit hai */
  if(keepDirty)mbAll();else if(mbx1<0){MB[0]=0;MB[1]=0;MB[2]=-1;MB[3]=-1}else{MB[0]=mbx0;MB[1]=mby0;MB[2]=mbx1;MB[3]=mby1}
- mver++;softKill();return cnt};
+ /* caches sirf tab girao jab mask sach me badla ho. pehle yahan bina shart
+    mver++/softKill() chalte the, aur softKill() cutout ke shuru me bhi tha, is liye
+    ek aisa Auto (jisme hatane ko kuch bacha hi nahi - cnt=0) agle render par poora
+    feather blur (W*H do-pass) aur poora alpha upload dobara karwata tha, jabki mask
+    ka ek byte nahi badla. ab cnt=0 aur enforce ka kc=0 par dono cache wahi rehte
+    hain (fgVer===mver, softKey===feather), is liye layer() apne cache par lautta
+    hai aur nateeja byte-identical rehta hai. */
+ if(cnt||kc){mver++;softKill()}
+ return cnt};
 /* AK = pichhle safal cutout ka signature [mver,W,H,tol,keepObj]. cutout ka nateeja
    sirf mask0 (photo), tol, keepObj, keepMask aur us waqt ke mask par depend karta
    hai - aur mask ya keepMask badalne wala har raasta (stroke, wand, grow/shrink,
@@ -2186,7 +2197,11 @@ const auto=(silent)=>{if(!od)return;
      net asar zero tha, aur mask na badalne par mver badhana sirf bekaar upload tha. */
   if(!silent)toast('Kuch nahi hata. Tolerance badhao ya Wand use karo');return}
  push();const c=cutout();
- if(c<=0){recycle(undo.pop());abortPush();mver++;if(!silent)toast(c<0?'Background clear nahi hai, Wand try karo':'Kuch nahi hata. Tolerance badhao ya Wand use karo');return}
+ /* mver yahan badhaya nahi jata: cutout khud tabhi badhata hai jab usne mask me
+    sach me kuch likha ho (cnt||kc). khaali cutout par mask byte-identical hai, is liye
+    mver badhana sirf agle frame par bekaar full alpha upload + poora feather blur
+    karwata tha - wahi tark jo wand ke cnt=0 raaste par pehle se hai. */
+ if(c<=0){recycle(undo.pop());abortPush();if(!silent)toast(c<0?'Background clear nahi hai, Wand try karo':'Kuch nahi hata. Tolerance badhao ya Wand use karo');return}
  AK[0]=mver;AK[1]=W;AK[2]=H;AK[3]=tol;AK[4]=keepObj;
  fullRender();toast(silent?'Background hata diya - ab naya background chuno':'Ho gaya! Erase / Restore se saaf karo')};
 const wand=(x,y)=>{x=Math.min(W-1,Math.max(0,x|0));y=Math.min(H-1,Math.max(0,y|0));let r=0,g=0,b=0,n=0;
@@ -2587,7 +2602,7 @@ const save=async()=>{
     chahiye - warna canvas par fast (hard edge) frame hi bacha reh jata hai. */
  const rtPend=!!rt,rafPend=!!raf;
  if(raf){cancelAnimationFrame(raf);raf=0}fastReq=false;
- clearTimeout(rt);
+ clearTimeout(rt);rt=0;
  /* Hold: Original dabaye hue save karne par render() original photo banata tha,
     is liye file me bina cut ki hui photo jati thi. save ke waqt compare hamesha
     off rehta hai - screen aur file dono edit dikhate hain. */
@@ -2709,7 +2724,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;if(!savePending)lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.69',
+window.GlassCut={version:'1.1.70',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
