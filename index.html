@@ -460,10 +460,14 @@ const imgOpaqueLater=im=>{const tok=++imgOTok;
    is liye cover() se pehle clearRect chalta hai (khaali canvas par cover()
    poore canvas ko dhakta hi hai, is liye nateeja fresh canvas jaisa hi hai). */
 let opc=null,opx=null;
+/* background photo ab ImageBitmap bhi ho sakti hai (neeche #fBg dekho), aur bitmap
+   par naturalWidth/naturalHeight nahi hote - sirf width/height. dono shapes ke liye
+   ek hi getter, taaki cover()/opacity check har raaste par wahi size dekhein. */
+const imW=im=>im.naturalWidth||im.width||0,imH=im=>im.naturalHeight||im.height||0;
 const imgOpaqueCheck=im=>{try{if(!CW||!CH)return false;
  if(!opc||opc.width!==CW||opc.height!==CH){opc=mk();opc.width=CW;opc.height=CH;opx=opc.getContext('2d',{willReadFrequently:true})}
  const x=opx;x.clearRect(0,0,CW,CH);
- cover(x,im,im.naturalWidth,im.naturalHeight,CW,CH);
+ cover(x,im,imW(im),imH(im),CW,CH);
  const d=x.getImageData(0,0,CW,CH).data;
  /* alpha byte har pixel par dhundhne ke bajaye (1400x1050 par 1.47 M baar
     i*4+3) ek hi 32-bit word par dekha jata hai: little-endian par alpha sabse
@@ -486,8 +490,36 @@ $('#fBg').onchange=e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
     hai (imgOpaqueLater): pehla render turant hota hai, check agle task me. flag ka
     "pata nahi" matlab render ka clearRect chalta hai - jo har haalat me sahi hai,
     is liye pixel ek bhi nahi badalte; check ke baad agle frame se clear bachta hai. */
- loadImg(f,im=>{bgImg=im;bg={t:'img'};bgVer++;imgOpaque=false;imgOpaqueFor=null;imgOpaqueLater(im);
-  noSw();fullRender();toast('Background lag gaya')},BGLOAD)};
+ /* Background photo bhi poore size par decode hoti thi - 6000x4000 PNG ka bitmap
+    96 MB (RGBA) aur uska pehla composite, jabki wo sirf CW x CH canvas (max 1400)
+    me cover() se draw hoti hai. Wahi cheez jo main photo ke liye 1.1.58 me theek
+    hui thi (6000x4000 = 96 MB bitmap, canvas 1400x1050 hi) yahan bachi hui thi:
+    #fMain header se size padh kar decode ke waqt hi resize karta hai, #fBg seedha
+    <img> se poora decode karta tha. ab dono ek hi raaste par hain - imgDims se
+    size, phir createImageBitmap ka resizeWidth/resizeHeight; jo format pata na
+    chale, photo chhoti ho ya createImageBitmap na ho to purana <img> raasta
+    bilkul jaisa tha waisa hi chalta hai. bgImg ab ImageBitmap ho sakti hai, is
+    liye uski size imW/imH se padhi jati hai (dono shapes par wahi value). */
+ const bgDone=im=>{const old=bgImg;
+  bgImg=im;bg={t:'img'};bgVer++;imgOpaque=false;imgOpaqueFor=null;imgOpaqueLater(im);
+  /* purani ImageBitmap ka decoded bitmap turant chhod do (wo sirf dead memory
+     thi) - HTMLImageElement par close() hota hi nahi */
+  if(old&&old!==im&&old.close){try{old.close()}catch(_){}}
+  noSw();fullRender();toast('Background lag gaya')};
+ (async()=>{
+  let d=null;try{d=await imgDims(f)}catch(_){}
+  if(!d||Math.max(d[0],d[1])<=1400||typeof createImageBitmap!=='function'){loadImg(f,bgDone,BGLOAD);return}
+  const s=Math.min(1,1400/Math.max(d[0],d[1]));
+  const tw=Math.max(1,Math.round(d[0]*s)),th=Math.max(1,Math.round(d[1]*s));
+  /* token: do background photo jaldi-jaldi chunne par pehli (dheemi) ka decode
+     doosri ke baad aata tha - wahi bug jo BGLOAD ka box pehle se rokta hai */
+  const tok=++BGLOAD.t;
+  let bm=null;
+  try{bm=await Promise.race([createImageBitmap(f,{resizeWidth:tw,resizeHeight:th,resizeQuality:'high'}),
+   new Promise((_,rej)=>setTimeout(rej,15000))])}catch(_){bm=null}
+  if(tok!==BGLOAD.t){try{bm&&bm.close()}catch(_){}return}
+  if(!bm||!bm.width||!bm.height){loadImg(f,bgDone,BGLOAD);return}
+  bgDone(bm)})()};
 
 /* image load */
 /* Photo load: na onload na onerror aaye (kharab file, decode OOM, WebView jo
@@ -578,6 +610,24 @@ const imgDims=async f=>{
    return null}
   if(n>10&&head[0]===0x47&&head[1]===0x49&&head[2]===0x46){ /* GIF */
    const w=head[6]|head[7]<<8,h=head[8]|head[9]<<8;return w>0&&h>0?[w,h]:null}
+  /* ISO base media (AVIF / HEIC / HEIF): camera ki photo aaj kal in containers me
+     aati hai, aur imgDims inhe pehchan hi nahi paata tha - yaani wahi poora decode
+     jo 1.1.58 me JPEG/PNG/WebP ke liye hataaya gaya tha (12 MP = 48 MB bitmap,
+     chahe canvas 1400x1050 hi ho; 108 MP = 432 MB, seedha OOM). format ka pehla
+     byte sequence 'ftyp' hai; size 'ispe' box me hai - uske 4 byte version/flags
+     ke baad do big-endian uint32 (width, height).
+     ek file me ek se zyada ispe ho sakte hain (thumbnail ka), is liye sabse bada
+     area chuna jata hai, aur teesra element (1) pickPhoto ko batata hai ki yeh
+     dims ek thumbnail ke bhi ho sakte hain - wahan sirf ek side constrain hoti
+     hai, is liye galat dims se photo kabhi distorted nahi banti. */
+  if(n>16&&head[4]===0x66&&head[5]===0x74&&head[6]===0x79&&head[7]===0x70){ /* ftyp */
+   let bw=0,bh=0;
+   for(let i=0;i+16<=n;i++){
+    if(head[i]===0x69&&head[i+1]===0x73&&head[i+2]===0x70&&head[i+3]===0x65){ /* ispe */
+     const w=be4(i+8),h=be4(i+12);
+     if(w>0&&h>0&&w<100000&&h<100000&&w*h>bw*bh){bw=w;bh=h}
+     i+=15}}
+   return bw>0?[bw,bh,1]:null}
  }catch(_){}
  return null};
 let MAINTOK=0;
@@ -693,11 +743,23 @@ const pickPhoto=f=>{
   if(!d||Math.max(d[0],d[1])<=1400||typeof createImageBitmap!=='function'){plain();return}
   const s=Math.min(1,1400/Math.max(d[0],d[1]));
   const tw=Math.max(1,Math.round(d[0]*s)),th=Math.max(1,Math.round(d[1]*s));
-  let bm=null;
-  /* 15 s ka guard: createImageBitmap kabhi settle na ho to purana img raasta
-     chalta hai (uska apna 20 s watchdog pehle se hai) */
-  try{bm=await Promise.race([createImageBitmap(f,{resizeWidth:tw,resizeHeight:th,resizeQuality:'high'}),
+  /* ISO container (AVIF/HEIC) ke dims ek thumbnail ke bhi ho sakte hain, aur do
+     resizeWidth+resizeHeight dene par galat dims photo ko distort kar deti hai.
+     is liye wahan sirf lambi side constrain hoti hai (aspect browser khud rakhta
+     hai) aur nateeja 1400 se bada nikle to doosri side se ek chhota dobara decode
+     hota hai - 1400 wide decode par ~7.8 MB, yaani dono milakar bhi full-size
+     decode se kaafi kam. JPEG/PNG/WebP/GIF ka raasta (dono dims) bilkul wahi hai. */
+ const iso=d[2]===1,bo=iso?(d[0]>=d[1]?{resizeWidth:tw}:{resizeHeight:th})
+   :{resizeWidth:tw,resizeHeight:th};
+ bo.resizeQuality='high';
+ let bm=null;
+ /* 15 s ka guard: createImageBitmap kabhi settle na ho to purana img raasta
+    chalta hai (uska apna 20 s watchdog pehle se hai) */
+ try{bm=await Promise.race([createImageBitmap(f,bo),
    new Promise((_,rej)=>setTimeout(rej,15000))])}catch(_){bm=null}
+ if(bm&&iso&&Math.max(bm.width,bm.height)>1400){try{bm.close()}catch(_){}
+  try{bm=await Promise.race([createImageBitmap(f,d[0]>=d[1]?{resizeHeight:1400,resizeQuality:'high'}
+   :{resizeWidth:1400,resizeQuality:'high'}),new Promise((_,rej)=>setTimeout(rej,15000))])}catch(_){bm=null}}
   if(!bm||!bm.width||!bm.height){plain();return}
   go(bm,bm.width,bm.height,()=>{try{bm.close()}catch(_){}});
  })()};
@@ -1365,7 +1427,7 @@ function render(fast){if(!od)return;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=
  else if(bg.t==='grad'){const gk=bgGK,gv=+bg.v;
   if(gk[0]!==CW||gk[1]!==CH||gk[2]!==gv){const g=GRADS[bg.v];bgGrad=cx.createLinearGradient(0,0,CW,CH);bgGrad.addColorStop(0,g[0]);bgGrad.addColorStop(1,g[1]);gk[0]=CW;gk[1]=CH;gk[2]=gv}
   cx.fillStyle=bgGrad;cx.fillRect(0,0,CW,CH)}
- else if(bg.t==='img'&&bgImg)cover(cx,bgImg,bgImg.naturalWidth,bgImg.naturalHeight,CW,CH);
+ else if(bg.t==='img'&&bgImg)cover(cx,bgImg,imW(bgImg),imH(bgImg),CW,CH);
  else if(bg.t==='blur'||bg.t==='bluetint'){blurBg();cx.drawImage(bgb,0,0)}
  cx.restore();
  /* depth: background ko halka gehra karo taaki subject aage ubhre */
@@ -1406,7 +1468,14 @@ const qr=()=>{sched(true);clearTimeout(rt);rt=setTimeout(()=>{if(raf){cancelAnim
    chhod diya jata hai. bg.t==='img' par yeh kabhi nahi chalta, is liye screen ka ek
    pixel nahi badalta (bgImg sirf bg.t==='img' par padha jata hai - render, cover(),
    opaqueBg(), setSize() aur imgOpaqueLater(), sab par wahi guard hai). */
-const dropBgImg=()=>{if(bg.t==='img')return;if(bgImg){bgImg=null;imgOpaqueFor=null;imgOpaque=false}};
+/* bgImg ke saath uska decoded bitmap (agar ImageBitmap hai) turant chhod do, aur
+   opacity probe canvas (CW x CH, 1400x1050 par 5.88 MB CPU-backed surface) bhi -
+   wo sirf "Apni photo" wale background ke liye hai, aur ye function sirf tab
+   chalta hai jab bg.t sach me 'img' nahi hai. imgOpaqueCheck use agle check par
+   dobara bana leta hai, is liye screen par ek pixel nahi badalta. */
+const dropBgImg=()=>{if(bg.t==='img')return;if(bgImg){const o=bgImg;bgImg=null;imgOpaqueFor=null;imgOpaque=false;
+ if(o.close){try{o.close()}catch(_){}}}
+ opc=null;opx=null};
 const fullRender=()=>{if(raf){cancelAnimationFrame(raf);raf=0}fastReq=false;clearTimeout(rt);dropBgImg();render(false)};
 
 /* mask tools */
@@ -2520,7 +2589,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;if(!savePending)lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.63',
+window.GlassCut={version:'1.1.64',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
