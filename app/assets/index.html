@@ -1426,6 +1426,12 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
   ||Tcs!==cs3||Tsh!==sh3||Tn!==n
   ||(pb?(TPB[0]!==pb[0]||TPB[1]!==pb[1]||TPB[2]!==pb[2]||TPB[3]!==pb[3]):false);
  if(need){
+ /* tmp ka surface pure cache hai: trim() use 1x1 kar deta hai (dekho
+    dropScratch), is liye yahan apna size guard chahiye - warna 1x1 canvas par
+    likha jata. THas trim par false ho jata hai, is liye pehla frame poora hi
+    banta hai; size wahi ho to canvas ko chhua bhi nahi jata (koi allocation,
+    koi clear), theek pehle jaisa. */
+ if(tmp.width!==CW||tmp.height!==CH){tmp.width=CW;tmp.height=CH}
  /* content box: SUB + outline ring (r) + 2 px bilinear pad */
  let full=!pb,bx0=0,by0=0,bx1=W-1,by1=H-1;
  if(pb){const pd=r+2;
@@ -2925,8 +2931,13 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
     agla check ise dobara bana leta hai */
  opc=null;opx=null;if(!savePending)lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
- fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.77',
+ fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1;
+ /* tmp (composite surface, CW x CH) bhi pure cache hai - outline/shadow/depth/
+    opacity wale raaste ise bharte hain aur drawSubj apna size guard khud rakhta
+    hai. yahi trim ke baad bacha sabse bada offscreen surface tha. THas/SOK reset
+    se agla render poora banta hai, is liye canvas par ek pixel nahi badalta. */
+ tmp.width=tmp.height=1;THas=false;SOK=false};
+window.GlassCut={version:'1.1.79',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
