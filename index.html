@@ -1676,8 +1676,14 @@ const stk=n=>{if(!STK||STK.length<n)STK=new Int32Array(n);return STK};
    flood ke shuru ka softKill() bhi hata diya: wo SDIRT ko null kar deta tha, is
    liye partial raasta kabhi chal hi nahi paata. */
 const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;
- if(!FL||FL.n!==M){FL={n:M,vis:new Int32Array(M),st:stk(M),g:0}}
- const vis=FL.vis,st=FL.st,g=++FL.g,t2=t*t;let sp=0,cnt=0;
+ if(!FL||FL.n!==M){FL={n:M,vis:new Uint8Array(M),st:stk(M),g:0}}
+ /* vis ab 8-bit: 1400x1200 par 6.72 MB ki jagah 1.68 MB, aur har span ka
+    vis.fill(g,...) memset 4x chhota. stamp sirf "is run me dekha gaya" batata
+    hai (koi value nahi), is liye 255 par wrap karne se pehle buffer saaf karna
+    nateeja nahi badalta. naapa: wand tap min 30.9 -> 32.5 ms (shor ke andar,
+    yani speed par asar nahi) aur flood ka nateeja byte-identical. */
+ if(++FL.g>255){FL.vis.fill(0);FL.g=1}
+ const vis=FL.vis,st=FL.st,g=FL.g,t2=t*t;let sp=0,cnt=0;
  /* sach me badle hue pixel ka box (mask 255 -> 0) */
  let cx0=W,cy0=H,cx1=-1,cy1=-1;
  /* keepMask sirf tab dekha jata hai jab sach me kuch protect kiya gaya ho
@@ -1781,6 +1787,14 @@ let SD=null,XM=null,SEEDS=null,XR=null,RUN=null;
 /* island labelling ke stats: island ki size aur rang ka jod. buffer sirf tab bada
    hota hai jab islands ki ginti capacity se zyada ho - warna wahi ek set reuse. */
 let ISL=null;
+/* RR = row-run table. island pass ke fill ka 85-90% waqt neighbour rows ko
+   dobara-dobara scan karne me jata tha: har pop par apni row ka poora span
+   (2W+2H pixel) phir se padha jata tha, chahe wo row pehle hi scan ho chuki ho.
+   ab har row ke "non-bg runs" ek hi pass me ek baar bante hain (CSR: off/y,
+   x0/x1 me run ka [start,end]) aur fill sirf runs par chalta hai - ek pixel
+   ab 3 baar ki jagah ek hi baar padha jata hai. run table lab array ki jagah
+   leti hai (dono 1400x1200 par ~1.68 MB), is liye memory badhti nahi. */
+let RR=null;
 const islBuf=need=>{if(ISL&&ISL.cap>=need)return ISL;
  let cap=ISL?ISL.cap:1024;while(cap<need)cap*=2;
  const o={cap,sz:new Int32Array(cap),sr:new Float64Array(cap),sg:new Float64Array(cap),
@@ -1904,7 +1918,7 @@ const cutout=()=>{const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.ro
     1400x1200 par st+st2+q3+q = 11.76 MB, ab ek hi max(N,M) int buffer 6.72 MB. */
  if(!CC||CC.n!==N||CC.m!==M){CC={n:N,m:M,st:stk(Math.max(N,M)),
   match:new Uint8Array(N),
-  lab:new Int32Array(N).fill(-1),bg:new Uint8Array(N),
+  bg:new Uint8Array(N),
   inner:new Uint8Array(N),
   seen:new Uint8Array(M),lev:new Uint8Array(M),g:0}}
  const C=CC;
@@ -1912,7 +1926,7 @@ const cutout=()=>{const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.ro
     stamp sirf "is run me dekha gaya" batata hai, is liye reset se nateeja nahi badalta. */
  if(++C.g>255){C.seen.fill(0);C.g=1}
  const gen=C.g;
- const st=C.st,bg=C.bg.fill(0),st2=st,lab=C.lab,q3=st;
+ const st=C.st,bg=C.bg.fill(0),st2=st,q3=st;
  const t2=tol*tol;let sp=0;
  const tb=tol*(keepObj?1.35:1.7),t2b=tb*tb;
  /* coarse grid (downscaled copy) ka rang pehle har neighbour check par p=i*4 ka
@@ -2031,31 +2045,42 @@ if(i<N-nw){j=i+nw;if(!bg[j]&&MATCH[j]){bg[j]=1;st2[gp++]=(x<<20)|j}}}
     dobara ginna galat hota). */
  let isl=islBuf(1024),isz=isl.sz,isr=isl.sr,isg=isl.sg,isb=isl.sb,drop=isl.drop,ni=0;
  const isU=SD32;
- for(let i=0;i<N;i++){if(bg[i]||lab[i]>=0)continue;
-  if(ni>=isl.cap){isl=islBuf(ni+1);isz=isl.sz;isr=isl.sr;isg=isl.sg;isb=isl.sb;drop=isl.drop}
-  const id=ni++;let t=0;lab[i]=id;q3[t++]=((i%nw)<<20)|i;let n2=0,r0=0,g0=0,b0=0;
-  while(t){const e=q3[--t],j=e&0xFFFFF,x=e>>>20,base=j-x;
-   /* push ke waqt yahi pixel mark hua tha, is liye ginti/jod yahin se shuru */
-   let vv=isU?isU[j]:(sd[j*4]|sd[j*4+1]<<8|sd[j*4+2]<<16);
-   n2++;r0+=vv&255;g0+=(vv>>>8)&255;b0+=(vv>>>16)&255;
-   let xl=x,xr=x,k;
-   while(xl>0){k=base+xl-1;if(bg[k]||lab[k]>=0)break;xl--;lab[k]=id;
-    vv=isU?isU[k]:(sd[k*4]|sd[k*4+1]<<8|sd[k*4+2]<<16);
-    n2++;r0+=vv&255;g0+=(vv>>>8)&255;b0+=(vv>>>16)&255}
-   while(xr<nw-1){k=base+xr+1;if(bg[k]||lab[k]>=0)break;xr++;lab[k]=id;
-    vv=isU?isU[k]:(sd[k*4]|sd[k*4+1]<<8|sd[k*4+2]<<16);
-    n2++;r0+=vv&255;g0+=(vv>>>8)&255;b0+=(vv>>>16)&255}
-   /* upar aur neeche wali row me span ke neeche har lagataar khaali run ka
-      pehla pixel queue me - wahi seed jo per-pixel BFS har pixel ke liye
-      alag-alag daalta tha */
-   for(let r=0;r<2;r++){const bb=r?base+nw:base-nw;
-    if(bb<0||bb>=N)continue;
-    let q=xl;
-    while(q<=xr){const j2=bb+q;
-     if(bg[j2]||lab[j2]>=0){q++;continue}
-     let q2=q;while(q2<xr){const j3=bb+q2+1;if(bg[j3]||lab[j3]>=0)break;q2++}
-     lab[j2]=id;q3[t++]=(q<<20)|j2;q=q2+1}}}
-  isz[id]=n2;isr[id]=r0;isg[id]=g0;isb[id]=b0}
+ /* row-run table: har row ke maximal non-bg runs, CSR me (off[y]..off[y+1]).
+   cap = nh*ceil(nw/2) - ek row me isse zyada runs ban hi nahi sakte. */
+ if(!RR||RR.nw!==nw||RR.nh!==nh){const cap=nh*((nw+1)>>1)+1;
+  RR={nw:nw,nh:nh,cap:cap,off:new Int32Array(nh+1),x0:new Uint16Array(cap),
+   x1:new Uint16Array(cap),vis:new Int32Array(cap)}}
+ const RO=RR.off,RX0=RR.x0,RX1=RR.x1,RV=RR.vis;
+ let nr=0;
+ for(let y=0;y<nh;y++){RO[y]=nr;const row=y*nw;
+  for(let x=0;x<nw;x++){if(bg[row+x])continue;
+   const x0=x;let x1=x;
+   while(x1+1<nw&&!bg[row+x1+1])x1++;
+   RX0[nr]=x0;RX1[nr]=x1;nr++;x=x1}}
+ RO[nh]=nr;RV.fill(-1,0,nr);
+ /* id ka kram bilkul wahi: bahar ka loop row-major hai, is liye island ki id
+    uske sabse pehle (row-major) run par banti hai. island ka pixel-set bhi wahi
+    hai (4-connectivity), is liye isz/isr/isg/isb wahi aur drop[]/bg[]/mask
+    byte-identical. rang ka jod integer hai, is liye jodne ka kram nateeje ko
+    nahi badalta. */
+ for(let y=0;y<nh;y++){const a=RO[y],b=RO[y+1];
+  for(let k=a;k<b;k++){if(RV[k]>=0)continue;
+   if(ni>=isl.cap){isl=islBuf(ni+1);isz=isl.sz;isr=isl.sr;isg=isl.sg;isb=isl.sb;drop=isl.drop}
+   const id=ni++;RV[k]=id;
+   let t=0,n2=0,r0=0,g0=0,b0=0;q3[t++]=(y<<19)|k;
+   while(t){const e=q3[--t],kk=e&0x7FFFF,yy=e>>>19,
+    xa=RX0[kk],xb=RX1[kk],rb=yy*nw;
+    for(let x=xa;x<=xb;x++){const j=rb+x,
+     vv=isU?isU[j]:(sd[j*4]|sd[j*4+1]<<8|sd[j*4+2]<<16);
+     n2++;r0+=vv&255;g0+=(vv>>>8)&255;b0+=(vv>>>16)&255}
+    /* upar/neeche wali row me wo runs jo is run ke [xa,xb] ko chhoote hain -
+       uthla (diagonal) run nahi, kyunki 4-connectivity hai */
+    for(let r=0;r<2;r++){const ny=r?yy+1:yy-1;
+     if(ny<0||ny>=nh)continue;
+     const na=RO[ny],nb=RO[ny+1];
+     for(let m=na;m<nb;m++){if(RX1[m]<xa)continue;if(RX0[m]>xb)break;
+      if(RV[m]<0){RV[m]=id;q3[t++]=(ny<<19)|m}}}}
+   isz[id]=n2;isr[id]=r0;isg[id]=g0;isb[id]=b0}}
  if(ni>1){
   const total=N;
   let big=0;for(let k=1;k<ni;k++)if(isz[k]>isz[big])big=k;
@@ -2067,8 +2092,12 @@ if(i<N-nw){j=i+nw;if(!bg[j]&&MATCH[j]){bg[j]=1;st2[gp++]=(x<<20)|j}}}
    /* keepObj: sirf specks, background-jaisi haze aur soft bokeh hatti hai, asli object rehta hai.
       warna: sirf sabse bada blob rehta hai (purana behaviour). */
    drop[k]=keepObj?((fr<0.0015||dm<tol*1.15)?1:0):(isz[k]<isz[big]*0.5?1:0)}
-  for(let i=0;i<N;i++){const id=lab[i];if(id>=0){if(drop[id])bg[i]=1;lab[i]=-1}}
- } else for(let i=0;i<N;i++)lab[i]=-1;
+  /* drop sirf girne wale island par likha jata hai (bg pehle se 0 hai), aur
+     runs row ke saath chalti hui loop me hi mil jate hain - koi alag row array
+     ya poora N scan nahi */
+  for(let y=0;y<nh;y++){const row=y*nw,a=RO[y],b=RO[y+1];
+   for(let k=a;k<b;k++){const id=RV[k];
+    if(id>=0&&drop[id]){for(let x=RX0[k];x<=RX1[k];x++)bg[row+x]=1}}}}
  const seen=C.seen,q=st,lev=C.lev;
  const step=Math.max(4,Math.round(4+tol*0.15)),s2=step*step,K=3;
  /* coarse column ka pixel range: pehle har full-res pixel par xmap[x] load hota
@@ -2742,7 +2771,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;if(!savePending)lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.71',
+window.GlassCut={version:'1.1.72',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
