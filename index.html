@@ -378,7 +378,11 @@ try{window.addEventListener('deviceorientation',e=>{
  if(e.gamma==null&&e.beta==null)return;gyro=true;gx=(e.gamma||0)/28;gy=((e.beta||0)-45)/28;},{passive:true})}catch(_){}
 seg('tools',v=>{stopDraw();mode=v;toast(v==='wand'?'Photo par tap karo, same color hat jayega':v==='erase'?'Ungli se mitao':v==='keep'?'Object par ungli phero, wo kabhi nahi hatega':'Ungli se wapas lao')});
 seg('ratios',v=>{stopDraw();ratio=v;if(od){setSize();fullRender()}});
-seg('fmts',v=>fmt=v);
+/* JPEG se koi doosra format chunne par flatten canvas (CW x CH ka poora surface,
+   1400x1050 par 5.88 MB) dead ho jata hai - save() use sirf `fmt==='jpeg'` par
+   chhuta hai. agle JPEG save par `if(!jcv)` use turant dobara bana leta hai, is
+   liye nateeja wahi, bas surface bekaar pada nahi rehta. */
+seg('fmts',v=>{fmt=v;if(v!=='jpeg'){jcv=null;jcvx=null}});
 /* Language toggle pehle har baar poora DOM TreeWalker banata tha aur har text node
    par trim() + String.replace() chalata tha. 197 text node hain, is liye ek toggle
    = ek TreeWalker object + 197 trim string + 197 replace string, sab garbage.
@@ -661,7 +665,12 @@ const imgDims=async f=>{
  }catch(_){}
  return null};
 let MAINTOK=0;
-const drawPhoto=(im,nw,nh)=>{const s=Math.min(1,1400/Math.max(nw,nh));
+const drawPhoto=(im,nw,nh)=>{
+  /* purani photo ka pixel count - nayi photo ka size isse alag hua to neeche wale
+     saare scratch buffer dead ho jate hain (har ek ka guard size match na hone par
+     khud naya bana deta hai) */
+  const oldNP=W*H;
+  const s=Math.min(1,1400/Math.max(nw,nh));
   W=Math.max(1,Math.round(nw*s));H=Math.max(1,Math.round(nh*s));
   /* canvas ki width set karna (chahe wahi value ho) poora backing store phenk kar
      naya banata hai - 1400x1050 par 5.88 MB, aur wahi teen canvas par (origc,
@@ -725,6 +734,24 @@ const drawPhoto=(im,nw,nh)=>{const s=Math.min(1,1400/Math.max(nw,nh));
      allocate karta tha - 1400x1050 par 1.47 MB, theek us waqt jab undo se ek
      snapshot buffer bhi banta hai. size match kare to rakho, warna chhod do. */
   if(KEMPTY&&KEMPTY.length!==NP)KEMPTY=null;SUB=null;fgFull=true;
+  /* size badalne par ye saare scratch buffer nayi photo ke liye bekaar hain - har
+     ek apne guard (FL.n, BLS.n, CC.n/m, BD.w/h/nw/nh, SD.length, XR.W/nw,
+     MBUF.length, SEEDS capacity) se pehle hi naya banata hai, is liye inhe rakhna
+     sirf zinda memory hai. 1.1.76 me STK/ISL/RUN par yahi tark lagaya gaya tha
+     (wo capacity wale hain); ye baaki exact-size wale hain, aur 1400x1050 -> chhoti
+     photo par kul ~8 MB pade reh jate the. size same ho (ek hi camera ki doosri
+     photo - aam haalat) to sab pehle jaisa reuse hota hai. nateeja (mask, screen,
+     save) par koi asar nahi - agla kaam buffer khud bana leta hai. */
+  if(NP!==oldNP){MBUF=null;FL=null;BLS=null;CC=null;BD=null;SD=null;XM=null;SEEDS=null;XR=null}
+  /* JPEG ka safed flatten canvas (CW x CH ka poora surface - 1400x1050 par 5.88 MB)
+     sirf ek haalat me kaam aata hai: save() use `fmt==='jpeg'` par hi chhuta hai.
+     fmt PNG/WEBP ho to wo agle JPEG save tak bekaar pada rehta tha, aur nayi photo
+     ke saath to uska size bhi galat ho jata hai. save() me `if(!jcv)` use turant
+     dobara bana leta hai, is liye screen/save par ek pixel ka asar nahi - sirf
+     zinda memory. naapa (instrumented build, dono par wahi flow: 1400x1050 JPEG
+     load, ek JPEG save (jcv bana), phir format PNG aur 700x525 photo): jcv zinda
+     1400x1050 -> null. */
+  if(fmt!=='jpeg'){jcv=null;jcvx=null}
   /* STK, ISL aur RUN apne size guard se sirf *badhte* hain (stk: "chhota maango to
      purana bada hi do"), is liye ek 1400x1050 photo ke baad 200x150 photo kholne par
      cutout ka scratch stack 1.47 M int (5.88 MB) ka pada rehta tha - 30,000 pixel ki
@@ -2867,7 +2894,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;if(!savePending)lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.76',
+window.GlassCut={version:'1.1.77',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
