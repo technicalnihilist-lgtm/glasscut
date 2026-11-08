@@ -16,6 +16,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.ParcelFileDescriptor;
 import android.provider.MediaStore;
 import android.util.Base64;
 import android.view.View;
@@ -421,9 +422,10 @@ public class MainActivity extends Activity {
      * save only ever needs one 16 KB window (16 KB chars in, 12 KB out), which is
      * what keeps a big save from turning into an OOM on a low-RAM device.
      */
-    private static void writeBase64(String b64, int from, OutputStream os) throws IOException {
+    private static long writeBase64(String b64, int from, OutputStream os) throws IOException {
         final int n = b64.length();
         int i = from;
+        long wrote = 0;
         while (i < n) {
             int end = Math.min(n, i + B64_CHUNK);
             if (end < n) {
@@ -439,13 +441,61 @@ public class MainActivity extends Activity {
                 }
                 if (end <= i) end = Math.min(n, i + B64_CHUNK);
             }
-            os.write(Base64.decode(b64.substring(i, end), Base64.DEFAULT));
+            /* The decoded length is the count of bytes this call hands to the
+               stream, so the caller can tell a write that reported no error from
+               a write that actually landed. A card/volume that accepts the open
+               and then drops the bytes returns normally here - the API<29 path
+               already checks its .tmp for exactly that (length() <= 0), and this
+               counter is the same test for the MediaStore path. */
+            final byte[] buf = Base64.decode(b64.substring(i, end), Base64.DEFAULT);
+            os.write(buf);
+            wrote += buf.length;
             i = end;
         }
+        return wrote;
     }
 
     private static boolean ws(char c) {
         return c == '\n' || c == '\r' || c == ' ' || c == '\t';
+    }
+
+    /**
+     * The size of the bytes actually sitting behind a MediaStore row, or -1 when
+     * the provider will not say.
+     *
+     * writeBase64's counter says what we handed to the stream; this says what the
+     * volume kept, which is the thing that can differ (a card or emulated volume
+     * that accepts the open and then drops the bytes reports no error at all).
+     * A provider that refuses the fd leaves -1, and -1 never fails a save: a size
+     * we could not read is not evidence of a bad file.
+     */
+    private static long mediaStoreSize(ContentResolver cr, Uri uri) {
+        long sz = -1;
+        try {
+            ParcelFileDescriptor pfd = cr.openFileDescriptor(uri, "r");
+            if (pfd != null) {
+                try { sz = pfd.getStatSize(); } finally {
+                    try { pfd.close(); } catch (Exception ignored) { }
+                }
+            }
+        } catch (Exception ignored) { }
+        return sz;
+    }
+
+    /**
+     * A save that wrote nothing is a failed save, kept free of Android types so
+     * the same body runs on a plain JVM.
+     *
+     * The API 24-28 path has always checked its .tmp (length() <= 0). The
+     * MediaStore path - the one every current device uses - published the row
+     * whatever came back, so a stream that dropped the bytes produced a 0-byte
+     * picture in the gallery together with "Save ho gaya". Now that is the same
+     * failure as every other one: the pending row is deleted and the page shows
+     * its long-press overlay. fileSize == -1 means "unknown" and is never a fail.
+     */
+    static boolean isEmptyWrite(long wrote, long fileSize) {
+        if (wrote <= 0) return true;
+        return fileSize == 0;
     }
 
     /**
@@ -573,14 +623,27 @@ public class MainActivity extends Activity {
                 // we must delete the row, otherwise every failed save leaves an
                 // orphan entry that the user can never see or clean up.
                 try {
+                    long wrote;
                     OutputStream os = cr.openOutputStream(uri);
                     if (os == null) throw new IOException("stream");
                     try {
-                        writeBase64(dataUrl, start, os);
+                        wrote = writeBase64(dataUrl, start, os);
                         os.flush();
                     } finally {
                         try { os.close(); } catch (Exception ignored) { }
                     }
+                    /* A 0-byte image is not a saved image. On API 29+ the row is
+                       IS_PENDING, so nothing half-written is visible - but the
+                       finalise below would publish an empty file and the page
+                       would say "Save ho gaya". The API 24-28 path has had this
+                       check since it started writing a .tmp; the MediaStore path
+                       (every device the app actually runs on today) had none, so
+                       a stream that accepts the open and then drops the bytes
+                       published an empty picture. Checked after the stream is
+                       closed, so the size is the finished file's. Treated as a
+                       failed save: the pending row is deleted by the catch below
+                       and the page shows its own long-press overlay. */
+                    if (isEmptyWrite(wrote, mediaStoreSize(cr, uri))) throw new IOException("empty");
                     cv.clear();
                     cv.put(MediaStore.Images.Media.IS_PENDING, 0);
                     /* The row only becomes visible when this update lands, and its
@@ -630,8 +693,9 @@ public class MainActivity extends Activity {
             sweepTmp(dir, tmp);
             try {
                 FileOutputStream fos = new FileOutputStream(tmp);
+                long wrote = 0;
                 try {
-                    writeBase64(dataUrl, start, fos);
+                    wrote = writeBase64(dataUrl, start, fos);
                     fos.flush();
                 } finally {
                     try { fos.close(); } catch (Exception ignored) { }
@@ -643,7 +707,7 @@ public class MainActivity extends Activity {
                    as any other failed write - delete it and report the failure,
                    so the page offers its own overlay instead. A real PNG/JPEG/
                    WebP is never 0 bytes, so this cannot reject a good save. */
-                if (tmp.length() <= 0) throw new IOException("empty");
+                if (tmp.length() <= 0 || wrote <= 0) throw new IOException("empty");
                 /* publish: atomic rename, and only now is the final name an image */
                 if (!tmp.renameTo(f)) {
                     try { if (f.exists()) f.delete(); } catch (Exception ignored) { }

@@ -723,7 +723,7 @@ const drawPhoto=(im,nw,nh)=>{
   fgi=ox.getImageData(0,0,W,H);od=fgi.data;mkOD32();mkFG32();
   if(fgc.width!==W||fgc.height!==H){fgc.width=W;fgc.height=H}else{fgx.setTransform(1,0,0,1,0,0);fgx.globalAlpha=1;fgx.clearRect(0,0,W,H)}
   if(outc.width!==W||outc.height!==H){outc.width=W;outc.height=H}else{oxc.setTransform(1,0,0,1,0,0);oxc.globalAlpha=1;oxc.clearRect(0,0,W,H)}
-  bgb.width=bgb.height=1;bgVer++;
+  bgb.width=bgb.height=1;sm.width=sm.height=1;bgVer++;
   /* nayi photo par teen W*H buffer (mask0, mask ki copy, keepMask) hamesha naye
      bante the - 1400x1050 par teen 1.47 MB allocation + zero-fill, chahe photo
      ka size bilkul wahi ho (aam haal: ek hi camera se li gayi doosri photo).
@@ -1398,6 +1398,17 @@ const partBox=fast=>{
 const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
  /* 3D tilt: ek halka shear, jo subject ko axis par ghuma hua dikhata hai */
  tiltUpd();const cs3=tiltCs,sh3=tiltSh;
+ /* tmp (composite surface, CW x CH) sirf outline / shadow / depth / opacity<100
+    wale raaste me padha jata hai. ye chaaron default par hon to wo raasta kabhi
+    chalta hi nahi (neeche wali shart), is liye us haalat me tmp ka poora backing
+    store - 1400x1050 par 5.88 MB - sirf pada reh jata tha: ek baar outline ya
+    shadow ya depth ya opacity use karne ke baad, uske baad poore session ke liye.
+    trim (GlassCut.trim) use pehle se chhodta tha, par aam flow me trim chalta hi
+    nahi. ab jab chaaron default par wapas aate hain to tmp 1x1 ho jata hai aur
+    THas=false se agla composite poora dobara banta hai - screen par ek pixel nahi
+    badalta, kyunki in chaar settings par tmp kabhi padha hi nahi jata (fast
+    raasta fgc ko seedha cx par draw karta hai). */
+ if(P.line<=0&&P.op>=100&&!P.sh&&P.depth<=0&&tmp.width!==1){tmp.width=tmp.height=1;THas=false;TFULL=false}
  /* outline / opacity / shadow / depth me se kuch bhi nahi hai to tmp canvas ek
     bekaar full-canvas copy thi (clear + draw + wapas draw). us haalat me fgc ko
     seedha cx par wahi transform de kar draw karna bilkul same pixels deta hai. */
@@ -1670,7 +1681,15 @@ const qr=()=>{sched(true);clearTimeout(rt);rt=setTimeout(()=>{rt=0;if(raf){cance
    dobara bana leta hai, is liye screen par ek pixel nahi badalta. */
 const dropBgImg=()=>{if(bg.t==='img')return;if(bgImg){const o=bgImg;bgImg=null;imgOpaqueFor=null;imgOpaque=false;
  if(o.close){try{o.close()}catch(_){}}}
- opc=null;opx=null};
+ opc=null;opx=null;
+ /* bgb aur sm bhi isi tarah ek hi consumer ke liye hain: blurBg() (bg.t 'blur' ya
+    'bluetint'). koi aur background chunte hi wo dono dead ho jate hain - 1400x1050
+    par bgb CW x CH (5.88 MB) aur sm ~CW/2 x CH/2 (1.47 MB, P.bl=0 par), aur wo
+    agle blur background tak (ya nayi photo tak) pade rehte the. ye function sirf
+    tab chalta hai jab bg.t sach me blur nahi hai, is liye screen par ek pixel nahi
+    badalta; bgSig[0]=-1 se blurBg apna cache dobara banata hai jab blur wapas
+    chuna jaye (warna 1x1 canvas cache-hit par draw ho jata). */
+ if(bg.t!=='blur'&&bg.t!=='bluetint'&&(bgb.width!==1||sm.width!==1)){bgb.width=bgb.height=1;sm.width=sm.height=1;bgSig[0]=-1}};
 const fullRender=()=>{if(raf){cancelAnimationFrame(raf);raf=0}fastReq=false;clearTimeout(rt);rt=0;dropBgImg();render(false)};
 
 /* mask tools */
@@ -2937,7 +2956,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
     hai. yahi trim ke baad bacha sabse bada offscreen surface tha. THas/SOK reset
     se agla render poora banta hai, is liye canvas par ek pixel nahi badalta. */
  tmp.width=tmp.height=1;THas=false;SOK=false};
-window.GlassCut={version:'1.1.79',
+window.GlassCut={version:'1.1.80',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
