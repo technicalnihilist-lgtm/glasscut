@@ -480,7 +480,18 @@ public class MainActivity extends Activity {
                     }
                     cv.clear();
                     cv.put(MediaStore.Images.Media.IS_PENDING, 0);
-                    cr.update(uri, cv, null, null);
+                    /* The row only becomes visible when this update lands, and its
+                       result used to be ignored. A provider that answers 0 rows
+                       (row already gone, provider error, a scan that failed) left
+                       the file IS_PENDING=1 for ever: an invisible orphan that no
+                       gallery shows, that the user can never find, and that the
+                       page had already been told was saved ("ok"). Now a 0-row
+                       finalise is treated as a failed save - the catch below
+                       deletes the pending row, so nothing is left behind and the
+                       page gets the same fallback overlay it shows for every
+                       other failure (it still holds the encoded blob for exactly
+                       that case). */
+                    if (cr.update(uri, cv, null, null) <= 0) throw new IOException("pending");
                     return "ok:" + uri;
                 } catch (Exception e) {
                     try { cr.delete(uri, null, null); } catch (Exception ignored) { }
@@ -506,6 +517,14 @@ public class MainActivity extends Activity {
                 } finally {
                     try { fos.close(); } catch (Exception ignored) { }
                 }
+                /* A zero-byte file is not a saved image: the write reported no
+                   error (some cards/emulated volumes accept the open and then
+                   drop the bytes) and the scan below would happily index an
+                   empty file, while the page said "Save ho gaya". Same treatment
+                   as any other failed write - delete it and report the failure,
+                   so the page offers its own overlay instead. A real PNG/JPEG/
+                   WebP is never 0 bytes, so this cannot reject a good save. */
+                if (f.length() <= 0) throw new IOException("empty");
             } catch (Exception e) {
                 try { if (f.exists()) f.delete(); } catch (Exception ignored) { }
                 throw e;
