@@ -444,6 +444,31 @@ public class MainActivity extends Activity {
         return c == '\n' || c == '\r' || c == ' ' || c == '\t';
     }
 
+    /**
+     * Removes "glasscut-*.tmp" leftovers of saves that were killed mid-write.
+     *
+     * Before the temp-then-rename change a killed save left a truncated *image*
+     * in Pictures/GlassCut that the media scanner indexed and the user could not
+     * tell apart from a good photo. Now it leaves a .tmp instead, and this sweep
+     * is what makes that temporary name actually temporary. Only our own name
+     * pattern is touched, and only when it is older than ten minutes - a file the
+     * current save (or a parallel one) is still writing is never deleted.
+     */
+    private static void sweepTmp(File dir, File keep) {
+        try {
+            File[] list = dir.listFiles();
+            if (list == null) return;
+            long cutoff = System.currentTimeMillis() - 10 * 60 * 1000L;
+            for (int i = 0; i < list.length; i++) {
+                File x = list[i];
+                if (x == null || x.equals(keep)) continue;
+                String n = x.getName();
+                if (n == null || !n.startsWith("glasscut-") || !n.endsWith(".tmp")) continue;
+                try { if (x.lastModified() < cutoff) x.delete(); } catch (Exception ignored) { }
+            }
+        } catch (Exception ignored) { }
+    }
+
     private String writeToGallery(String dataUrl, String name, String mime) {
         try {
             if (dataUrl == null) return "err:empty";
@@ -509,8 +534,24 @@ public class MainActivity extends Activity {
             // pulled, app killed) used to leave a truncated image in Pictures/
             // GlassCut forever, and the media scanner would happily index it.
             // Now the partial file is removed before the error goes back to the page.
+            /* But "removed on error" only covers a write that *throws*. This path
+               (API 24-28) writes straight to the final name, so between the
+               FileOutputStream open and the last byte the gallery path holds a
+               real, scannable image that is still growing: a media scan or the
+               gallery's own directory watcher can index that truncated file and
+               show the user a half-written photo (this is exactly the versions
+               where no IS_PENDING flag exists to hide it), and a process killed
+               mid-write leaves it behind for good - the delete below never runs.
+               So the bytes now go to "<name>.tmp" first and the file is renamed
+               into place only after the length check passes: rename inside one
+               directory is atomic on Linux, the scanner never sees a partial
+               image (a .tmp is not a media extension, so it is not indexed), and
+               a killed save leaves only a .tmp that the next save sweeps up
+               (sweepTmp). Pixels and the returned URI are unchanged. */
+            File tmp = new File(dir, name + ".tmp");
+            sweepTmp(dir, tmp);
             try {
-                FileOutputStream fos = new FileOutputStream(f);
+                FileOutputStream fos = new FileOutputStream(tmp);
                 try {
                     writeBase64(dataUrl, start, fos);
                     fos.flush();
@@ -524,9 +565,14 @@ public class MainActivity extends Activity {
                    as any other failed write - delete it and report the failure,
                    so the page offers its own overlay instead. A real PNG/JPEG/
                    WebP is never 0 bytes, so this cannot reject a good save. */
-                if (f.length() <= 0) throw new IOException("empty");
+                if (tmp.length() <= 0) throw new IOException("empty");
+                /* publish: atomic rename, and only now is the final name an image */
+                if (!tmp.renameTo(f)) {
+                    try { if (f.exists()) f.delete(); } catch (Exception ignored) { }
+                    if (!tmp.renameTo(f)) throw new IOException("rename");
+                }
             } catch (Exception e) {
-                try { if (f.exists()) f.delete(); } catch (Exception ignored) { }
+                try { if (tmp.exists()) tmp.delete(); } catch (Exception ignored) { }
                 throw e;
             }
             android.media.MediaScannerConnection.scanFile(this,

@@ -733,6 +733,20 @@ const drawPhoto=(im,nw,nh)=>{const s=Math.min(1,1400/Math.max(nw,nh));
      load ka raasta chhoot gaya tha). ab wahi ek closeOv() chalta hai: class hatti
      hai, URL revoke hota hai aur blob ka reference bhi chhut jata hai. */
   closeOv()
+  /* nayi photo ke saath purane native save ka poora intezaar bhi khatam ho jata
+     hai. shell saveImage par "ok:pending" lauta kar (API<29 par permission
+     maangte waqt) asli jawab baad me GlassCut.saved()/failed() se deta hai, aur
+     us jawab tak page lastSaveBlob me pichhli photo ka multi-MB blob pakde rehta
+     hai. beech me nayi photo chun li jaye to wo blob dead memory hai (nayi photo
+     ka decode + ImageData usi waqt memory maang rahe hote hain) aur uska jawab
+     ab kisi kaam ka nahi: naapa (fake bridge jo "ok:pending" deta hai) - nayi
+     photo load karne ke baad aaya GlassCut.failed() purani photo ka overlay
+     khol deta tha (1400x1050 wali photo 700x525 wali ke upar, #ovImg.src set),
+     aur GlassCut.saved() nayi photo par "Save ho gaya" bol deta tha. ab saveTok
+     badal jata hai, is liye purane save ka koi bhi jawab chup-chaap chhod diya
+     jata hai. saveBusy yahan nahi chhua jata - chalu FileReader apna bfin khud
+     chalata hai (wahan bhi token check hai), warna do save ek saath chal pade. */
+  savePending=false;saveTok=-1;lastSaveBlob=null;
   /* nayi photo par purana undo/redo stack chhod diya jata tha, yaani uske saare
      snapshot buffers (1400x1050 par har ek 1.47 MB, 10 undo + 10 redo tak) ek
      saath garbage ban jate the - theek usi waqt jab nayi photo ka decode + 6.7 MB
@@ -2662,6 +2676,10 @@ let lastSaveBlob=null;
    save() se pehle hi laut diya tha). ab jab tak native ka jawab nahi aata
    (saved/failed/agla save) blob pakda rehta hai - yeh hi ek copy hai. */
 let savePending=false;
+/* saveTok = wo MAINTOK jis photo ke liye native save chala tha (dekho drawPhoto aur
+   GlassCut.saved/failed). 0/0 se shuru, taaki bina kisi save ke aaya jawab (jaise
+   renderer crash ke baad naya page) purane jaisa hi vyavhar kare. */
+let saveTok=0;
 const save=async()=>{
  if(!od){toast('Pehle photo choose karo');return}
  /* ek waqt me ek save: do tap ek saath do file gallery me daal dete the.
@@ -2730,13 +2748,21 @@ const save=async()=>{
      jati thi par user ko koi confirmation nahi milta (browser/share wale dono
      raaste "Save ho gaya" dikhate hain, aur pending raaste par native khud
      GlassCut.saved() bulata hai). ab wahi message yahan bhi. */
-  const bfin=ok=>{if(bdone)return;bdone=true;if(wd)clearTimeout(wd);saveBusy=false;savePending=false;
+  /* stok: ye save kis photo ke liye shuru hua tha. FileReader ka jawab 6 s tak
+     aa sakta hai (watchdog), aur utni der me user nayi photo chun sakta hai -
+     us haalat me purane blob ka overlay nayi photo ke upar khulna galat hai (dekho
+     drawPhoto me saveTok ki tippani). token badal jaye to jawab chhod do, par
+     saveBusy/ savePending hamesha saaf karo - warna Save hamesha ke liye band. */
+  const stok=MAINTOK;
+  const bfin=ok=>{if(bdone)return;bdone=true;if(wd)clearTimeout(wd);saveBusy=false;
+   if(stok!==MAINTOK){savePending=false;lastSaveBlob=null;return}
+   savePending=false;
    if(!ok)fallback(b);else savedOk()};
   wd=setTimeout(()=>bfin(false),6000);
   /* savePending yahin se true: blob yahan se native write ke jawab tak hi user ki
      image hai. pehle ye sirf "ok:pending" ke baad true hota tha, is liye FileReader
      ke chalu rehne wale daur me aayi trim()/closeOv() usi blob ko chhod deti thi. */
-  hold=true;lastSaveBlob=b;savePending=true;
+  hold=true;lastSaveBlob=b;savePending=true;saveTok=MAINTOK;
   fr.onload=()=>{if(bdone)return;let res=null;
    try{res=br.saveImage(String(fr.result),name,mime)}catch(_){res='err'}
    const r=res==null?'':String(res);
@@ -2799,14 +2825,17 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;if(!savePending)lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.73',
+window.GlassCut={version:'1.1.74',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
     pehle se dikhta hai - file galley me nahi pahunchi, to image yahan se long-press
     kar ke save ho sakti hai. */
- saved:()=>{savePending=false;savedOk()},
- failed:()=>{savePending=false;toast('Save nahi hua');if(lastSaveBlob)fallback(lastSaveBlob)},
+ saved:()=>{const stale=saveTok!==MAINTOK;savePending=false;saveTok=-1;
+  if(stale){lastSaveBlob=null;return}savedOk()},
+ failed:()=>{const stale=saveTok!==MAINTOK;savePending=false;saveTok=-1;
+  if(stale){lastSaveBlob=null;return}
+  toast('Save nahi hua');if(lastSaveBlob)fallback(lastSaveBlob)},
  /* trim (Android onTrimMemory/onLowMemory): pehle yahan dropScratch() ke turant
     baad render() bhi chal raha tha, aur wo render wahi sab kuch dobara bana deta
     tha jo abhi chhoda gaya - softM ka poora blur, blur tables, SUB ka full
