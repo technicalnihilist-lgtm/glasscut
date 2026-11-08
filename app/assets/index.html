@@ -725,6 +725,19 @@ const drawPhoto=(im,nw,nh)=>{const s=Math.min(1,1400/Math.max(nw,nh));
      allocate karta tha - 1400x1050 par 1.47 MB, theek us waqt jab undo se ek
      snapshot buffer bhi banta hai. size match kare to rakho, warna chhod do. */
   if(KEMPTY&&KEMPTY.length!==NP)KEMPTY=null;SUB=null;fgFull=true;
+  /* STK, ISL aur RUN apne size guard se sirf *badhte* hain (stk: "chhota maango to
+     purana bada hi do"), is liye ek 1400x1050 photo ke baad 200x150 photo kholne par
+     cutout ka scratch stack 1.47 M int (5.88 MB) ka pada rehta tha - 30,000 pixel ki
+     photo ke liye. baaki scratch buffers exact-length guard se size badalne par
+     khud naye ban jate hain, par ye teen capacity wale hain. ab nayi photo ke liye
+     chhote se chhote buffer bhi kaafi ho to purana bada chhod diya jata hai (agla
+     cutout/flood apne size ka naya bana leta hai) - nateeja (mask, screen, save) par
+     koi asar nahi, sirf zinda memory. naapa (typed-array constructor par
+     FinalizationRegistry + forced GC): 1400x1050 ke baad 200x150 photo par zinda
+     buffer 5.61 MB -> 0.12 MB. */
+  if(STK&&STK.length>NP*4)STK=null;
+  if(ISL&&ISL.cap>NP*4)ISL=null;
+  if(RUN&&RUN.length>NP*4)RUN=null;
   /* nayi photo par purana save-fallback overlay band ho jata hai. pehle yahan
      sirf blob URL revoke hota tha: overlay khula reh jata tha, uske #ovImg ka src
      revoked URL par atka rehta tha (yaani nayi photo ke upar toota hua image), aur
@@ -757,6 +770,9 @@ const drawPhoto=(im,nw,nh)=>{const s=Math.min(1,1400/Math.max(nw,nh));
      Uint8Array banaye banta hai. stack khud dono khaali ho jate hain, is liye koi
      purana snapshot is pool ko nahi dekhta. */
   POOL.length=0;
+  /* push() ne 11vi entry ko abort ke liye rakha tha - stack khud ab khaali ho raha
+     hai, is liye wo entry (aur uska buffer) yahan chhod di jati hai */
+  PSHIFT=null;
   if(PEND){for(let i=0;i<PEND.length;i++)recycle(PEND[i]);PEND=null}
   for(let i=0;i<undo.length;i++){const s=undo[i];if(s&&s[0]!==mask&&s[0]!==mask0)recycle(s)}
   for(let i=0;i<redo.length;i++){const s=redo[i];if(s&&s[0]!==mask&&s[0]!==mask0)recycle(s)}
@@ -1645,11 +1661,29 @@ const recycleMask=old=>{if(!old||old===mask||old===mask0||old.length!==W*H||POOL
    (1400x1200 par test: redo ke baad canvas purane state par hi atka rehta tha).
    ab redo ke buffers sirf agle push par recycle hote hain - tab tak wo stack ya to
    abort se wapas aa chuka hota hai (PEND null ho jata hai) ya pakka bekaar hai. */
-const push=()=>{stopDraw();if(PEND){for(let i=0;i<PEND.length;i++)recycle(PEND[i]);PEND=null}
+/* 10 se zyada hone par stack se nikli sabse purani entry yahan rukti hai, turant
+   pool me nahi jati: push() pehle hota hai aur "operation ne kuch badla ya nahi"
+   ka pata uske baad chalta hai (wand/auto ka no-op raasta aur khaali stroke
+   abortPush() chalate hain). Pehle wo entry shift hote hi pool me chali jati thi,
+   is liye ek no-op ke baad undo stack 10 ki jagah 9 reh jata tha - yaani jo kaam
+   kuch nahi karta (pehle se mite hue hisse par tap) wo ek asli undo step kha jata
+   tha aur 10 undo ke baad photo shuru wali jagah par nahi lauti (naapa: 10 stroke
+   + 1 no-op tap + 10 undo par canvas hash 0f727952... , bina tap ke 6cf69d2b...
+   yaani shuru wali state). ab entry abort tak zinda rehti hai aur abort use wapas
+   stack par rakh deta hai; commit hone par agla push use recycle kar deta hai. */
+let PSHIFT=null;
+const push=()=>{stopDraw();
+ /* pichhla push ab pakka commit ho chuka hai (har naya operation uske baad hi
+    shuru hota hai), is liye uski rakhi hui entry ab bekaar hai */
+ if(PSHIFT){recycle(PSHIFT);PSHIFT=null}
+ if(PEND){for(let i=0;i<PEND.length;i++)recycle(PEND[i]);PEND=null}
  PEND=redo.length?redo:null;redo=[];
- undo.push(snap());if(undo.length>10)recycle(undo.shift())};
-/* operation kuch nahi badla: redo stack wapas, aur uske buffers chhue bhi nahi */
-const abortPush=()=>{redo=PEND||[];PEND=null};
+ undo.push(snap());if(undo.length>10)PSHIFT=undo.shift()};
+/* operation kuch nahi badla: redo stack wapas, aur uske buffers chhue bhi nahi.
+   saath hi stack se nikli 11vi entry wapas apni jagah (sabse purani) par - warna
+   no-op operation history ki gehrai ek kam kar deta tha. */
+const abortPush=()=>{redo=PEND||[];PEND=null;
+ if(PSHIFT){undo.unshift(PSHIFT);PSHIFT=null}};
 /* keep mask ka respect: jo object protect kiya gaya hai wo kabhi na hate.
    keepMask khaali ho to poora W*H scan bachta hai (stroke release, Grow,
    Shrink, Invert, Smooth, Reset, cutout - har jagah). */
@@ -2827,13 +2861,13 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
    flatten canvas, island buffers) chhod diya jata hai aur fgc/outc/bgb/sm
    1x1 ho jate hain - agla render sab kuch wapas bana leta hai, is liye screen
    par kuch nahi badalta. photo khud (origc/fgi/mask) chhui bhi nahi jati. */
-const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;jcvx=null;STK=null;POOL.length=0;
+const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;jcvx=null;STK=null;POOL.length=0;PSHIFT=null;
  /* opacity probe canvas bhi ek cache hai (CW x CH surface) - trim par chhod do,
     agla check ise dobara bana leta hai */
  opc=null;opx=null;if(!savePending)lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.75',
+window.GlassCut={version:'1.1.76',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
