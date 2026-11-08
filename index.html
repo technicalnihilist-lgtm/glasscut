@@ -758,6 +758,14 @@ const drawPhoto=(im,nw,nh)=>{
      jo sach me purani photo ka delta rakhte hain (DIRT, SDIRT, SUB) wo ab bhi
      chhute hain, aur softKey='' se feather blur apne aap dobara banta hai. */
   softKey='';DIRT=null;SDIRT=null;XM=null;
+  /* undo/redo ka diff compare do mask arrays par 32-bit views rakhta hai (dekho
+     diffBox). wo views apne ArrayBuffer ko zinda rakhte hain, is liye nayi photo
+     par purane mask ka 1.47 MB (1400x1050) yahan tak pinned reh jata tha - agla
+     undo/redo hi use chhodta tha, aur us beech user nayi photo par kaam kar raha
+     hota hai (theek us waqt jab 5.88 MB ka naya ImageData bhi banta hai). nayi
+     photo par dono views chhod diye jate hain; agla undo/redo apne aap naye
+     bana leta hai (diffBox ka buffer guard), is liye nateeja par koi asar nahi. */
+  DVA=null;DVB=null;
   /* island stats (ISL), undo ka khaali buffer (KEMPTY), JPEG flatten canvas (jcv)
      aur cutout ka run table (RUN) bhi upar wale niyam se chalta hai: sabka apna
      size guard hai, is liye sirf KEMPTY ka size yahan check karna kaafi hai. wo
@@ -1459,7 +1467,7 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
     hi chalta hai. Nateeja byte-identical rehta hai (har pixel ke liye wahi
     source, wahi transform, wahi blend). */
  let restr=false;
- if(!full&&THas&&FGR&&TfgS===fgSoft&&Tr===r&&Tn===n&&Tcs===cs3&&Tsh===sh3
+ if(!full&&THas&&FGR&&!NORESTR&&TfgS===fgSoft&&Tr===r&&Tn===n&&Tcs===cs3&&Tsh===sh3
     &&Ts0===t[0]&&Ts1===t[1]&&Ts2===t[2]){
   const pd=r+2,px1=pb[0]+pb[2]-1,py1=pb[1]+pb[3]-1;
   /* C = SUB ke andar wo hissa jahan silhouette sach me badla, K = C + r + 2
@@ -1595,6 +1603,13 @@ const opaqueBg=()=>{if(bg.t==='color'||bg.t==='grad')return true;
    render() khud likhta hai (fast frame par false, poore render par true). save()
    isi par bharosa kar ke apna poora render chhod deta hai - dekho save() me. */
 let RFULL=false;
+/* undo/redo ke exact diff box wale render me tmp ka "restricted" redraw band rehta
+   hai (dekho hist aur drawSubj): us box ka aadhaar FGR hai, aur undo/redo me FGR
+   ab chhota hai - par us render me SUB bhi badal sakta hai, jis se purane box ka
+   hissa tmp me pada reh jata hai. poora SUB box redraw karna base build jaisa hi
+   nateeja deta hai (naapa: 12,830 pixel ka farak isi raaste se aata tha). blur aur
+   alpha upload phir bhi chhote box par hi chalte hain. */
+let NORESTR=false;
 function render(fast){if(!od)return;RFULL=!fast;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1;
  /* "Hold: Original" (compare) me background, uska clearRect aur depth ka gradient
     sab bekaar the: pehle yahan poora background banta tha aur neeche wala showOrig
@@ -1602,7 +1617,7 @@ function render(fast){if(!od)return;RFULL=!fast;cx.setTransform(1,0,0,1,0,0);cx.
     canvas par nahi bachta tha - 1400x1200 par har compare frame me 2 x 1.68 M
     clearRect + 1.68 M fillRect + background ka poora drawImage (blur background
     par 1.68 M source pixel). ab showOrig par seedha yahin se laut jate hain. */
- if(showOrig){cx.clearRect(0,0,CW,CH);PART=null;PRVcw=-1;drawSubj(origc,fast);return}
+ if(showOrig){cx.clearRect(0,0,CW,CH);PART=null;PRVcw=-1;drawSubj(origc,fast);NORESTR=false;return}
  const pm=P.motion/100,pox=-mx*pm*CW*0.010,poy=-my*pm*CH*0.010;
  /* colour/gradient background poore canvas par ek opaque fillRect karta hai, aur
     bina parallax (pox=poy=0) wo bilkul canvas ke kinare se kinare tak dhakta hai -
@@ -1642,7 +1657,7 @@ function render(fast){if(!od)return;RFULL=!fast;cx.setTransform(1,0,0,1,0,0);cx.
    vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,'+(P.depth/100*0.42).toFixed(3)+')');depGrad=vg;dk[0]=CW;dk[1]=CH;dk[2]=P.depth}
   cx.fillStyle=depGrad;cx.fillRect(0,0,CW,CH)}
  drawSubj(fgc,fast);
- PRVbgT=bg.t;PRVbgV=bg.v;PRVdep=P.depth;PRVcw=CW;PRVch=CH}
+ PRVbgT=bg.t;PRVbgV=bg.v;PRVdep=P.depth;PRVcw=CW;PRVch=CH;NORESTR=false}
 /* rAF ka callback pehle har schedule par ek naya closure tha (ek frame = ek
    function object), halanki wo har baar bilkul wahi kaam karta hai. ab ek hi
    named function hai - schedule karne par koi allocation nahi. */
@@ -1755,6 +1770,28 @@ const recycleMask=old=>{if(!old||old===mask||old===mask0||old.length!==W*H||POOL
    + 1 no-op tap + 10 undo par canvas hash 0f727952... , bina tap ke 6cf69d2b...
    yaani shuru wali state). ab entry abort tak zinda rehti hai aur abort use wapas
    stack par rakh deta hai; commit hone par agla push use recycle kar deta hai. */
+/* undo/redo ke liye do mask arrays ka asli diff box (dekho hist). 32-bit compare,
+   chaar pixel ek saath: jo chaar-ka group alag hai wo poora box me aata hai, is liye
+   box conservative rehta hai aur uske bahar dono arrays bilkul barabar hote hain -
+   yahi ek shart SDIRT ke liye kaafi hai. views cache hote hain, warna har press par
+   do naye Uint32Array view objects bante (aur wo per-frame allocation wahi cheez hai
+   jo 1.1.8 me render loop se hatayi gayi thi). arrays 4-byte aligned na hon to poora
+   byte loop chal jata hai - nateeja bilkul wahi. */
+let DVA=null,DVB=null;
+const diffBox=(a,b)=>{
+ const n=a.length;let x0=W,y0=H,x1=-1,y1=-1,i,m=0,bx;
+ if((a.byteOffset&3)===0&&(b.byteOffset&3)===0){
+  m=n>>>2;
+  if(!DVA||DVA.buffer!==a.buffer||DVA.byteOffset!==a.byteOffset||DVA.length!==m)DVA=new Uint32Array(a.buffer,a.byteOffset,m);
+  if(!DVB||DVB.buffer!==b.buffer||DVB.byteOffset!==b.byteOffset||DVB.length!==m)DVB=new Uint32Array(b.buffer,b.byteOffset,m);
+  const ua=DVA,ub=DVB;
+  for(i=0;i<m;i++)if(ua[i]!==ub[i]){bx=i<<2;
+   const sy=(bx/W)|0,ey=((bx+3)/W)|0;
+   if(sy===ey){const xa=bx-sy*W,xb=xa+3;if(xa<x0)x0=xa;if(xb>x1)x1=xb;if(sy<y0)y0=sy;if(sy>y1)y1=sy}
+   else{x0=0;x1=W-1;if(sy<y0)y0=sy;if(ey>y1)y1=ey}}}
+ for(i=m<<2;i<n;i++)if(a[i]!==b[i]){const y=(i/W)|0,x=i-y*W;
+  if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y}
+ return x1<0?null:[x0,y0,x1,y1]};
 let PSHIFT=null;
 const push=()=>{stopDraw();
  /* pichhla push ab pakka commit ho chuka hai (har naya operation uske baad hi
@@ -2695,7 +2732,21 @@ const hist=(from,to)=>{stopDraw();const old=mask,o0=MB[0],o1=MB[1],o2=MB[2],o3=M
  if(old&&old!==mask0&&old.length===W*H&&POOL.length<2)POOL.push(old);
  to.push(snap());restore(from.pop());mver++;
  let x0,y0,x1,y1;
- if(o2>=o0&&MB[2]>=MB[0]){x0=Math.min(o0,MB[0]);y0=Math.min(o1,MB[1]);x1=Math.max(o2,MB[2]);y1=Math.max(o3,MB[3])}
+ /* mask do snapshot ke beech sirf usi rectangle me alag hota hai jahan wo operation
+    chala tha. pehle yahan dono snapshot ke MB box ka union liya jata tha, aur MB
+    subject ka poora box hai - is liye subject ke beech wale chhote stroke ka undo
+    poore subject ka feather blur aur poora alpha upload dobara banata tha (naapa,
+    1400x1050, 8 erase stroke + 8 undo: blur 2,77,104 px aur upload 4,53,000 px
+    per press, jabki asli farak 3-8 hazar pixel ka tha). ab dono arrays ka asli diff
+    box nikalta hai - 32-bit compare, chaar pixel ek saath, aur jo group alag hai wo
+    poora box me aata hai (yaani box conservative rehta hai, chhota kabhi nahi).
+    box ke bahar naya mask purane ke bilkul barabar hai, is liye wahan softM (jo
+    purane mask se bana tha) abhi bhi bilkul sahi hai - theek wahi tark jo stroke
+    ke SDIRT par hai, aur wahi blurRect/SBOX raasta. diff box bade ho jane par
+    (aadhe canvas se zyada) neeche wala purana union/softKill raasta hi chalta hai. */
+ const db=(old&&old!==mask&&old.length===mask.length)?diffBox(old,mask):null;
+ if(db){x0=db[0];y0=db[1];x1=db[2];y1=db[3];NORESTR=true}
+ else if(o2>=o0&&MB[2]>=MB[0]){x0=Math.min(o0,MB[0]);y0=Math.min(o1,MB[1]);x1=Math.max(o2,MB[2]);y1=Math.max(o3,MB[3])}
  else if(o2>=o0){x0=o0;y0=o1;x1=o2;y1=o3}
  else if(MB[2]>=MB[0]){x0=MB[0];y0=MB[1];x1=MB[2];y1=MB[3]}
  if(x0!==undefined&&(x1-x0+1)*(y1-y0+1)<W*H*0.5){SDIRT=[x0,y0,x1,y1];SUBX=true}else softKill();
@@ -2946,6 +2997,8 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
    1x1 ho jate hain - agla render sab kuch wapas bana leta hai, is liye screen
    par kuch nahi badalta. photo khud (origc/fgi/mask) chhui bhi nahi jati. */
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;jcvx=null;STK=null;POOL.length=0;PSHIFT=null;
+ /* diff compare ke 32-bit views (diffBox) bhi apne mask buffer ko pin karte hain */
+ DVA=null;DVB=null;
  /* opacity probe canvas bhi ek cache hai (CW x CH surface) - trim par chhod do,
     agla check ise dobara bana leta hai */
  opc=null;opx=null;if(!savePending)lastSaveBlob=null;
@@ -2956,7 +3009,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
     hai. yahi trim ke baad bacha sabse bada offscreen surface tha. THas/SOK reset
     se agla render poora banta hai, is liye canvas par ek pixel nahi badalta. */
  tmp.width=tmp.height=1;THas=false;SOK=false};
-window.GlassCut={version:'1.1.80',
+window.GlassCut={version:'1.1.81',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
