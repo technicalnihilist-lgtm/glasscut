@@ -528,8 +528,7 @@ $('#fBg').onchange=e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
   bo.resizeQuality='high';
   if(odd)bo.imageOrientation='from-image';
   let bm=null;
-  try{bm=await Promise.race([createImageBitmap(f,bo),
-   new Promise((_,rej)=>setTimeout(rej,15000))])}catch(_){bm=null}
+  try{bm=await raceBitmap(f,bo,15000)}catch(_){bm=null}
   if(tok!==BGLOAD.t){try{bm&&bm.close()}catch(_){}return}
   if(!bm||!bm.width||!bm.height){loadImg(f,bgDone,BGLOAD);return}
   bgDone(bm)})()};
@@ -581,8 +580,32 @@ const exifOrient=(b,t,n)=>{
  for(let k=0;k<cnt;k++){const e=ifd+2+k*12;if(e+12>n)return 0;
   if(u16(e)===0x0112){const v=u16(e+8);return v>=1&&v<=8?v:0}}
  return 0};
-const imgDims=async f=>{
- const head=new Uint8Array(await f.slice(0,262144).arrayBuffer()),n=head.length;
+/* Watchdog ka timer. Promise.race([createImageBitmap(...), timeout]) ka timer
+   resolve hone par kabhi clear nahi hota tha: decode 200 ms me poora hone par bhi
+   wo 15 s tak zinda rehta tha aur apne closure me File (aur uske saath uska
+   descriptor/URI) pakde baithta tha - har photo load par ek, do decode wale
+   raaste par do, aur #fBg par ek. yeh theek wahi bug hai jo toBlob aur FileReader
+   ke watchdog ke liye pehle theek hua tha (wahan timer canvas/Blob pakde rehta
+   tha). ab resolve/reject par timer clear ho jata hai. saath hi: timeout ke BAAD
+   aaya bitmap bhi close ho jata hai - pehle wo kisi ke paas nahi hota tha, sirf
+   GC ka intezaar. nateeja wahi: resolve pehle aaye to wahi bitmap, timeout pehle
+   aaye to wahi null raasta. */
+const raceBitmap=(f,bo,ms)=>new Promise((res,rej)=>{
+ let t=setTimeout(()=>{t=0;rej(new Error('timeout'))},ms);
+ createImageBitmap(f,bo).then(b=>{if(t){clearTimeout(t);t=0;res(b)}
+  else{try{b.close()}catch(_){}}},
+  e=>{if(t){clearTimeout(t);t=0}rej(e)})});
+/* header se dims: 256 KB me IHDR/SOF/VP8X/ispe mil jata hai. par JPEG me us se
+   pehle ICC profile aa sakta hai - AdobeRGB ka profile ~560 KB ka hota hai, jo
+   nau APP2 segment me likha jata hai - aur tab SOF is window ke bahar chala jata
+   hai. pehle us haalat me imgDims null lauta deta tha, aur pickPhoto/#fBg poore
+   size par decode karte the: 6000x4000 ka bitmap 96 MB, chahe canvas 1400x933 hi
+   ho - theek wahi cheez jo 1.1.58 me bade photo ke liye hataayi gayi thi. ab
+   parse fail hone par (sirf JPEG par, kyunki baaki format me metadata ka aisa
+   block pehle nahi aata) ek badi window dobara padhi jati hai. jo file sach me
+   parse nahi hoti uspar yeh ek hi extra read hai. */
+const parseDims=head=>{
+ const n=head.length;
  const be=(a,b)=>(head[a]<<8|head[b])>>>0;
  /* PNG ka IHDR big-endian hai (JPEG aur WebP/GIF little-endian hain). pehle yahan
     `head[16]|head[17]<<8|head[18]<<16|head[19]<<24` tha, yaani PNG ke width/height
@@ -664,6 +687,16 @@ const imgDims=async f=>{
    return bw>0?[bw,bh,1]:null}
  }catch(_){}
  return null};
+const imgDims=async f=>{
+ let head=new Uint8Array(await f.slice(0,262144).arrayBuffer()),d=null;
+ try{d=parseDims(head)}catch(_){}
+ if(d)return d;
+ if(!(head.length>1&&head[0]===0xFF&&head[1]===0xD8))return null;
+ const big=Math.min(f.size,8388608);
+ if(big<=head.length)return null;
+ head=new Uint8Array(await f.slice(0,big).arrayBuffer());
+ try{d=parseDims(head)}catch(_){}
+ return d};
 let MAINTOK=0;
 const drawPhoto=(im,nw,nh)=>{
   /* purani photo ka pixel count - nayi photo ka size isse alag hua to neeche wale
@@ -865,14 +898,13 @@ const pickPhoto=f=>{
  let bm=null;
  /* 15 s ka guard: createImageBitmap kabhi settle na ho to purana img raasta
     chalta hai (uska apna 20 s watchdog pehle se hai) */
- try{bm=await Promise.race([createImageBitmap(f,bo),
-   new Promise((_,rej)=>setTimeout(rej,15000))])}catch(_){bm=null}
+ try{bm=await raceBitmap(f,bo,15000)}catch(_){bm=null}
  if(bm&&one&&Math.max(bm.width,bm.height)>1400){try{bm.close()}catch(_){}
   /* disha wali photo me on-screen lambi side ow/oh se aati hai (raw d[0]/d[1] se
      nahi), is liye doosri side wahi chuni jati hai jo screen par chhoti hai */
   const bo2=longW?{resizeHeight:1400,resizeQuality:'high'}:{resizeWidth:1400,resizeQuality:'high'};
   if(odd)bo2.imageOrientation='from-image';
-  try{bm=await Promise.race([createImageBitmap(f,bo2),new Promise((_,rej)=>setTimeout(rej,15000))])}catch(_){bm=null}}
+  try{bm=await raceBitmap(f,bo2,15000)}catch(_){bm=null}}
   if(!bm||!bm.width||!bm.height){plain();return}
   go(bm,bm.width,bm.height,()=>{try{bm.close()}catch(_){}});
  })()};
