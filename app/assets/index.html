@@ -2642,7 +2642,15 @@ const savedOk=()=>{lastSaveBlob=null;closeOv();toast('Save ho gaya')};
    se toDataURL try hota hai, aur uska blob bilkul wahi type rakhta hai jo browser ne
    diya, is liye naam aur mime ka logic aage jaisa hi chalta hai. */
 const toBlob=(c,m)=>new Promise(res=>{
- let done=false;const fin=b=>{if(done)return;done=true;res(b)};
+ /* watchdog ka timer pehle hamesha chalta reh jata tha: blob 20 ms me ban jaye to
+    bhi wo 4 s tak zinda rehta tha, aur apne closure me poora canvas `c` (1400x1200
+    par 5.88 MB ka backing store) pakde rakhta tha - yaani har save ke baad 4 s tak
+    ek mara hua canvas GC se bacha rehta tha, theek us waqt jab save ka apna blob
+    (multi-MB) bhi zinda hota hai. ab encode poora hone par timer clear ho jata hai
+    (aur fin ke andar hi, is liye timer kabhi fin ke baad viaUrl nahi chalata).
+    nateeja wahi: jo raasta pehle chalta tha wahi chalta hai, bas timer mar jata hai. */
+ let done=false,wd=0;
+ const fin=b=>{if(done)return;done=true;if(wd){clearTimeout(wd);wd=0}res(b)};
  const viaUrl=()=>{try{const u=c.toDataURL(m,.95),i=u.indexOf(',');
   if(i<8)return fin(null);
   const bin=atob(u.slice(i+1)),n=bin.length,a=new Uint8Array(n);
@@ -2655,7 +2663,7 @@ const toBlob=(c,m)=>new Promise(res=>{
     jata tha: promise kabhi settle nahi hoti thi, saveBusy true reh jata tha aur us
     session me Save dobara kabhi kaam nahi karta tha. ab 4 s baad wahi canvas
     toDataURL se likha jata hai (wahi type, wahi naam ka logic aage). */
- setTimeout(()=>{if(!done)viaUrl()},4000)});
+ if(!done)wd=setTimeout(()=>{wd=0;viaUrl()},4000)});
 let jcv=null,jcvx=null,saveBusy=false;
 /* Native (GlassCutAndroid.saveImage) raaste par page bridge ko data de kar laut
    jata hai. API<29 par native pehle permission maangta hai aur likhne ka kaam
@@ -2825,7 +2833,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  opc=null;opx=null;if(!savePending)lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1};
-window.GlassCut={version:'1.1.74',
+window.GlassCut={version:'1.1.75',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par

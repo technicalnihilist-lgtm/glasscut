@@ -4,9 +4,11 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.ComponentCallbacks2;
 import android.content.ContentResolver;
+import android.content.ContentUris;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
@@ -95,6 +97,8 @@ public class MainActivity extends Activity {
            settings/client/url se guzarte hain - dobara banaya gaya WebView purane
            jaisa hi hota hai. */
         buildWebView();
+        /* leftovers of a save whose process died are reclaimed once per launch */
+        sweepPending();
     }
 
     /** Creates the WebView, wires it up and loads the page. Safe to call twice. */
@@ -467,6 +471,80 @@ public class MainActivity extends Activity {
                 try { if (x.lastModified() < cutoff) x.delete(); } catch (Exception ignored) { }
             }
         } catch (Exception ignored) { }
+    }
+
+    /**
+     * A save row that is still IS_PENDING this long after it was created is a
+     * leftover: a real save finalises its row within seconds.
+     */
+    private static final long PENDING_STALE_MS = 10 * 60 * 1000L;
+
+    /**
+     * The age test of the pending-row sweep, kept free of Android types so the
+     * exact same body can be exercised on a plain JVM.
+     *
+     * DATE_ADDED is in seconds; a row with no usable timestamp is never treated
+     * as stale (deleting on a guess is worse than leaving one orphan row).
+     */
+    static boolean isStalePending(long dateAddedSec, long nowMs) {
+        if (dateAddedSec <= 0) return false;
+        return nowMs - dateAddedSec * 1000L > PENDING_STALE_MS;
+    }
+
+    /**
+     * Removes our own IS_PENDING=1 rows that a killed process left behind.
+     *
+     * On API 29+ a save inserts its MediaStore row with IS_PENDING=1, writes the
+     * bytes, then clears the flag - and only that last update makes the file
+     * visible to the gallery. Every failure the app can catch deletes the row
+     * again, but a process that dies between the insert and the finalise (OOM,
+     * force-stop, a save running while the app is being killed) leaves a pending
+     * row for ever: no gallery shows it, the user can never find it, and nothing
+     * ever reclaims the space. The API 24-28 path got its own answer in 1.1.74
+     * (write to .tmp, sweep stale .tmp on the next save); this is the same deal
+     * for the MediaStore side, run once per launch on a low-priority thread.
+     *
+     * Only rows inside our own Pictures/GlassCut folder, still pending, and older
+     * than PENDING_STALE_MS are touched - a save that is running right now is
+     * seconds old, so it can never be hit. Every step is inside try/catch: a
+     * provider that refuses the query or the delete just leaves the rows alone.
+     */
+    private void sweepPending() {
+        if (Build.VERSION.SDK_INT < 29) return;
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                Cursor c = null;
+                try {
+                    ContentResolver cr = getContentResolver();
+                    c = cr.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                            new String[]{MediaStore.Images.Media._ID,
+                                    MediaStore.Images.Media.DATE_ADDED},
+                            MediaStore.Images.Media.RELATIVE_PATH + "=? AND "
+                                    + MediaStore.Images.Media.IS_PENDING + "=1",
+                            new String[]{Environment.DIRECTORY_PICTURES + "/GlassCut"},
+                            null);
+                    if (c == null) return;
+                    final int idCol = c.getColumnIndex(MediaStore.Images.Media._ID);
+                    final int dtCol = c.getColumnIndex(MediaStore.Images.Media.DATE_ADDED);
+                    if (idCol < 0 || dtCol < 0) return;
+                    final long now = System.currentTimeMillis();
+                    while (c.moveToNext()) {
+                        if (!isStalePending(c.getLong(dtCol), now)) continue;
+                        try {
+                            cr.delete(ContentUris.withAppendedId(
+                                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                                    c.getLong(idCol)), null, null);
+                        } catch (Exception ignored) { }
+                    }
+                } catch (Exception ignored) {
+                } finally {
+                    try { if (c != null) c.close(); } catch (Exception ignored) { }
+                }
+            }
+        }, "glasscut-sweep");
+        t.setPriority(Thread.MIN_PRIORITY);
+        t.start();
     }
 
     private String writeToGallery(String dataUrl, String name, String mime) {
