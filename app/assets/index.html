@@ -778,7 +778,15 @@ const drawPhoto=(im,nw,nh)=>{
   photoOpaque=amin===255;
   const om=mask;
   if(om&&om!==mask0&&om.length===NP){mask=om;mask.set(mask0)}else mask=mask0.slice();
-  if(!keepMask||keepMask.length!==NP)keepMask=new Uint8Array(NP);else keepMask.fill(0);
+  /* keepMask (aur restore ka KEMPTY) ab sirf tab banti hai jab Keep tool se sach me
+     kuch paint ho - dekho stroke ka keep branch aur restore(). jab tak user Keep
+     ko chhoota hi nahi, ye W*H buffer banta hi nahi: 1400x1050 par 1.47 MB, aur
+     undo ke baad KEMPTY ke saath milakar 2.94 MB, jo pehle har photo load par
+     allocate aur (same size par) zero-fill hota tha. keepMask ka matlab hamesha
+     wahi hai - "kahin 255 hai" - is liye null ka matlab "koi bhi 255 nahi", jo
+     bilkul wahi hai jo poora khaali array deta tha (keepDirty ka invariant). */
+  if(keepMask&&keepMask.length!==NP)keepMask=null;
+  else if(keepDirty&&keepMask)keepMask.fill(0);
   keepDirty=false;mbAll();
   kbNone();
   /* scratch buffers: har ek ka apna size guard hai (FL.n!==M, CC.n/N CC.m/M,
@@ -802,15 +810,12 @@ const drawPhoto=(im,nw,nh)=>{
      photo par dono views chhod diye jate hain; agla undo/redo apne aap naye
      bana leta hai (diffBox ka buffer guard), is liye nateeja par koi asar nahi. */
   DVA=null;DVB=null;
-  /* island stats (ISL), undo ka khaali buffer (KEMPTY), JPEG flatten canvas (jcv)
-     aur cutout ka run table (RUN) bhi upar wale niyam se chalta hai: sabka apna
-     size guard hai, is liye sirf KEMPTY ka size yahan check karna kaafi hai. wo
-     kisi ek photo ka data nahi rakhta (har baar restore() use fill(0) kar ke hi
-     deta hai), sirf ek shared khaali W*H buffer hai. pehle use bhi har load par
-     phenk diya jata tha, is liye nayi photo ke baad pehla Undo use dobara
-     allocate karta tha - 1400x1050 par 1.47 MB, theek us waqt jab undo se ek
-     snapshot buffer bhi banta hai. size match kare to rakho, warna chhod do. */
-  if(KEMPTY&&KEMPTY.length!==NP)KEMPTY=null;SUB=null;fgFull=true;
+  /* island stats (ISL), JPEG flatten canvas (jcv) aur cutout ka run table (RUN)
+     bhi upar wale niyam se chalta hai: sabka apna size guard hai. keepMask ka
+     guard yahin hai: size badla to use chhod do (nayi photo ke liye purani
+     keepMask ka koi matlab nahi), warna wahi buffer rakho - usme sirf 255 hote
+     hain jo Keep tool ne likhe, aur wo nayi photo par galat hote. */
+  if(keepMask&&keepMask.length!==NP)keepMask=null;SUB=null;fgFull=true;
   /* size badalne par ye saare scratch buffer nayi photo ke liye bekaar hain - har
      ek apne guard (FL.n, BLS.n, CC.n/m, BD.w/h/nw/nh, SD.length, XR.W/nw,
      MBUF.length, SEEDS capacity) se pehle hi naya banata hai, is liye inhe rakhna
@@ -1900,19 +1905,25 @@ const snap=()=>{const a=bufOf();a.set(mask);
     mask ke liye pehle se hi conservative hai (har 255 likhne wali jagah usse
     chauda karti hai), is liye wapas lauta dena bhi utna hi safe hai. keepMask
     me paint ho to poora canvas hi rakha jata hai (wo box ke bahar 255 likhta hai). */
- return[a,keepDirty?keepMask.slice():null,keepDirty?null:[MB[0],MB[1],MB[2],MB[3]]]};
+ return[a,keepDirty&&keepMask?keepMask.slice():null,keepDirty?null:[MB[0],MB[1],MB[2],MB[3]]]};
 /* snapshot me keepMask tabhi hota hai jab keep tool se kuch paint hua ho. jab nahi
-   hota (aam haal) to undo/redo har press par 1.68 MB ka naya khaali array bana raha
-   tha. ab ek hi khaali buffer reuse hota hai - use fill(0) karke saaf kiya jata hai
-   (memset, koi allocation nahi). snapshots hamesha copy rakhte hain, is liye buffer
-   share hone se koi purana snapshot kharab nahi hota. */
-let KEMPTY=null;
+   hota (aam haal) to snapshot me sirf null jata hai - na naya 1.68 MB khaali array,
+   na shared khaali buffer, is liye undo/redo ke is raaste par ek bhi allocation
+   nahi. snapshots hamesha copy rakhte hain, is liye buffer share hone se koi purana
+   snapshot kharab nahi hota. */
 const restore=s=>{mask=s[0];keepDirty=!!s[1];
  const sb=s[2];
  if(sb){MB[0]=sb[0];MB[1]=sb[1];MB[2]=sb[2];MB[3]=sb[3]}else mbAll();
+ /* s[1] null ka matlab: us snapshot par kuch bhi protect nahi kiya gaya tha, yaani
+    keepMask ka hona hi zaroori nahi - use null kar do. pehle yahan ek shared
+    khaali buffer (KEMPTY) rakha jata tha aur har restore par fill(0) hota tha:
+    1400x1050 par 1.47 MB ka allocation (photo load ke baad pehla Undo) aur uske
+    baad har undo/redo press par 1.47 MB ka memset, jabki khaali keepMask ka koi
+    padhne wala nahi tha (keepDirty false hai, is liye enforce/cutout/stamp2 sab
+    use chhod dete hain). null aur poora-khaali array ka matlab yahan bilkul wahi
+    hai, is liye canvas par ek pixel nahi badalta. */
  if(s[1]){keepMask=s[1];kbAll()}
- else{if(!KEMPTY||KEMPTY.length!==W*H)KEMPTY=new Uint8Array(W*H);else KEMPTY.fill(0);keepMask=KEMPTY;
-  kbNone()}};
+ else{keepMask=null;kbNone()}};
 /* snapshot ka mask buffer ab recycle hota hai. pehle har stroke ek naya 1.68 MB
    Uint8Array banata tha (1400x1200) aur stack se girne wala purana array garbage
    ban jata tha - yaani har ungli uthane par 1.68 MB GC kaam. ab stack se nikla
@@ -2705,7 +2716,11 @@ const stroke=(a,b,c,d,k)=>{const r=Math.max(2,brush*k/2),keep=mode==='keep',v=ke
  for(let i=0;i<=n;i++){const px=i===0?a:i===n?c:a+(c-a)*i/n,py=i===0?b:i===n?d:b+(d-b)*i/n;
   if(px===stX&&py===stY&&r===stR)continue;
   stX=px;stY=py;stR=r;
-  if(keep){ch+=stamp2(keepMask,255,mask,255,px,py,r);if(ch)keepDirty=true}
+  /* keepMask pehli Keep stamp par banti hai (aur tabhi, jab sach me kuch paint ho) -
+    ek khaali W*H array aur null ka matlab stamp2 me bilkul wahi hai (255 kahin
+    nahi), is liye buffer ka na hona nateeja nahi badalta. */
+ if(keep){if(!keepMask||keepMask.length!==W*H){keepMask=new Uint8Array(W*H);kbNone()}
+  ch+=stamp2(keepMask,255,mask,255,px,py,r);if(ch)keepDirty=true}
   else if(v===0)ch+=stamp2(mask,0,keepDirty?keepMask:null,0,px,py,r);
   else ch+=stamp2(mask,255,null,0,px,py,r)}
  /* stroke ne ek bhi pixel nahi badla (ungli pehle se mite hue hisse par ghoom
@@ -3225,7 +3240,7 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
    flatten canvas, island buffers) chhod diya jata hai aur fgc/outc/bgb/sm
    1x1 ho jate hain - agla render sab kuch wapas bana leta hai, is liye screen
    par kuch nahi badalta. photo khud (origc/fgi/mask) chhui bhi nahi jati. */
-const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;KEMPTY=null;jcv=null;jcvx=null;STK=null;POOL.length=0;PSHIFT=null;
+const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;jcv=null;jcvx=null;STK=null;POOL.length=0;PSHIFT=null;
  /* diff compare ke 32-bit views (diffBox) bhi apne mask buffer ko pin karte hain */
  DVA=null;DVB=null;
  /* opacity probe canvas bhi ek cache hai (CW x CH surface) - trim par chhod do,
@@ -3238,7 +3253,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
     hai. yahi trim ke baad bacha sabse bada offscreen surface tha. THas/SOK reset
     se agla render poora banta hai, is liye canvas par ek pixel nahi badalta. */
  tmp.width=tmp.height=1;THas=false;SOK=false};
-window.GlassCut={version:'1.1.87',
+window.GlassCut={version:'1.1.88',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
