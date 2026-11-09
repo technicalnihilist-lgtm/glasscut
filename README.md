@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 270 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.90 (versionCode 90) |
+| **Version** | 1.1.91 (versionCode 91) |
 
 ---
 
@@ -218,6 +218,11 @@ Verified with a stubbed bridge: with the trim, the recovery overlay was `open:fa
 
 Verified for 1.1.90 (base 1.1.89 vs 1.1.90, headless Chrome, instrumented builds for the diff box): the same 19-checkpoint flow on 1400x1050 plus three more photos came out with all 31 canvas hashes and all three saved files' sha1 identical, zero page errors, zero console errors, and the undo/redo diff box returned the same box on all 26 presses in a mixed stroke/keep/grow history (sha1 of the box sequence `7446291565...` on both builds). The diff scan dropped from 367,500 to 97,152 32-bit compares per press (2.58 -> 1.82 ms, 20 presses). The sheet-drag fix was checked by dispatching pointerdown + a 40 px pointermove on `#shOpt .grab` and then `visibilitychange` with `document.hidden` true: `#shOpt` used to keep `transform: translateY(40px)` and `transition: none`, and now keeps neither.
 
+- **The undo/redo diff scan divided per differing word** — `diffBox()` compared the two masks 32 bits at a time, and for every word that differed it recomputed `(byte/W)|0` and `((byte+3)/W)|0` to find the row. On a big undo the box is most of the canvas, so nearly every word takes that path and the loop becomes division-bound (`W` is not a multiple of 4, so V8 cannot turn it into a shift). The row start and end are already known, so a word is now classified with two compares — starts in the previous row, runs into the next row, or sits inside this one — and the row's box is merged once per row instead of once per word. Same box, byte for byte: 1170 mask pairs over 13 sizes (1400×1050, 1401×1051, 1400×1, 7×3, 2×2, 1×1 …), each with no box, a full-canvas box and a random sub-box, 0 mismatches. Speed on a 1400×1050 full-canvas box: 2.70 → 0.92 ms and 5.36 → 1.56 ms (2.9–3.4×); on a mostly-equal box 1.13 → 0.71 ms. In the app that is ~1.3 → ~0.5 ms per undo/redo press, i.e. about 7% of a press's JS time.
+- **The page reported the wrong version** — `GlassCut.version` was a hand-written string and had drifted one build behind (`'1.1.89'` while the manifest was at 90). It now asks the shell (`GlassCutAndroid.versionName()`, the same `PackageManager` value the manifest carries), so there is one source of truth and no drift; with no bridge, an empty answer or a throwing getter it falls back to the literal, which is now in step with the manifest.
+
+Verified for 1.1.91 (base 1.1.90 vs 1.1.91, headless Chrome, same 24-checkpoint flow on 1400×1050): every canvas hash identical, all three saved files identical in size and magic (PNG 37,670 B, JPEG 37,649 B, WebP 15,676 B), zero page errors, zero console errors; the flow then went on to a 1200×900 PNG, a 6000×4000 JPEG and a 1×1 PNG, and 10 strokes + 10 undo + 10 redo returned the same hashes on both builds. The version path was checked with a stubbed bridge: shell value wins (`9.9.99-shell`), empty string / throwing getter / no bridge all give `1.1.91`, which matches `versionName` in the manifest.
+
 Verified in headless Chrome on 1.1.67: load → auto → wand → erase → undo ×2 → redo → grow → smooth → invert → feather → background colour/gradient → save (file on disk) → reset → language toggle → window close/open → stroke that leaves the canvas, on 1400×1050 PNG, 900×675 JPEG, 600×400 transparent PNG, 4000×3000 JPEG, 1400×3 and 1×1 — 13 canvas hashes byte-identical to 1.1.66 on every photo, saved files identical, zero pageerror, zero console error.
 
 For 1.1.86 the same suite was run on both builds (base 1.1.85 vs 1.1.86), 43 checkpoints, zero page errors, zero console errors: 1400×1050 load/auto, wand tap on the border, erase stroke, undo ×2, redo ×2, Grow, Shrink, Smooth, Invert, Reset, colour background, PNG save to disk, language toggle, window close/open; then a 700×525 alpha PNG, a 1×1, a 200×150 and a 6000×4000 photo; then outline 8, `GlassCut.trim()`, outline 0, outline 10, opacity 60, shadow, depth 70; then a 1400×3 and a 3×1400 photo with outline on and Grow. Every canvas hash was byte-identical and all three saved PNGs kept the same sha1 (113,173 / 23,775 / 58,661 bytes). Canvas backing-store allocations, counted with a wrapper on `HTMLCanvasElement.prototype.width/height` in an instrumented build: a 1400×1050 photo load went 29.40 MB in 5 surfaces to 17.64 MB in 3, and reloading the same size went 5.88 MB in 2 to 0 MB in 0; a 6000×4000 photo went 5.22 MB to 0. Switching the outline on for the first time (when the silhouette really is read) allocates it then: 10.45 MB in 4 surfaces.
@@ -232,10 +237,10 @@ Verified for 1.1.77 (base 1.1.76 vs 1.1.77, headless Chrome, same instrumented b
 
 Download [`GlassCut.apk`](GlassCut.apk) on the phone, tap it, allow "install unknown apps" for your browser or file manager once. Android 7.0 (API 24) or newer.
 
-**This build has a new signing key again** — `/scratch/saved` was empty again when the 1.1.90 build came up (no `glasscut-signing-key.jks` was carried over), so `build.sh` generated a fresh keystore. Android will refuse to install it over any earlier build — uninstall the old app once, then install. The keystore is deliberately *not* committed and not shipped (a signing key is a credential); only `/scratch/saved` survives between runs, so as long as `glasscut-signing-key.jks` is put back there, every later build reuses it and upgrades install cleanly. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate for this build:
+**This build has a new signing key again** — `/scratch/saved` was empty again when the 1.1.91 build came up (no `glasscut-signing-key.jks` was carried over), so `build.sh` generated a fresh keystore. Android will refuse to install it over any earlier build — uninstall the old app once, then install. The keystore is deliberately *not* committed and not shipped (a signing key is a credential); only `/scratch/saved` survives between runs, so as long as `glasscut-signing-key.jks` is put back there, every later build reuses it and upgrades install cleanly. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate for this build:
 
 ```
-1c20573ea6b50be82431bc7e503705c08e31ff2feac47a036d80aac4da24071c
+13ecf4cf120908e86e02e30701fead5a3d8a0c6d20ab24155be01b8077ebeace
 ```
 ## Build it yourself
 

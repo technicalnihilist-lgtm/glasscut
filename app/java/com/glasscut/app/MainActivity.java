@@ -350,6 +350,28 @@ public class MainActivity extends Activity {
             return (t / d) + "|" + (b / d);
         }
 
+        /**
+         * Page ko apni asli installed versionName do (jo manifest se aati hai).
+         *
+         * Pehle version page me ek haath se likhi hui string thi ("1.1.89") aur
+         * manifest aage nikal gaya tha (versionCode 90), yaani page apne baare me
+         * galat bata raha tha - aur har build par yeh aur peeche chhut jati.
+         * Ab ek hi source of truth hai: PackageManager wahi value deta hai jo
+         * manifest me hai, is liye drift ka sawal hi nahi. PackageManager ka call
+         * JavaBridge ke thread par chalta hai (UI thread par nahi), aur koi bhi
+         * failure khali string deta hai - page tab apne fallback literal par
+         * chalta hai, is liye kuch tootta nahi.
+         */
+        @JavascriptInterface
+        public String versionName() {
+            try {
+                String v = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+                return v == null ? "" : v;
+            } catch (Exception e) {
+                return "";
+            }
+        }
+
         /** Called from the page: base64 data URL + file name + mime type. */
         @JavascriptInterface
         public String saveImage(String dataUrl, String name, String mime) {

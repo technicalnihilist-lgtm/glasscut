@@ -1986,7 +1986,7 @@ let DVA=null,DVB=null;
    bekaar tha. hist ab dono masks ke box ka union bhejta hai. nateeja bilkul wahi
    box hai (dono raaste same pixels par same compare chalate hain). */
 const diffBox=(a,b,bx)=>{
- const n=a.length;let x0=W,y0=H,x1=-1,y1=-1,i,m=0,bxw;
+ const n=a.length;let x0=W,y0=H,x1=-1,y1=-1,i,m=0;
  let qx0=0,qy0=0,qx1=W-1,qy1=H-1;
  if(bx){qx0=bx[0];qy0=bx[1];qx1=bx[2];qy1=bx[3];
   if(qx1<qx0||qy1<qy0)return null;
@@ -2001,12 +2001,30 @@ const diffBox=(a,b,bx)=>{
      (W chaar ka gunak nahi hota), par uske aage wale byte box ke bahar hain aur
      wahan dono arrays barabar hain - is liye wo word tab hi badalta hai jab uske
      andar ka koi box-wala byte badla ho. box tabhi chauda hota hai, chhota nahi. */
+  /* 1.1.91: pehle har badle hue word par do integer division ((bxw/W) aur
+     ((bxw+3)/W)) aur W ka multiply chalta tha. ek bade undo (poora canvas box)
+     par lagbhag har word badalta hai, is liye wahi loop poora division-bound ho
+     jata tha - W chaar ka gunak nahi hota, is liye V8 in division ko constant se
+     shift me nahi badal sakta. ab row ka start/end pehle se hai (rowB/rowE) aur
+     ek word row ke andar hai, pichhli row se shuru hota hai, ya agli row me
+     nikalta hai - ye teeno faisle do compare se hote hain, koi division nahi.
+     row ka box ek hi baar row ke aakhir me joda jata hai (pehle har word par
+     y0/y1/x0/x1 ke 3-4 compare chalte the). sy/ey ka matlab bilkul wahi hai:
+     bxw < rowB matlab word pichhli row se shuru hokar is row me aata hai
+     (sy=y-1, ey=y), bxw+3 >= rowE matlab word is row se agli row me nikalta hai
+     (sy=y, ey=y+1) - dono me poora W chauda, warna sy=ey=y aur xa..xa+3.
+     nateeja box par byte-identical (500 random mask pair + poora flow). */
   for(let y=qy0;y<=qy1;y++){
-   const s=(y*W+qx0)>>>2;let e=(y*W+qx1)>>>2;if(e>m-1)e=m-1;
-   for(let k=s;k<=e;k++)if(ua[k]!==ub[k]){bxw=k<<2;
-    const sy=(bxw/W)|0,ey=((bxw+3)/W)|0;
-    if(sy===ey){const xa=bxw-sy*W,xb=xa+3;if(xa<x0)x0=xa;if(xb>x1)x1=xb;if(sy<y0)y0=sy;if(sy>y1)y1=sy}
-    else{x0=0;x1=W-1;if(sy<y0)y0=sy;if(ey>y1)y1=ey}}}
+   const rowB=y*W,rowE=rowB+W;
+   const s=(rowB+qx0)>>>2;let e=(rowB+qx1)>>>2;if(e>m-1)e=m-1;
+   let rxa=W,rxb=-1,up=false,dn=false;
+   for(let k=s;k<=e;k++)if(ua[k]!==ub[k]){const bxw=k<<2;
+    if(bxw<rowB){up=true;rxa=0;rxb=W-1}
+    else if(bxw+3>=rowE){dn=true;rxa=0;rxb=W-1}
+    else{const xa=bxw-rowB,xb=xa+3;if(xa<rxa)rxa=xa;if(xb>rxb)rxb=xb}}
+   if(rxb>=0){const ty0=up?y-1:y,ty1=dn?y+1:y;
+    if(rxa<x0)x0=rxa;if(rxb>x1)x1=rxb;
+    if(ty0<y0)y0=ty0;if(ty1>y1)y1=ty1}}
  }
  /* aakhri 0-3 byte (n chaar ka gunak na ho) - sirf tab jab wo box ke andar hon */
  for(i=m<<2;i<n;i++){const y=(i/W)|0,x=i-y*W;
@@ -3305,7 +3323,15 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
     hai. yahi trim ke baad bacha sabse bada offscreen surface tha. THas/SOK reset
     se agla render poora banta hai, is liye canvas par ek pixel nahi badalta. */
  tmp.width=tmp.height=1;THas=false;SOK=false};
-window.GlassCut={version:'1.1.89',
+/* version pehle yahan ek haath se likhi hui string thi, aur wo drift ho gayi:
+   manifest 1.1.90 par tha jabki page 1.1.89 bata raha tha (aur aage har build
+   par yeh aur peeche chhut jati). ab page apni asli installed versionName shell
+   se poochta hai (GlassCutAndroid.versionName(), wahi PackageManager ki value
+   jo manifest me hai) - yaani do jagah likhi hui ek hi baat nahi rehti. bridge
+   na ho (browser / purani shell), getter na ho, ya khali string aaye to neeche
+   wala fallback literal chalta hai, is liye kuch tootta nahi. */
+window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(b.versionName()):'';
+ return v||'1.1.91'}catch(_){return '1.1.91'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
