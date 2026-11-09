@@ -974,9 +974,15 @@ let BLS=null;
    chhote canvas par bhi sab kuch table-driven hai, is liye 1x1 ya 7x1400 jaisi
    photo par bhi wahi hisaab chalta hai. */
 const blurTabs=r=>{const len=W*H;
- if(!BLS||BLS.n!==len)BLS={n:len,t:new Uint8Array(len),o:new Uint8Array(len),gk:'',tab:null,ca:null,cs:null,ra:null,rs:null};
- const n=2*r+1,gk=W+'|'+H+'|'+r;
- if(BLS.gk!==gk){BLS.gk=gk;
+ if(!BLS||BLS.n!==len)BLS={n:len,t:new Uint8Array(len),o:new Uint8Array(len),gw:-1,gh:-1,gr:-1,tab:null,ca:null,cs:null,ra:null,rs:null};
+ /* cache key pehle ek string thi (W+'|'+H+'|'+r) aur wo blur()/blurRect() ke HAR call
+    par banti thi - feather on hone par blurRect har fast frame (stroke ke dauraan
+    ~60/s) aur har release par chalta hai, yaani render loop me bachI hui aakhri
+    per-frame allocation. ab wahi teen value seedhe number ki tarah rakhi jati hain;
+    compare bilkul wahi hai (W/H/r teeno integer hain, is liye string ki tarah hi
+    unambiguous) aur table wahi dobara banti hai jab koi ek badle. */
+ const n=2*r+1;
+ if(BLS.gw!==W||BLS.gh!==H||BLS.gr!==r){BLS.gw=W;BLS.gh=H;BLS.gr=r;
   const tb=BLS.tab=new Uint8Array(255*n+1);for(let i=0;i<tb.length;i++)tb[i]=Math.floor(i/n);
   const ca=BLS.ca=new Int32Array(W),cs=BLS.cs=new Int32Array(W);
   for(let x=0;x<W;x++){ca[x]=Math.min(W-1,x+r+1);cs[x]=Math.max(0,x-r)}
@@ -2554,7 +2560,22 @@ const pt=e=>{const r=rect(),t=xf();
    par resolve hota hai) - par ab ye compositor par chalta hai: koi layout nahi,
    ring ka paint bhi nahi. naapa: 60-move erase stroke par Paint 72-162 ms se
    ~1 ms, Layout 20-27 ms se <1 ms. */
-const ring=$('#ring'),moveRing=e=>{ring.style.transform='translate(-50%,-50%) translate('+e.clientX+'px,'+e.clientY+'px)'};
+const ring=$('#ring');
+/* ring ki position har pointermove par likhi jati thi, aur ek touchscreen 120-240 Hz
+   par sample karti hai jabki screen 60 Hz par paint hoti hai - yaani ek hi frame me
+   do-teen baar wahi style dobara likhi jati thi. har likhai ek string concat (3
+   intermediate string + final, ~1.2 KB garbage) aur ek style recalc hai. heap
+   sampling se naapa (1400x1050, feather 6, 41-move erase stroke): stroke ke poore
+   JS allocation ka 49,160 / 94,680 byte - 52% - sirf isi line ka tha.
+   ab position ek hi frame me ek baar likhi jati hai: pointermove sirf x/y rakhta hai
+   aur rAF par paint hota hai. screen ek frame me ek hi baar paint karti hai, is liye
+   dikhne wala nateeja wahi rehta hai (canvas bhi pehle se rAF par hi banta hai) -
+   bas ek frame me 2-3 style writes ki jagah 1. stroke ke shuru me (pointerdown)
+   position turant likhi jati hai, is liye ring pehle frame se hi ungli par hoti hai. */
+let ringRaf=0,ringX=0,ringY=0;
+const ringAt=(x,y)=>{ring.style.transform='translate(-50%,-50%) translate('+x+'px,'+y+'px)'};
+const ringPaint=()=>{ringRaf=0;ringAt(ringX,ringY)};
+const moveRing=e=>{ringX=e.clientX;ringY=e.clientY;if(!ringRaf)ringRaf=requestAnimationFrame(ringPaint)};
 const ringSize=()=>{const r=rect(),t=xf();return Math.max(8,Math.round(brush*t[0]*(r.w/CW)))};
 let pid=null,strokeCh=0;
 cv.addEventListener('pointerdown',e=>{if(!od||drawing)return;
@@ -2578,7 +2599,7 @@ cv.addEventListener('pointerdown',e=>{if(!od||drawing)return;
      use karta hai) */
   fullRender();return}
  push();strokeCh=0;stR=-1;drawing=true;pid=e.pointerId;lastX=p[0];lastY=p[1];try{cv.setPointerCapture(e.pointerId)}catch(_){}
- const rs=ringSize()+'px';ring.style.width=ring.style.height=rs;ring.style.display='block';moveRing(e);strokeCh+=stroke(p[0],p[1],p[0],p[1],p[2])});
+ const rs=ringSize()+'px';ring.style.width=ring.style.height=rs;ring.style.display='block';ringAt(e.clientX,e.clientY);strokeCh+=stroke(p[0],p[1],p[0],p[1],p[2])});
 /* coalesced pointer samples: touchscreen 120-240 Hz par sample karti hai, par
    pointermove ek frame me ek hi baar aata hai. beech ke saare sample WebView
    getCoalescedEvents() me deta hai, aur pehle unhe chhod diya jata tha - yaani
@@ -2597,6 +2618,9 @@ cv.addEventListener('pointermove',e=>{if(!drawing||e.pointerId!==pid)return;
 /* ek hi ungli ek waqt: doosri ungli ka pointer is stroke ko nahi todta */
 const end=e=>{if(!drawing)return;if(e&&e.pointerId!=null&&pid!=null&&e.pointerId!==pid)return;
  drawing=false;pid=null;ring.style.display='none';
+ /* stroke ke saath ring ka pending frame bhi khatam - warna wo stroke ke baad ek
+    bekaar style write karta (display:none par dikhta kuch nahi, par kaam bekaar) */
+ if(ringRaf){cancelAnimationFrame(ringRaf);ringRaf=0}
  /* jis stroke ne ek bhi pixel nahi badla (khaali jagah par tap, pehle se mitaya hua
     hissa) wo undo history me jagah nahi lete - warna 10 aise tap asli history ko
     dhak dete hain aur Undo kuch karta hua nahi lagta. */
@@ -2638,6 +2662,19 @@ cv.addEventListener('pointerleave',e=>{if(drawing&&!e.buttons)end()});
 window.addEventListener('pointerup',end);window.addEventListener('pointercancel',end);
 cv.addEventListener('lostpointercapture',end);
 window.addEventListener('blur',()=>{if(drawing)end()});
+/* Wahi haalat, teesre raaste se: app background me chali jaye (call, notification,
+   home) jab ungli canvas par ho. WebView aam taur par pointercancel deta hai, par
+   hamesha nahi - aur us haalat me `drawing` hamesha ke liye true reh jata tha.
+   uske baad har pointerdown `if(!od||drawing)return` par ruk jata tha, yaani
+   Erase / Restore / Wand / Keep kuch bhi kaam nahi karta tha (sirf window band
+   karke kholna theek karta tha). naapa (headless Chrome, erase tool, 1400x1050):
+   pointerdown + 6 moves, phir visibilitychange (hidden), phir nayi ungli se
+   stroke - canvas hash pehle aur baad me bilkul wahi (b531cf74), yaani koi draw
+   nahi hua; ab stroke background hote hi band ho jata hai aur naya stroke chalta
+   hai. yeh wahi ek `end()` hai jo blur aur lostpointercapture par pehle se chalta
+   hai (doosri baar chalna safe hai - `drawing` pehle se false hota hai). */
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&drawing)end()});
+window.addEventListener('pagehide',()=>{if(drawing)end()});
 
 /* interior pixels ka bounds check har pixel par 4 baar hota tha; ab andar ka
    hissa bina check chalta hai aur sirf kinare wale pixels check karte hain */
@@ -3009,7 +3046,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
     hai. yahi trim ke baad bacha sabse bada offscreen surface tha. THas/SOK reset
     se agla render poora banta hai, is liye canvas par ek pixel nahi badalta. */
  tmp.width=tmp.height=1;THas=false;SOK=false};
-window.GlassCut={version:'1.1.81',
+window.GlassCut={version:'1.1.82',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
@@ -3029,7 +3066,9 @@ window.GlassCut={version:'1.1.81',
     is liye ab koi render nahi hota - agla asli render jo bhi chahiye wapas bana
     leta hai. */
  trim:()=>{dropScratch()},
- pause:()=>{shellPaused=true;idleCheck()},resume:()=>{shellPaused=false;idleCheck()},
+ /* shell onPause par bulata hai - agar us waqt ungli canvas par thi to wo stroke
+    yahin khatam ho jata hai (dekho upar visibilitychange ki tippani) */
+ pause:()=>{if(drawing)end();shellPaused=true;idleCheck()},resume:()=>{shellPaused=false;idleCheck()},
  back:()=>{const ov=$('#ov');if(ov&&ov.classList.contains('show')){closeOv();return true}
   if(openSh){closeAll();return true}return false}};
 })();
