@@ -334,7 +334,18 @@ $$('.grab').forEach(g=>{const sh=g.parentElement;let y0=0,dy=0,on=false,gp=null;
  g.onpointerup=stop;g.onpointercancel=stop;
  g.addEventListener('lostpointercapture',stop);
  window.addEventListener('pointerup',stop);window.addEventListener('pointercancel',stop);
- window.addEventListener('blur',()=>{if(on)stop()})});
+ window.addEventListener('blur',()=>{if(on)stop()});
+ /* wahi teesra raasta jo canvas ke stroke par pehle theek hua: app background me
+    chali jaye (call, notification, home) jab ungli grab par ho. WebView aam taur par
+    pointercancel deta hai, par hamesha nahi - us haalat me `on` hamesha true reh
+    jata tha aur sheet par translateY(...) + transition:none atka reh jata tha: wo
+    sheet dobara khulne par bhi khiski dikhti thi aur uski opening animation band
+    reh jati thi (naapa, headless Chrome: pointerdown + 40px move + visibilitychange
+    par shOpt par transform 'translateY(40px)' aur transition 'none' bane rehte the,
+    jahan dono khali hone chahiye). ab visibilitychange aur pagehide bhi wahi ek
+    stop chalate hain (doosri baar chalna safe hai - `on` pehle se false hota hai). */
+ document.addEventListener('visibilitychange',()=>{if(document.hidden&&on)stop()});
+ window.addEventListener('pagehide',()=>{if(on)stop()})});
 
 /* controls */
 const slider=(id,fn)=>{const r=$('#'+id),v=$('#'+id+'v'),upd=()=>{r.style.setProperty('--p',(r.value-r.min)/(r.max-r.min)*100+'%');if(v)v.textContent=r.value};upd();r.addEventListener('input',()=>{upd();fn(+r.value)})};
@@ -1968,19 +1979,39 @@ const recycleMask=old=>{if(!old||old===mask||old===mask0||old.length!==W*H||POOL
    jo 1.1.8 me render loop se hatayi gayi thi). arrays 4-byte aligned na hon to poora
    byte loop chal jata hai - nateeja bilkul wahi. */
 let DVA=null,DVB=null;
-const diffBox=(a,b)=>{
- const n=a.length;let x0=W,y0=H,x1=-1,y1=-1,i,m=0,bx;
+/* bx (optional): sirf isi box ke andar compare karo. dono arrays ke liye "box ke
+   bahar har byte pakka 0 hai" wala invariant pehle se load-bearing hai (morph,
+   Smooth, cutout ka MB, hist ka fallback box - sab usi par khade hain), is liye
+   unke box ke bahar dono arrays bilkul barabar hain aur wahan ek bhi compare
+   bekaar tha. hist ab dono masks ke box ka union bhejta hai. nateeja bilkul wahi
+   box hai (dono raaste same pixels par same compare chalate hain). */
+const diffBox=(a,b,bx)=>{
+ const n=a.length;let x0=W,y0=H,x1=-1,y1=-1,i,m=0,bxw;
+ let qx0=0,qy0=0,qx1=W-1,qy1=H-1;
+ if(bx){qx0=bx[0];qy0=bx[1];qx1=bx[2];qy1=bx[3];
+  if(qx1<qx0||qy1<qy0)return null;
+  if(qx0<0)qx0=0;if(qy0<0)qy0=0;
+  if(qx1>W-1)qx1=W-1;if(qy1>H-1)qy1=H-1}
  if((a.byteOffset&3)===0&&(b.byteOffset&3)===0){
   m=n>>>2;
   if(!DVA||DVA.buffer!==a.buffer||DVA.byteOffset!==a.byteOffset||DVA.length!==m)DVA=new Uint32Array(a.buffer,a.byteOffset,m);
   if(!DVB||DVB.buffer!==b.buffer||DVB.byteOffset!==b.byteOffset||DVB.length!==m)DVB=new Uint32Array(b.buffer,b.byteOffset,m);
   const ua=DVA,ub=DVB;
-  for(i=0;i<m;i++)if(ua[i]!==ub[i]){bx=i<<2;
-   const sy=(bx/W)|0,ey=((bx+3)/W)|0;
-   if(sy===ey){const xa=bx-sy*W,xb=xa+3;if(xa<x0)x0=xa;if(xb>x1)x1=xb;if(sy<y0)y0=sy;if(sy>y1)y1=sy}
-   else{x0=0;x1=W-1;if(sy<y0)y0=sy;if(ey>y1)y1=ey}}}
- for(i=m<<2;i<n;i++)if(a[i]!==b[i]){const y=(i/W)|0,x=i-y*W;
-  if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y}
+  /* row ke andar hi words: ek word row ke aakhri pixel se aage nikal sakta hai
+     (W chaar ka gunak nahi hota), par uske aage wale byte box ke bahar hain aur
+     wahan dono arrays barabar hain - is liye wo word tab hi badalta hai jab uske
+     andar ka koi box-wala byte badla ho. box tabhi chauda hota hai, chhota nahi. */
+  for(let y=qy0;y<=qy1;y++){
+   const s=(y*W+qx0)>>>2;let e=(y*W+qx1)>>>2;if(e>m-1)e=m-1;
+   for(let k=s;k<=e;k++)if(ua[k]!==ub[k]){bxw=k<<2;
+    const sy=(bxw/W)|0,ey=((bxw+3)/W)|0;
+    if(sy===ey){const xa=bxw-sy*W,xb=xa+3;if(xa<x0)x0=xa;if(xb>x1)x1=xb;if(sy<y0)y0=sy;if(sy>y1)y1=sy}
+    else{x0=0;x1=W-1;if(sy<y0)y0=sy;if(ey>y1)y1=ey}}}
+ }
+ /* aakhri 0-3 byte (n chaar ka gunak na ho) - sirf tab jab wo box ke andar hon */
+ for(i=m<<2;i<n;i++){const y=(i/W)|0,x=i-y*W;
+  if(y<qy0||y>qy1||x<qx0||x>qx1)continue;
+  if(a[i]!==b[i]){if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y}}
  return x1<0?null:[x0,y0,x1,y1]};
 let PSHIFT=null;
 const push=()=>{stopDraw();
@@ -2972,6 +3003,7 @@ window.addEventListener('pointerup',cmpOff);window.addEventListener('blur',cmpOf
    W*H blur + poora upload karta tha - har press par. union box bahut bada ho (aadhe
    canvas se zyada) to purana poora raasta hi sasta hai, aur wahi SUB ko exact rakhta
    hai (partial upload SUB ko sirf bada karta hai). */
+const UB=[0,0,0,0];
 const hist=(from,to)=>{stopDraw();const old=mask,o0=MB[0],o1=MB[1],o2=MB[2],o3=MB[3];
  /* mask khud abhi kisi stack me nahi hai (stack me hamesha copy hoti hai) aur
     restore() usse turant badal deta hai - yaani ye buffer is kshan free hai.
@@ -2997,7 +3029,18 @@ const hist=(from,to)=>{stopDraw();const old=mask,o0=MB[0],o1=MB[1],o2=MB[2],o3=M
     purane mask se bana tha) abhi bhi bilkul sahi hai - theek wahi tark jo stroke
     ke SDIRT par hai, aur wahi blurRect/SBOX raasta. diff box bade ho jane par
     (aadhe canvas se zyada) neeche wala purana union/softKill raasta hi chalta hai. */
- const db=(old&&old!==mask&&old.length===mask.length)?diffBox(old,mask):null;
+ /* diff ka scan sirf dono masks ke box ke union par: restore() ke baad MB naye
+    (snapshot wale) mask ka box hai aur o0..o3 purane mask ka, aur dono ke box ke
+    bahar mask pakka 0 hai - yaani wahan dono arrays barabar hain aur wahan ek bhi
+    compare bekaar tha. nateeja bilkul wahi box hai (dono raaste same pixels par
+    same compare chalate hain), bas 1400x1050 par 3.67 lakh 32-bit compare ki
+    jagah union box ke compare. union box hi neeche fallback ka box hai, is liye
+    dono raaste ek hi box par khade hain. */
+ if(o2>=o0&&MB[2]>=MB[0]){UB[0]=Math.min(o0,MB[0]);UB[1]=Math.min(o1,MB[1]);UB[2]=Math.max(o2,MB[2]);UB[3]=Math.max(o3,MB[3])}
+ else if(o2>=o0){UB[0]=o0;UB[1]=o1;UB[2]=o2;UB[3]=o3}
+ else if(MB[2]>=MB[0]){UB[0]=MB[0];UB[1]=MB[1];UB[2]=MB[2];UB[3]=MB[3]}
+ else{UB[0]=0;UB[1]=0;UB[2]=-1;UB[3]=-1}
+ const db=(old&&old!==mask&&old.length===mask.length)?diffBox(old,mask,UB):null;
  if(db){x0=db[0];y0=db[1];x1=db[2];y1=db[3];NORESTR=true}
  else if(o2>=o0&&MB[2]>=MB[0]){x0=Math.min(o0,MB[0]);y0=Math.min(o1,MB[1]);x1=Math.max(o2,MB[2]);y1=Math.max(o3,MB[3])}
  else if(o2>=o0){x0=o0;y0=o1;x1=o2;y1=o3}
