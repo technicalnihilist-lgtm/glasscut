@@ -1198,7 +1198,18 @@ const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
    if(maskAll255()){
     if(!softM||softM.length!==W*H)softM=new Uint8Array(W*H);
     softM.fill(255);SBOX=[0,0,W-1,H-1]}
-   else{softM=blur(mask,feather);SBOX=[0,0,W-1,H-1]}}
+   else{softM=blur(mask,feather);
+    /* box blur radius r sirf r pixel door tak asar dalta hai aur MB ke bahar mask
+       ka har byte pakka 0 hai, is liye poore-canvas blur ka nateeja bhi MB+r ke
+       bahar pakka 0 hai - SBOX ("iske bahar softM 0 hai") ko poora canvas maan
+       lena sach tha par bahut dheela. us dheele box par har aage ka kaam chalta
+       tha: alpha upload, putImageData aur exact-SUB scan teeno 1.47 M pixel par
+       (1400x1050), jabki asli content ~1.1 M par. ab wahi chhota box - nateeja
+       byte-identical (SBOX sirf ek upper bound hai, isliye chhota karna safe).
+       MB khaali ho to purana poora canvas hi rehta hai. */
+    const tx0=Math.max(0,MB[0]-feather),ty0=Math.max(0,MB[1]-feather),
+          tx1=Math.min(W-1,MB[2]+feather),ty1=Math.min(H-1,MB[3]+feather);
+    SBOX=(tx1>=tx0&&ty1>=ty0)?[tx0,ty0,tx1,ty1]:[0,0,W-1,H-1]}}
    else{
     /* purane box ka wo hissa jo naye box se bahar hai saaf 0 (memset) */
     const o=SBOX;
@@ -1255,9 +1266,18 @@ const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
     partial upload chhota box likh kar baaki canvas khaali chhod deta. */
  if(part&&fgFull){part=false;DIRT=null}
  if(part){
+  /* exact SUB (mask ka asli bbox) yahin, usi loop me nikalta hai jo alpha likhta
+     hai - poore render par alag se wahi box dobara scan karne ki zaroorat nahi
+     (dekho neeche SUBX). fast preview frames par yeh kaam nahi hota: unhe exact
+     bbox chahiye hi nahi (SUB sirf bada hota hai) aur wahan har pixel par ek
+     extra compare stroke ke frame ka kharcha badha deta. */
+  const doBB=!fast;
+  let qx0=W,qy0=H,qx1=-1,qy1=-1;
   if(FG32){const u=FG32;
-   for(let y=y0;y<=y1;y++){const b=y*W;for(let x=x0;x<=x1;x++){const i=b+x;u[i]=(u[i]&0xffffff)|(m[i]<<24)}}}
-  else for(let y=y0;y<=y1;y++){const b=y*W;for(let x=x0;x<=x1;x++){const i=b+x;d[i*4+3]=m[i]}}
+   for(let y=y0;y<=y1;y++){const b=y*W;for(let x=x0;x<=x1;x++){const i=b+x,v=m[i];u[i]=(u[i]&0xffffff)|(v<<24);
+    if(doBB&&v){if(x<qx0)qx0=x;if(x>qx1)qx1=x;if(qy0===H)qy0=y;qy1=y}}}}
+  else for(let y=y0;y<=y1;y++){const b=y*W;for(let x=x0;x<=x1;x++){const i=b+x,v=m[i];d[i*4+3]=v;
+   if(doBB&&v){if(x<qx0)qx0=x;if(x>qx1)qx1=x;if(qy0===H)qy0=y;qy1=y}}}
   fgx.putImageData(fgi,0,0,x0,y0,x1-x0+1,y1-y0+1);
   /* SUB ko sirf bada karna kaafi nahi tha: drawSubj fgc ko SUB ke source-rect se
      draw karta hai, aur source-rect ka kinara bilinear sampling ko clamp karta hai -
@@ -1288,7 +1308,36 @@ const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
    let bx0=0,by0=0,bx1=W-1,by1=H-1;
    const bb=(soft?SBOX:MB);
    if(bb&&bb[2]>=bb[0]&&bb[3]>=bb[1]){bx0=bb[0];by0=bb[1];bx1=bb[2];by1=bb[3]}
-   for(let y=by0;y<=by1;y++){const b=y*W;for(let x=bx0;x<=bx1;x++){if(m[b+x]){if(x<sx0)sx0=x;if(x>sx1)sx1=x;if(sy0===H)sy0=y;sy1=y}}}
+   /* pichhle frame ka SUB is mask ke box ke bahar wale hisse ka upper bound hai:
+      box ke bahar mask ek byte bhi nahi badla, is liye wahan jo kuch bhi 255 hai
+      wo pehle bhi tha aur tab wahi SUB me tha (SUB exact bbox hai, aur fast
+      preview frames use sirf bada karte hain - yaani har haalat me superset).
+      is liye bahar wali pattiyan SUB tak seemit ki ja sakti hain. SUB null ho
+      (nayi photo / trim) to purana poora box hi rehta hai. */
+   const oSUB=SUB;
+   if(oSUB&&oSUB[2]>=oSUB[0]&&oSUB[3]>=oSUB[1]){
+    if(oSUB[0]>bx0)bx0=oSUB[0];if(oSUB[1]>by0)by0=oSUB[1];
+    if(oSUB[2]<bx1)bx1=oSUB[2];if(oSUB[3]<by1)by1=oSUB[3]}
+   /* box ka wo hissa jo abhi upload hua (qx0..qy1) pehle se hi scan ho chuka hai;
+      sirf box ke bahar wale hisse wahi hain jo pichhle frame me the, is liye unhe
+      hi padhna padta hai. jab upload box poora box dhak leta hai (Grow/Shrink/
+      Smooth/undo ke aam haal) to ek pixel bhi scan nahi hota. */
+   if(qx1>=qx0){
+    if(qx0<bx0)qx0=bx0;if(qy0<by0)qy0=by0;if(qx1>bx1)qx1=bx1;if(qy1>by1)qy1=by1;
+    if(qx1>=qx0&&qy1>=qy0){sx0=qx0;sy0=qy0;sx1=qx1;sy1=qy1}}
+   const ix0=Math.max(bx0,qx0),ix1=Math.min(bx1,qx1),iy0=Math.max(by0,qy0),iy1=Math.min(by1,qy1);
+   const hasI=sx1>=sx0&&iy1>=iy0;
+   /* chaar pattiyan kram se nahi chalti (upar ki patti, phir neeche, phir baayein/
+      daayein), is liye sy0/sy1 min/max se likhe jate hain - poore canvas wale ek
+      scan me y chadhta hua aata tha, yahan nahi. min/max ka nateeja kram par
+      depend nahi karta, is liye bbox bilkul wahi rehta hai. */
+   const syB=hasI?iy0-1:by1;
+   for(let y=by0;y<=syB;y++){const b=y*W;for(let x=bx0;x<=bx1;x++){if(m[b+x]){if(x<sx0)sx0=x;if(x>sx1)sx1=x;if(y<sy0)sy0=y;if(y>sy1)sy1=y}}}
+   if(hasI){
+    for(let y=iy1+1;y<=by1;y++){const b=y*W;for(let x=bx0;x<=bx1;x++){if(m[b+x]){if(x<sx0)sx0=x;if(x>sx1)sx1=x;if(y<sy0)sy0=y;if(y>sy1)sy1=y}}}
+    for(let y=iy0;y<=iy1;y++){const b=y*W;
+     for(let x=bx0;x<=ix0-1;x++){if(m[b+x]){if(x<sx0)sx0=x;if(x>sx1)sx1=x;if(y<sy0)sy0=y;if(y>sy1)sy1=y}}
+     for(let x=ix1+1;x<=bx1;x++){if(m[b+x]){if(x<sx0)sx0=x;if(x>sx1)sx1=x;if(y<sy0)sy0=y;if(y>sy1)sy1=y}}}}
    SUB=sx1<0?null:[sx0,sy0,sx1,sy1];
   }else if(SUB){if(x0<SUB[0])SUB[0]=x0;if(y0<SUB[1])SUB[1]=y0;if(x1>SUB[2])SUB[2]=x1;if(y1>SUB[3])SUB[3]=y1}
   else SUB=[x0,y0,x1,y1];
@@ -3134,7 +3183,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
     hai. yahi trim ke baad bacha sabse bada offscreen surface tha. THas/SOK reset
     se agla render poora banta hai, is liye canvas par ek pixel nahi badalta. */
  tmp.width=tmp.height=1;THas=false;SOK=false};
-window.GlassCut={version:'1.1.84',
+window.GlassCut={version:'1.1.85',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
