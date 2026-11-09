@@ -1409,6 +1409,37 @@ const partBox=fast=>{
  qx1=Math.min(CW,Math.ceil(qx1)+2);qy1=Math.min(CH,Math.ceil(qy1)+2);
  if(qx1<=qx0||qy1<=qy0)return null;
  PB2[0]=qx0;PB2[1]=qy0;PB2[2]=qx1;PB2[3]=qy1;return PB2};
+/* DLB = "canvas par abhi jo content hai wo isi box ke andar hai, bahar bilkul
+   transparent hai" (upper bound exclusive, PART/PB2 wala hi convention).
+   DLBW/DLBH canvas ke size ke saath bandhe hain: size badla to ye bharosa khatam
+   (tab poora canvas hi maana jata hai).
+   render() ka poora clearRect (1400x1050 par 1.47 M pixel) har us poore render par
+   chalta tha jahan koi PART nahi hota - yaani har wand tap, Undo, Redo, Grow,
+   Shrink, Smooth, Invert, stroke release. par transparent background (bg 'none')
+   par canvas par sirf subject hota hai, aur wo pichhle frame ke box aur naye box
+   ke jod se bahar kabhi nahi hota: bahar ke pixel pehle bhi transparent the aur
+   ab bhi hain. is liye clear sirf unhi do boxes ke jod par chalta hai - nateeja
+   byte-identical (naapa: undo/grow/wand par clear 14,70,000 px -> 4,10,xxx px,
+   canvas hash aur saved PNG ka sha1 dono wahi). */
+let DLB=[0,0,0,0],DLBW=-1,DLBH=-1;
+const dlbSet=(x0,y0,x1,y1)=>{DLB[0]=x0;DLB[1]=y0;DLB[2]=x1;DLB[3]=y1;DLBW=CW;DLBH=CH};
+const dlbFull=()=>dlbSet(0,0,CW,CH);
+const dlbOk=()=>DLBW===CW&&DLBH===CH&&DLB[2]>DLB[0]&&DLB[3]>DLB[1];
+/* subject canvas par kis box me baithta hai - bilkul wahi ganit jo partBox
+   (PB2) aur drawSubj ka translate/scale/transform karte hain, bas bina FGR ke
+   (poore SUB ka box, yaani PART ka superset). SUB na ho to null. */
+const SBX=[0,0,0,0];
+const subjBox=()=>{if(!SUB)return null;const pb=subPad(SUB);
+ const t=xf();tiltUpd();const sx=t[0]*P.f,cs3=tiltCs,sh3=tiltSh;
+ const ax0=pb[0]-W/2,ax1=pb[0]+pb[2]-W/2,ay0=pb[1]-H/2,ay1=pb[1]+pb[3]-H/2;
+ let qx0=1e9,qy0=1e9,qx1=-1e9,qy1=-1e9;
+ for(let q=0;q<4;q++){const u=(q&2)?ax1:ax0,v=(q&1)?ay1:ay0;
+  const ex=t[1]+sx*cs3*u,ey=t[2]+t[0]*(sh3*u+v);
+  if(ex<qx0)qx0=ex;if(ex>qx1)qx1=ex;if(ey<qy0)qy0=ey;if(ey>qy1)qy1=ey}
+ qx0=Math.max(0,Math.floor(qx0)-2);qy0=Math.max(0,Math.floor(qy0)-2);
+ qx1=Math.min(CW,Math.ceil(qx1)+2);qy1=Math.min(CH,Math.ceil(qy1)+2);
+ if(qx1<=qx0||qy1<=qy0)return null;
+ SBX[0]=qx0;SBX[1]=qy0;SBX[2]=qx1;SBX[3]=qy1;return SBX};
 const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
  /* 3D tilt: ek halka shear, jo subject ko axis par ghuma hua dikhata hai */
  tiltUpd();const cs3=tiltCs,sh3=tiltSh;
@@ -1623,7 +1654,7 @@ function render(fast){if(!od)return;RFULL=!fast;cx.setTransform(1,0,0,1,0,0);cx.
     canvas par nahi bachta tha - 1400x1200 par har compare frame me 2 x 1.68 M
     clearRect + 1.68 M fillRect + background ka poora drawImage (blur background
     par 1.68 M source pixel). ab showOrig par seedha yahin se laut jate hain. */
- if(showOrig){cx.clearRect(0,0,CW,CH);PART=null;PRVcw=-1;drawSubj(origc,fast);NORESTR=false;return}
+ if(showOrig){cx.clearRect(0,0,CW,CH);dlbFull();PART=null;PRVcw=-1;drawSubj(origc,fast);NORESTR=false;return}
  const pm=P.motion/100,pox=-mx*pm*CW*0.010,poy=-my*pm*CH*0.010;
  /* colour/gradient background poore canvas par ek opaque fillRect karta hai, aur
     bina parallax (pox=poy=0) wo bilkul canvas ke kinare se kinare tak dhakta hai -
@@ -1640,8 +1671,28 @@ function render(fast){if(!od)return;RFULL=!fast;cx.setTransform(1,0,0,1,0,0);cx.
     badla (FGR), jo PART ka faisla karne ke liye chahiye. */
  layer(fast);
  PART=partBox(fast);
- if(PART)cx.clearRect(PART[0],PART[1],PART[2]-PART[0],PART[3]-PART[1]);
- else if(!(opaqueBg()&&pox===0&&poy===0))cx.clearRect(0,0,CW,CH);
+ /* simple = drawSubj ka seedha raasta (tmp composite nahi): tab canvas par sirf
+    subject hota hai, uske box ke bahar kuch nahi. bg 'none' par background bhi
+    kuch draw nahi karta, is liye clear sirf pichhle content ke box aur naye box
+    ke jod par kaafi hai - bahar ka har pixel pehle bhi transparent tha. baaki har
+    haalat (background, parallax, outline/shadow/depth/opacity) purana poora clear
+    hi karti hai, is liye nateeja kabhi kam nahi padta. */
+ const sbox=(bg.t==='none'&&pox===0&&poy===0&&P.motion===0
+   &&P.line<=0&&P.op>=100&&!P.sh&&P.depth<=0)?subjBox():null;
+ if(PART){cx.clearRect(PART[0],PART[1],PART[2]-PART[0],PART[3]-PART[1]);
+  /* PART ke bahar canvas pichhle frame se hi sahi hai - content dono ka jod */
+  if(dlbOk()){if(PART[0]<DLB[0])DLB[0]=PART[0];if(PART[1]<DLB[1])DLB[1]=PART[1];
+   if(PART[2]>DLB[2])DLB[2]=PART[2];if(PART[3]>DLB[3])DLB[3]=PART[3]}else dlbFull()}
+ else if(sbox&&dlbOk()){
+  let x0=DLB[0],y0=DLB[1],x1=DLB[2],y1=DLB[3];
+  if(sbox[0]<x0)x0=sbox[0];if(sbox[1]<y0)y0=sbox[1];
+  if(sbox[2]>x1)x1=sbox[2];if(sbox[3]>y1)y1=sbox[3];
+  cx.clearRect(x0,y0,x1-x0,y1-y0);
+  dlbSet(sbox[0],sbox[1],sbox[2],sbox[3])}
+ else if(!(opaqueBg()&&pox===0&&poy===0)){cx.clearRect(0,0,CW,CH);
+  /* clear poora hua: ab canvas par sirf wahi hoga jo is frame me banta hai */
+  if(sbox)dlbSet(sbox[0],sbox[1],sbox[2],sbox[3]);else dlbFull()}
+ else dlbFull();
  /* PART hai to background aur depth ki fills sirf usi box par chalti hain: clip
     coverage seemit karta hai, rang/sampling badalta nahi, is liye box ke andar
     ka har pixel poore fill jaisa hi banta hai aur bahar ke pixel pichhle frame
@@ -3046,7 +3097,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
     hai. yahi trim ke baad bacha sabse bada offscreen surface tha. THas/SOK reset
     se agla render poora banta hai, is liye canvas par ek pixel nahi badalta. */
  tmp.width=tmp.height=1;THas=false;SOK=false};
-window.GlassCut={version:'1.1.82',
+window.GlassCut={version:'1.1.83',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
@@ -3065,7 +3116,16 @@ window.GlassCut={version:'1.1.82',
     sahi hai (dropScratch sirf offscreen caches aur typed arrays chhodta hai),
     is liye ab koi render nahi hota - agla asli render jo bhi chahiye wapas bana
     leta hai. */
- trim:()=>{dropScratch()},
+ trim:()=>{dropScratch();
+  /* trim ke turant baad ek pending *fast preview* frame (stroke ka stamp2 ya
+     slider ka qr) rAF me baitha hota hai - wo agle 16 ms me chalta aur wahi sab
+     kuch dobara bana deta (softM ka poora blur, blur tables, fgc ka poora alpha
+     upload), jo abhi-abhi memory pressure ke liye chhoda gaya tha. fast frame
+     sirf ek preview hai: agla pointermove use khud dobara schedule karta hai aur
+     stroke ka release poora render karta hai, is liye use chhodne se screen par
+     kuch nahi badalta. poore render (fastReq false) wale pending frame ko haath
+     nahi lagaya jata - wo sach me zaroori hai. */
+  if(raf&&fastReq){cancelAnimationFrame(raf);raf=0;fastReq=false}},
  /* shell onPause par bulata hai - agar us waqt ungli canvas par thi to wo stroke
     yahin khatam ho jata hai (dekho upar visibilitychange ki tippani) */
  pause:()=>{if(drawing)end();shellPaused=true;idleCheck()},resume:()=>{shellPaused=false;idleCheck()},
