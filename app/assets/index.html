@@ -796,7 +796,8 @@ const drawPhoto=(im,nw,nh)=>{
      zaroori nahi tha: size badalne par guard pehle jaise hi naya buffer banata
      hai, aur size wahi ho (ek hi camera ki doosri photo - aam haalat) to wahi
      buffer dobara kaam aata hai. pehle same-size reload par 11 buffer (1400x1050
-     par 17.31 MB: STK 5.88, BLS.t/BLS.o 2x1.47, CC ke saat 5.88+2.94, SD 1.47)
+     par 15.84 MB: STK 5.88, BLS.t 1.47, CC ke saat 5.88+2.94, SD 1.47 - 1.1.89
+     me BLS.o ka 1.47 hata gaya)
      sirf is liye dobara bante the ki wo agle 30 ms me chahiye hi nahi the - theek
      us waqt jab nayi photo ka 5.88 MB ImageData bhi allocate ho raha hota hai.
      jo sach me purani photo ka delta rakhte hain (DIRT, SDIRT, SUB) wo ab bhi
@@ -1025,7 +1026,11 @@ let BLS=null;
    chhote canvas par bhi sab kuch table-driven hai, is liye 1x1 ya 7x1400 jaisi
    photo par bhi wahi hisaab chalta hai. */
 const blurTabs=r=>{const len=W*H;
- if(!BLS||BLS.n!==len)BLS={n:len,t:new Uint8Array(len),o:new Uint8Array(len),gw:-1,gh:-1,gr:-1,tab:null,ca:null,cs:null,ra:null,rs:null};
+ /* 1.1.89: BLS.o (doosra poora W*H buffer) yahan se hata diya - usse sirf blur()
+    padhta tha aur blur() ab hai hi nahi (dekho blurRect). ek 1400x1050 photo par
+    ye 14,70,000 byte hai jo har photo size par allocate hota tha aur poore session
+    me zinda rehta tha, chahe feather blur sirf box par chale (aam haal). */
+ if(!BLS||BLS.n!==len)BLS={n:len,t:new Uint8Array(len),gw:-1,gh:-1,gr:-1,tab:null,ca:null,cs:null,ra:null,rs:null};
  /* cache key pehle ek string thi (W+'|'+H+'|'+r) aur wo blur()/blurRect() ke HAR call
     par banti thi - feather on hone par blurRect har fast frame (stroke ke dauraan
     ~60/s) aur har release par chalta hai, yaani render loop me bachI hui aakhri
@@ -1040,40 +1045,17 @@ const blurTabs=r=>{const len=W*H;
   const ra=BLS.ra=new Int32Array(H),rs=BLS.rs=new Int32Array(H);
   for(let y=0;y<H;y++){ra[y]=Math.min(H-1,y+r+1)*W;rs[y]=Math.max(0,y-r)*W}}
  return BLS};
-const blur=(src,r)=>{
- blurTabs(r);
- const t=BLS.t,o=BLS.o;
- const tab=BLS.tab,ca=BLS.ca,cs=BLS.cs,ra=BLS.ra,rs=BLS.rs;
- let x,y,s,b,k,x0;
- /* horizontal pass: chaar row ek saath. pehle har row akeli chalti thi, is liye
-    jod (s) ki ek lambi dependency chain banti thi aur src se sirf ek load ek
-    samay par hota tha - 1400x1050 par 1.47 M pixel par yeh chain hi pass ka
-    asli kharcha tha. ab chaar row ke chaar alag jod hain, yaani chaar load ek
-    saath ho sakte hain aur CPU unhe parallel bhej sakta hai. har row ka hisaab
-    bilkul wahi hai (wahi ca/cs index, wahi tab lookup, wahi kram), sirf rows
-    ko saath joda gaya hai - nateeja byte-identical. */
- for(y=0;y+4<=H;y+=4){
-  const q0=y*W,q1=q0+W,q2=q1+W,q3=q2+W;let s0=0,s1=0,s2=0,s3=0;
-  for(x=-r;x<=r;x++){const c=x<0?0:x>W-1?W-1:x;
-   s0+=src[q0+c];s1+=src[q1+c];s2+=src[q2+c];s3+=src[q3+c]}
-  for(x=0;x<W;x++){const a=ca[x],c=cs[x];
-   t[q0+x]=tab[s0];t[q1+x]=tab[s1];t[q2+x]=tab[s2];t[q3+x]=tab[s3];
-   s0+=src[q0+a]-src[q0+c];s1+=src[q1+a]-src[q1+c];
-   s2+=src[q2+a]-src[q2+c];s3+=src[q3+a]-src[q3+c]}}
- for(;y<H;y++){b=y*W;s=0;
-  for(x=-r;x<=r;x++)s+=src[b+(x<0?0:x>W-1?W-1:x)];
-  for(x=0;x<W;x++){t[b+x]=tab[s];s+=src[b+ca[x]]-src[b+cs[x]]}}
- for(x0=0;x0+4<=W;x0+=4){
-  let s0=0,s1=0,s2=0,s3=0;
-  for(y=-r;y<=r;y++){const row=(y<0?0:y>H-1?H-1:y)*W;
-   s0+=t[row+x0];s1+=t[row+x0+1];s2+=t[row+x0+2];s3+=t[row+x0+3]}
-  for(y=0;y<H;y++){k=y*W+x0;const a=ra[y],c=rs[y];
-   o[k]=tab[s0];o[k+1]=tab[s1];o[k+2]=tab[s2];o[k+3]=tab[s3];
-   s0+=t[a+x0]-t[c+x0];s1+=t[a+x0+1]-t[c+x0+1];s2+=t[a+x0+2]-t[c+x0+2];s3+=t[a+x0+3]-t[c+x0+3]}}
- for(x=x0;x<W;x++){s=0;
-  for(y=-r;y<=r;y++)s+=t[(y<0?0:y>H-1?H-1:y)*W+x];
-  for(y=0;y<H;y++){k=y*W+x;o[k]=tab[s];s+=t[ra[y]+x]-t[rs[y]+x]}}
- return o};
+/* 1.1.89: poore-canvas blur (blur()) alag function tha - wahi chaar-row/chaar-column
+   ganit, wahi tables, wahi tab lookup, bas box poore canvas ka. layer() use sirf
+   tab bulata hai jab mask ka box canvas ke 70% se bada ho, aur tab bhi nateeja
+   blurRect(0,0,W-1,H-1) se byte-identical aata hai (wahi ca/cs/ra/rs clamp, wahi
+   kram) - alag se naapa: radius 1,2,3,6,9,14 par poore 1400x1050 par 0 byte diff.
+   do jagah likha wahi integer ganit rakhna hi galat hone ka khatra tha, aur uske
+   saath ek poora W*H scratch (BLS.o) bhi pada rehta tha. ab ek hi implementation
+   hai - blurRect - aur usse poore canvas ke liye bhi wahi bulaya jata hai.
+   saath hi softM ab ek hi array rehta hai: pehle full raasta BLS.o lauta deta tha
+   aur agla box-wala raasta naya W*H array banata tha, yaani full<->box badalne par
+   har baar 14,70,000 byte ka allocation. ab dono raaste usi softM me likhte hain. */
 /* box blur sirf ek rectangle ke liye, wahi tables aur wahi integer jod - is liye
    rect ke andar ka har pixel poore canvas wale blur se byte-identical aata hai.
    box blur local hai (radius r), is liye jab mask sirf DIRT rectangle me badla ho
@@ -1086,7 +1068,7 @@ const blurRect=(src,r,rx0,ry0,rx1,ry1,out)=>{
  if(rx1<rx0||ry1<ry0)return out;
  const ty0=Math.max(0,ry0-r),ty1=Math.min(H-1,ry1+r);
  let x,y,s,b,k;
- /* wahi chaar-row wala horizontal pass jo blur() me hai (dekho wahan) - stroke
+ /* chaar-row wala horizontal pass - stroke
     release, Grow/Shrink, Smooth aur undo/redo ka feather blur isi se banta hai,
     aur is box me rows kam hone par bhi chain tooti rehti hai. jod, tab lookup
     aur kram bilkul wahi, is liye out byte-identical. */
@@ -1102,7 +1084,7 @@ const blurRect=(src,r,rx0,ry0,rx1,ry1,out)=>{
  for(y=yy;y<=ty1;y++){b=y*W;s=0;
   for(k=-r;k<=r;k++){const c=rx0+k;s+=src[b+(c<0?0:c>W-1?W-1:c)]}
   for(x=rx0;x<=rx1;x++){t[b+x]=tab[s];s+=src[b+ca[x]]-src[b+cs[x]]}}
- /* vertical pass chaar column ek saath, bilkul poore blur() ki tarah: column-wise
+ /* vertical pass chaar column ek saath: column-wise
     chalne par har read ek alag cache line par jata tha, aur jab blur ka box poore
     canvas jitna bada ho to column-wise loop poore blur se dheema pad jata tha.
     jod, table aur likhne ka kram bilkul wahi hai, is liye out byte-identical. */
@@ -1222,7 +1204,16 @@ const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
    if(maskAll255()){
     if(!softM||softM.length!==W*H)softM=new Uint8Array(W*H);
     softM.fill(255);SBOX=[0,0,W-1,H-1]}
-   else{softM=blur(mask,feather);
+   else{
+    /* 1.1.89: pehle yahan blur(mask,feather) chalta tha (apna poora W*H scratch
+       BLS.o) aur softM usi BLS.o par chala jata tha - is liye agla box-wala
+       raasta (jo upar `!softM||softM.length!==W*H` par naya array banata hai)
+       har full->box badlav par 14,70,000 byte dobara allocate karta tha. ab
+       wahi ek blurRect poore canvas ke box par chalta hai aur seedha softM me
+       likhta hai - nateeja byte-identical, buffer ek hi, dobara banne ka koi
+       mauka nahi. */
+    if(!softM||softM.length!==W*H)softM=new Uint8Array(W*H);
+    blurRect(mask,feather,0,0,W-1,H-1,softM);
     /* box blur radius r sirf r pixel door tak asar dalta hai aur MB ke bahar mask
        ka har byte pakka 0 hai, is liye poore-canvas blur ka nateeja bhi MB+r ke
        bahar pakka 0 hai - SBOX ("iske bahar softM 0 hai") ko poora canvas maan
@@ -1805,8 +1796,16 @@ function render(fast){if(!od)return;RFULL=!fast;cx.setTransform(1,0,0,1,0,0);cx.
     ke jod par kaafi hai - bahar ka har pixel pehle bhi transparent tha. baaki har
     haalat (background, parallax, outline/shadow/depth/opacity) purana poora clear
     hi karti hai, is liye nateeja kabhi kam nahi padta. */
- const sbox=(bg.t==='none'&&pox===0&&poy===0&&P.motion===0
-   &&P.line<=0&&P.op>=100&&!P.sh&&P.depth<=0)?subjBox():null;
+ /* 1.1.89: PART hone par sbox kabhi padha hi nahi jata (dekho neeche `if(PART)`
+    pehla branch), phir bhi subjBox() har aise fast frame par apna poora kaam
+    karta tha - subPad(SUB), xf(), tiltUpd() aur chaar corner ka projection -
+    halanki wahi kaam partBox() usi frame me pehle hi kar chuka hota hai. stroke
+    ke dauraan yahi sabse garma-garam raasta hai (har pointermove ka frame), is
+    liye ab sbox sirf tab banta hai jab wo sach me chahiye. nateeja byte-identical
+    (PART wale frame par sbox kabhi nahi padha jata, aur baaki frame par shart
+    bilkul wahi hai). */
+ const sbox=(PART||bg.t!=='none'||pox!==0||poy!==0||P.motion!==0
+   ||P.line>0||P.op<100||P.sh||P.depth>0)?null:subjBox();
  if(PART){cx.clearRect(PART[0],PART[1],PART[2]-PART[0],PART[3]-PART[1]);
   /* PART ke bahar canvas pichhle frame se hi sahi hai - content dono ka jod */
   if(dlbOk()){if(PART[0]<DLB[0])DLB[0]=PART[0];if(PART[1]<DLB[1])DLB[1]=PART[1];
@@ -2935,7 +2934,17 @@ const SMOOTH_LUT=(()=>{const t=new Uint8Array(256);
 $('#bSmo').onclick=need(()=>{push();
  const bxa=Math.max(0,MB[0]-2),bxb=Math.min(W-1,MB[2]+2),bya=Math.max(0,MB[1]-2),byb=Math.min(H-1,MB[3]+2);
  if(bxb>=bxa&&byb>=bya){
-  blurTabs(2);const b=blurRect(mask,2,bxa,bya,bxb,byb,BLS.o),L=SMOOTH_LUT;
+  /* 1.1.89: Smooth ka blur nateeja pehle BLS.o me jata tha - ek poora W*H scratch
+     jo BLS ke saath har photo size par allocate hota tha. wo buffer ab hai hi nahi
+     (blur() hata diya), aur Smooth ka apna alag W*H buffer rakhna wahi zinda
+     memory hoti. is liye wahi MBUF use hota hai jo morph() pehle se rakhta hai:
+     dono ek hi tarah ke one-shot refine button hain, ek saath kabhi nahi chalte,
+     aur morph har baar shuru me o.set(mask) se poora buffer likh deta hai - yaani
+     ek ka content doosre ke liye kabhi purana nahi rehta. blurRect sirf apne box
+     (bxa..bxb x bya..byb) me likhta hai aur neeche wahi box padha jata hai. */
+  blurTabs(2);
+  if(!MBUF||MBUF.length!==W*H)MBUF=new Uint8Array(W*H);
+  const b=blurRect(mask,2,bxa,bya,bxb,byb,MBUF),L=SMOOTH_LUT;
   for(let y=bya;y<=byb;y++){const row=y*W;for(let x=bxa;x<=bxb;x++){const i=row+x;mask[i]=L[b[i]]}}
   mbAdd(bxa,bya,bxb,byb)}
  /* Smooth bhi sirf MB+2 tak mask badalta hai (aur mbAdd se MB utna chauda ho jata
@@ -3253,7 +3262,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
     hai. yahi trim ke baad bacha sabse bada offscreen surface tha. THas/SOK reset
     se agla render poora banta hai, is liye canvas par ek pixel nahi badalta. */
  tmp.width=tmp.height=1;THas=false;SOK=false};
-window.GlassCut={version:'1.1.88',
+window.GlassCut={version:'1.1.89',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
