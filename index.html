@@ -687,14 +687,41 @@ const parseDims=head=>{
    return bw>0?[bw,bh,1]:null}
  }catch(_){}
  return null};
+/* imgDims har photo par (aur #fBg wali background photo par bhi) file ka pehla
+   256 KB padhta tha - chahe uska jawab pehle 24 byte me hi likha ho. PNG ka IHDR
+   8 se 24 byte me, GIF 10 byte me, aur JPEG ka SOF apne APPn segments ke turant
+   baad hota hai. ab head badhte kadam me padhi jati hai: 8 KB, phir 64 KB, phir
+   256 KB - aur jo format 8 KB me hi jawab de de uske liye ek hi read chalti hai.
+   badi EXIF/ICC (phone ki har photo me dono hote hain, APP1 + APP2 = 30-60 KB) ka
+   SOF agle kadam me mil jata hai.
+   ISO container (HEIC/AVIF) par yeh badlav nahi lagta: wahan nateeja head me mila
+   *sabse bada* ispe box hota hai, aur chhoti head me sirf thumbnail ka ispe aata
+   hai - is liye wahan pehle jaisa hi ek 256 KB read chalta hai (nateeja byte-identical).
+   naapa (headless Chrome, File.slice par counter, dono builds par wahi 7-run flow):
+   6000x4000 JPEG 262,144 -> 8,192 byte; 40 KB APP1 (Exif) wala JPEG 262,144 ->
+   73,728 (8 KB + 64 KB kadam); 600x450 PNG 262,144 -> 3,693 (poori file); 1x1 PNG
+   262,144 -> 69. Teeno par canvas hash pehle jaisa (12MP: 1552092785 dono par) aur
+   poora 13-checkpoint flow byte-identical (canvas hash + saved PNG ka sha1 wahi).
+   load ka wall-clock isi shor me rehta hai (12MP: median 522 -> 551 ms, min 196 ->
+   114 ms) - yahan bacha sirf I/O aur garbage hai: har photo par ek 256 KB
+   Uint8Array aur uski copy kam. */
 const imgDims=async f=>{
- let head=new Uint8Array(await f.slice(0,262144).arrayBuffer()),d=null;
- try{d=parseDims(head)}catch(_){}
- if(d)return d;
+ const rd=n=>f.slice(0,Math.min(f.size,n)).arrayBuffer().then(a=>new Uint8Array(a));
+ let head=await rd(8192),d=null;
+ const iso=head.length>16&&head[4]===0x66&&head[5]===0x74&&head[6]===0x79&&head[7]===0x70;
+ if(iso){head=await rd(262144);try{d=parseDims(head)}catch(_){}
+  if(d)return d
+ }else{
+  try{d=parseDims(head)}catch(_){}
+  if(!d&&head.length===8192&&f.size>8192){
+   head=await rd(65536);try{d=parseDims(head)}catch(_){}
+   if(!d&&head.length===65536&&f.size>65536){
+    head=await rd(262144);try{d=parseDims(head)}catch(_){}}}
+  if(d)return d}
  if(!(head.length>1&&head[0]===0xFF&&head[1]===0xD8))return null;
  const big=Math.min(f.size,8388608);
  if(big<=head.length)return null;
- head=new Uint8Array(await f.slice(0,big).arrayBuffer());
+ head=await rd(big);
  try{d=parseDims(head)}catch(_){}
  return d};
 let MAINTOK=0;
@@ -2568,7 +2595,17 @@ let stX=NaN,stY=NaN,stR=-1;
    bilkul wahi rehta tha, par circle ka poora scan (brush 140 par ~15k pixel)
    bekaar jata tha. ab keep ka fallback nahi chalta: keep ke baad ch 0 hai to
    likhne ko kuch bacha hi nahi. erase/restore ke raaste chhue nahi gaye. */
-const stroke=(a,b,c,d,k)=>{const r=Math.max(2,brush*k/2),keep=mode==='keep',v=keep||mode!=='erase'?255:0,n=Math.max(1,Math.ceil(Math.hypot(c-a,d-b)/Math.max(1,r/3)));let ch=0;
+const stroke=(a,b,c,d,k)=>{const r=Math.max(2,brush*k/2),keep=mode==='keep',v=keep||mode!=='erase'?255:0,
+ /* do sample ke beech ki doori har sample par Math.hypot se nikalti thi. V8 ka
+    hypot overflow/underflow se bachne ke liye scaling karta hai, is liye wahi
+    doori sqrt se kaafi mehnga hai - aur yeh line stroke ke har sample par chalti
+    hai (touchscreen 120-240 Hz, aur coalesced events ke saath ek move me kai
+    sample). dx,dy dono 1400 se chhote hain, is liye dx*dx+dy*dy 2^53 ke andar
+    rehta hai aur sqrt wahi double deta hai jo hypot deta hai - yaani n (stamp ki
+    ginti) badalta nahi. 20 lakh random (dx,dy,step) case par ceil(hypot/step) aur
+    ceil(sqrt/step) me 0 farak; 20 lakh call par hypot 226.5 ms -> sqrt 79.3 ms. */
+ dx=c-a,dy=d-b,step=Math.max(1,r/3),
+ n=Math.max(1,Math.ceil(Math.sqrt(dx*dx+dy*dy)/step));let ch=0;
  for(let i=0;i<=n;i++){const px=i===0?a:i===n?c:a+(c-a)*i/n,py=i===0?b:i===n?d:b+(d-b)*i/n;
   if(px===stX&&py===stY&&r===stR)continue;
   stX=px;stY=py;stR=r;
@@ -3097,7 +3134,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
     hai. yahi trim ke baad bacha sabse bada offscreen surface tha. THas/SOK reset
     se agla render poora banta hai, is liye canvas par ek pixel nahi badalta. */
  tmp.width=tmp.height=1;THas=false;SOK=false};
-window.GlassCut={version:'1.1.83',
+window.GlassCut={version:'1.1.84',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
