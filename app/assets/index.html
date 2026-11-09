@@ -1292,11 +1292,29 @@ const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
      extra compare stroke ke frame ka kharcha badha deta. */
   const doBB=!fast;
   let qx0=W,qy0=H,qx1=-1,qy1=-1;
+  /* bbox ka hisaab har pixel par nahi, har ROW par: ek row me sirf pehla aur aakhri
+     non-zero x chahiye, kyunki global bbox ka x0 = sabhi rows ke "pehla" ka min,
+     x1 = sabhi rows ke "aakhri" ka max, aur y0/y1 = pehli/aakhri non-empty row.
+     pehle har non-zero pixel par teen compare + teen-chaar store chalte the (x<qx0,
+     x>qx1, qy0===H, qy1=y); ab ek compare (f<0 - row me sirf ek baar) aur ek store
+     (l=x). nateeja bilkul wahi bbox hai, is liye SUB/MB aur canvas byte-identical.
+     doBB false (fast preview frame) par pehle bhi kuch track nahi hota tha - wahan
+     ab alag loop hai taaki har pixel par wo ek compare bhi na chale. */
   if(FG32){const u=FG32;
-   for(let y=y0;y<=y1;y++){const b=y*W;for(let x=x0;x<=x1;x++){const i=b+x,v=m[i];u[i]=(u[i]&0xffffff)|(v<<24);
-    if(doBB&&v){if(x<qx0)qx0=x;if(x>qx1)qx1=x;if(qy0===H)qy0=y;qy1=y}}}}
-  else for(let y=y0;y<=y1;y++){const b=y*W;for(let x=x0;x<=x1;x++){const i=b+x,v=m[i];d[i*4+3]=v;
-   if(doBB&&v){if(x<qx0)qx0=x;if(x>qx1)qx1=x;if(qy0===H)qy0=y;qy1=y}}}
+   if(doBB){
+    for(let y=y0;y<=y1;y++){const b=y*W;let f=-1,l=-1;
+     for(let x=x0;x<=x1;x++){const i=b+x,v=m[i];u[i]=(u[i]&0xffffff)|(v<<24);
+      if(v){if(f<0)f=x;l=x}}
+     if(f>=0){if(f<qx0)qx0=f;if(l>qx1)qx1=l;if(qy0===H)qy0=y;qy1=y}}
+   }else for(let y=y0;y<=y1;y++){const b=y*W;
+    for(let x=x0;x<=x1;x++){const i=b+x;u[i]=(u[i]&0xffffff)|(m[i]<<24)}}
+  }else if(doBB){
+   for(let y=y0;y<=y1;y++){const b=y*W;let f=-1,l=-1;
+    for(let x=x0;x<=x1;x++){const i=b+x,v=m[i];d[i*4+3]=v;
+     if(v){if(f<0)f=x;l=x}}
+    if(f>=0){if(f<qx0)qx0=f;if(l>qx1)qx1=l;if(qy0===H)qy0=y;qy1=y}}
+  }else for(let y=y0;y<=y1;y++){const b=y*W;
+   for(let x=x0;x<=x1;x++){const i=b+x;d[i*4+3]=m[i]}}
   fgx.putImageData(fgi,0,0,x0,y0,x1-x0+1,y1-y0+1);
   /* SUB ko sirf bada karna kaafi nahi tha: drawSubj fgc ko SUB ke source-rect se
      draw karta hai, aur source-rect ka kinara bilinear sampling ko clamp karta hai -
@@ -1379,10 +1397,14 @@ const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
   const part2=!(ux0===0&&uy0===0&&ux1===W-1&&uy1===H-1);
   let bx0=W,by0=H,bx1=-1,by1=-1;
   if(FG32){const u=FG32;
-   for(let y=uy0;y<=uy1;y++){const b=y*W;for(let x=ux0;x<=ux1;x++){const i=b+x,v=m[i];u[i]=(u[i]&0xffffff)|(v<<24);
-    if(v){if(x<bx0)bx0=x;if(x>bx1)bx1=x;if(by0===H)by0=y;by1=y}}}
-  }else for(let y=uy0;y<=uy1;y++){const b=y*W;for(let x=ux0;x<=ux1;x++){const i=b+x,v=m[i];d[i*4+3]=v;
-   if(v){if(x<bx0)bx0=x;if(x>bx1)bx1=x;if(by0===H)by0=y;by1=y}}}
+   for(let y=uy0;y<=uy1;y++){const b=y*W;let f=-1,l=-1;
+    for(let x=ux0;x<=ux1;x++){const i=b+x,v=m[i];u[i]=(u[i]&0xffffff)|(v<<24);
+     if(v){if(f<0)f=x;l=x}}
+    if(f>=0){if(f<bx0)bx0=f;if(l>bx1)bx1=l;if(by0===H)by0=y;by1=y}}
+  }else for(let y=uy0;y<=uy1;y++){const b=y*W;let f=-1,l=-1;
+   for(let x=ux0;x<=ux1;x++){const i=b+x,v=m[i];d[i*4+3]=v;
+    if(v){if(f<0)f=x;l=x}}
+   if(f>=0){if(f<bx0)bx0=f;if(l>bx1)bx1=l;if(by0===H)by0=y;by1=y}}
   if(part2){
    /* box ke bahar purana alpha 0 - chaar patti (khaali patti no-op hai) */
    fgx.clearRect(0,0,W,uy0);
@@ -2887,11 +2909,19 @@ $('#bInv').onclick=need(()=>{push();for(let i=0;i<mask.length;i++)mask[i]=255-ma
 /* Smooth ka box blur bhi sirf MB+2 tak: radius 2 ka blur MB se do pixel door ke
    bahar har jagah 0 deta hai, aur 0 par (0-128)*3+128 clamp hokar 0 hi banta hai -
    yaani wahan mask pehle se 0 hai, likhne ki zaroorat nahi. */
+/* Smooth ka (b-128)*3+128 clamp har pixel par ek multiply aur do compare karta
+   tha. blur ka nateeja ek byte hai, is liye b sirf 0..255 ho sakta hai - yaani
+   ye poora naksha 256 possible input ka function hai. ek baar bani 256-byte table
+   bilkul wahi value deti hai (integer ganit, koi rounding nahi; clamp wahi), aur
+   har pixel par sirf ek table load bachta hai. */
+const SMOOTH_LUT=(()=>{const t=new Uint8Array(256);
+ for(let i=0;i<256;i++){const v=(i-128)*3+128;t[i]=v<0?0:v>255?255:v}
+ return t})();
 $('#bSmo').onclick=need(()=>{push();
  const bxa=Math.max(0,MB[0]-2),bxb=Math.min(W-1,MB[2]+2),bya=Math.max(0,MB[1]-2),byb=Math.min(H-1,MB[3]+2);
  if(bxb>=bxa&&byb>=bya){
-  blurTabs(2);const b=blurRect(mask,2,bxa,bya,bxb,byb,BLS.o);
-  for(let y=bya;y<=byb;y++){const row=y*W;for(let x=bxa;x<=bxb;x++){const i=row+x,v=(b[i]-128)*3+128;mask[i]=v<0?0:v>255?255:v}}
+  blurTabs(2);const b=blurRect(mask,2,bxa,bya,bxb,byb,BLS.o),L=SMOOTH_LUT;
+  for(let y=bya;y<=byb;y++){const row=y*W;for(let x=bxa;x<=bxb;x++){const i=row+x;mask[i]=L[b[i]]}}
   mbAdd(bxa,bya,bxb,byb)}
  /* Smooth bhi sirf MB+2 tak mask badalta hai (aur mbAdd se MB utna chauda ho jata
     hai) - wahi tark jo morph me hai */
@@ -3208,7 +3238,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
     hai. yahi trim ke baad bacha sabse bada offscreen surface tha. THas/SOK reset
     se agla render poora banta hai, is liye canvas par ek pixel nahi badalta. */
  tmp.width=tmp.height=1;THas=false;SOK=false};
-window.GlassCut={version:'1.1.86',
+window.GlassCut={version:'1.1.87',
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
