@@ -6,10 +6,10 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 
 | | |
 |---|---|
-| **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 274 KB, Android 7.0+ |
+| **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 278 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.97 (versionCode 97) |
+| **Version** | 1.1.98 (versionCode 98) |
 
 ---
 
@@ -48,6 +48,11 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### The feather mask was blurred over the whole canvas
+
+- **Every time the soft mask had to be rebuilt it blurred all 1.68 M pixels of a 1400×1200 photo, when only the subject's box matters.** The box blur has radius `feather`, so it cannot reach further than `feather` pixels past the mask's bounding box, and outside that box the mask is exactly 0 — so the result outside `MB ± feather` is 0 too. That was the one place the code did not use that fact: a fresh `softM` (new photo, first frame after `GlassCut.trim()`, a size change, or any state without a `SBOX`) went straight to `blurRect(mask, feather, 0, 0, W-1, H-1, softM)`. It now blurs only `MB ± feather`, memsets the buffer first when it is being reused (1.68 MB, ~0.7 ms) so nothing stale survives outside the box, and skips the memset when the box already covers the canvas because the blur writes every byte. `SBOX` becomes that box, so the alpha upload, the `putImageData` and the exact-`SUB` scan after it all shrink with it.
+- Verified for 1.1.98 (base 1.1.97 vs 1.1.98, headless Chrome, instrumented builds that expose `softM`, `SBOX`, `MB` and `SUB`): a 25-checkpoint differential flow on 1400×1200 — load/auto, feather 2/4/6, Grow ×2, Shrink, erase, undo, redo, Smooth, Invert, wand, Reset, Blue blur, colour background, and `GlassCut.trim()` seven times in between — produced an **identical canvas hash, `softM` hash, mask hash, `SBOX`, `MB` and `SUB` at every checkpoint** (the two dumps diff to nothing), and the ordinary 14-step flow (load, auto, wand, erase, undo, redo, background, Reset, PNG save to disk, language toggle, window close/open, save again) gives the same 14 canvas hashes and the same 126,318-byte PNG on both builds, with zero page errors and zero console errors. A 1×1, a 7×5, a 4000×3000 and a 6000×5143 photo all load to the same canvas sizes as before with no error. Measured on the same photo (feather 4, MB 515,245–886,1106, median of 9 runs): the first feather frame after `GlassCut.trim()` went **96.5 → 65.6 ms (−32%)**, the Grow that follows a trim **114.7 → 104.6 ms**, the Shrink **110.8 → 97.9 ms**; the blur itself is 37–68 ms over the whole canvas versus **6.2–7.6 ms** over the box. The cache-staleness oracle (force a full rebuild of the feather mask, alpha layer and canvas, then check the screen did not move) stayed 10/10 clean.
 
 ### Undo/redo could clip the subject
 

@@ -1284,22 +1284,37 @@ const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
        BLS.o) aur softM usi BLS.o par chala jata tha - is liye agla box-wala
        raasta (jo upar `!softM||softM.length!==W*H` par naya array banata hai)
        har full->box badlav par 14,70,000 byte dobara allocate karta tha. ab
-       wahi ek blurRect poore canvas ke box par chalta hai aur seedha softM me
-       likhta hai - nateeja byte-identical, buffer ek hi, dobara banne ka koi
-       mauka nahi. */
-    if(!softM||softM.length!==W*H)softM=new Uint8Array(W*H);
-    blurRect(mask,feather,0,0,W-1,H-1,softM);
-    /* box blur radius r sirf r pixel door tak asar dalta hai aur MB ke bahar mask
-       ka har byte pakka 0 hai, is liye poore-canvas blur ka nateeja bhi MB+r ke
-       bahar pakka 0 hai - SBOX ("iske bahar softM 0 hai") ko poora canvas maan
-       lena sach tha par bahut dheela. us dheele box par har aage ka kaam chalta
-       tha: alpha upload, putImageData aur exact-SUB scan teeno 1.47 M pixel par
-       (1400x1050), jabki asli content ~1.1 M par. ab wahi chhota box - nateeja
-       byte-identical (SBOX sirf ek upper bound hai, isliye chhota karna safe).
-       MB khaali ho to purana poora canvas hi rehta hai. */
-    const tx0=Math.max(0,MB[0]-feather),ty0=Math.max(0,MB[1]-feather),
-          tx1=Math.min(W-1,MB[2]+feather),ty1=Math.min(H-1,MB[3]+feather);
-    SBOX=(tx1>=tx0&&ty1>=ty0)?[tx0,ty0,tx1,ty1]:[0,0,W-1,H-1]}}
+       wahi ek blurRect chalta hai aur seedha softM me likhta hai - nateeja
+       byte-identical, buffer ek hi, dobara banne ka koi mauka nahi.
+       1.1.98: aur wahi blurRect ab poore canvas ke bajaye sirf nx box
+       (MB +/- feather) par chalta hai - jab softM naya bana ho to baaki array
+       pehle se 0 hai, aur box blur radius r se zyada door asar nahi dalta,
+       is liye box ke bahar nateeja pakka 0 hi hota hai (bilkul wahi tark jo
+       neeche partial-blur raasta pehle se use karta hai). purana softM ho to
+       pehle poora memset (1.68 MB, ~0.7 ms) hota hai taaki box ke bahar kuch
+       purana na bache. poora-canvas box ho to memset bekaar hai - blur khud
+       har byte likh deta hai - is liye wahan chhoda jata hai.
+       naapa (headless Chrome, 1400x1200, feather 2, MB 520,250-881,1101):
+       trim ke baad ka pehla feather frame 72.8 -> 11.4 ms, aur wahi blur
+       63.9 -> 9.3 ms. */
+    const fresh=!softM||softM.length!==W*H;
+    if(fresh)softM=new Uint8Array(W*H);
+    /* mask khaali (MB khaali): blur ka nateeja har jagah 0 */
+    if(MB[2]<MB[0]||nx1<nx0||ny1<ny0){
+     if(!fresh)softM.fill(0);
+     SBOX=[0,0,W-1,H-1]}
+    else{
+     const whole=nx0===0&&ny0===0&&nx1===W-1&&ny1===H-1;
+     if(!fresh&&!whole)softM.fill(0);
+     blurRect(mask,feather,nx0,ny0,nx1,ny1,softM);
+     /* box blur radius r sirf r pixel door tak asar dalta hai aur MB ke bahar mask
+        ka har byte pakka 0 hai, is liye poore-canvas blur ka nateeja bhi MB+r ke
+        bahar pakka 0 hai - SBOX ("iske bahar softM 0 hai") ko poora canvas maan
+        lena sach tha par bahut dheela. us dheele box par har aage ka kaam chalta
+        tha: alpha upload, putImageData aur exact-SUB scan teeno 1.47 M pixel par
+        (1400x1050), jabki asli content ~1.1 M par. ab wahi chhota box - nateeja
+        byte-identical (SBOX sirf ek upper bound hai, isliye chhota karna safe). */
+     SBOX=[nx0,ny0,nx1,ny1]}}}
    else{
     /* purane box ka wo hissa jo naye box se bahar hai saaf 0 (memset) */
     const o=SBOX;
