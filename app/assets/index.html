@@ -3363,7 +3363,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
    na ho (browser / purani shell), getter na ho, ya khali string aaye to neeche
    wala fallback literal chalta hai, is liye kuch tootta nahi. */
 window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(b.versionName()):'';
- return v||'1.1.93'}catch(_){return '1.1.93'}})(),
+ return v||'1.1.94'}catch(_){return '1.1.94'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
@@ -3394,7 +3394,19 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
   if(raf&&fastReq){cancelAnimationFrame(raf);raf=0;fastReq=false}},
  /* shell onPause par bulata hai - agar us waqt ungli canvas par thi to wo stroke
     yahin khatam ho jata hai (dekho upar visibilitychange ki tippani) */
- pause:()=>{if(drawing)end();shellPaused=true;idleCheck()},resume:()=>{shellPaused=false;idleCheck()},
+ /* 1.1.94: pause par page ke pure caches bhi chhod diye jate hain. Pehle pause
+    sirf 4D Motion loop rokta tha aur saare scratch buffers (feather ka softM,
+    blur tables, wand ka vis/stack, morph ka copy, island scratch, undo pool,
+    JPEG flatten canvas, opacity probe) background me bhi zinda rehte - 1400x1200
+    photo par ~27 MB, jabki screen dikhti hi nahi. Android background app ko
+    memory pressure par maar deta hai, is liye yehi 27 MB us haalat me sabse
+    mehnga hai. dropScratch() wahi function hai jo shell ka onTrimMemory/onLowMemory
+    (GlassCut.trim) pehle se bulata hai: wo sirf cache chhodta hai (photo, mask,
+    keepMask aur canvas par khada frame chhua nahi jata), is liye screen par ek
+    pixel nahi badalta aur agla render jo chahiye wo khud bana leta hai.
+    resume par kuch dobara nahi banaya jata - pehla asli frame (ungli, slider,
+    ya agla button) apne aap poora ban jata hai, theek trim ke baad jaisa. */
+ pause:()=>{if(drawing)end();dropScratch();shellPaused=true;idleCheck()},resume:()=>{shellPaused=false;idleCheck()},
  back:()=>{const ov=$('#ov');if(ov&&ov.classList.contains('show')){closeOv();return true}
   if(openSh){closeAll();return true}return false}};
 })();
