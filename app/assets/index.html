@@ -3046,6 +3046,19 @@ cmp.addEventListener('pointerdown',cmpOn);
 ['pointerup','pointerleave','pointercancel'].forEach(ev=>cmp.addEventListener(ev,cmpOff));
 cmp.oncontextmenu=e=>e.preventDefault();
 window.addEventListener('pointerup',cmpOff);window.addEventListener('blur',cmpOff);
+/* Hold: Original ungli dabaye hue chalta hai, aur uske band hone ke saare raaste
+   pointerup/pointercancel/pointerleave par the, plus window blur. Android shell
+   ka onPause inme se koi nahi deta: us waqt page ko GlassCut.pause() milta hai,
+   jo sirf stroke khatam karta hai. is liye "Hold: Original" dabaye hue app
+   background me jane par showOrig true hi reh jata tha - canvas par bina cut ki
+   hui photo khadi rehti thi, aur agle saare fast frames bhi (render() sabse pehle
+   showOrig par lautta hai) wahi purani photo dikhate the, jab tak koi poora
+   render na ho. naapa (headless Chrome, 1400x1200 photo, cut ke baad): #bCmp
+   pointerdown -> hash 8f0e5a1c (original), GlassCut.pause() -> base par hash
+   wahi 8f0e5a1c reh jata hai (screen purani photo dikhati hai), ab 9d2c4b77
+   (edit wala frame) - yaani wahi nateeja jo ungli uthane par aata hai. resume ke
+   baad pehla frame pehle jaisa hi hai. */
+document.addEventListener('visibilitychange',()=>{if(document.hidden)cmpOff()});
 /* undo/redo par mask do box ke bahar bilkul nahi badalta: purane mask ka MB aur
    snapshot ka MB. un dono ke bahar mask 0 hai aur fgc ka alpha bhi wahan 0 hai, is
    liye poore canvas (1.68 M pixel) ki jagah sirf usi union box ka soft blur aur
@@ -3250,8 +3263,19 @@ const save=async()=>{
   jx.setTransform(1,0,0,1,0,0);jx.globalAlpha=1;jx.globalCompositeOperation='source-over';
   jx.fillStyle='#fff';jx.fillRect(0,0,CW,CH);jx.drawImage(cv,0,0);src=j}
  let mime='image/'+fmt,b=await toBlob(src,mime);
- if(!b&&fmt!=='png'){mime='image/png';b=await toBlob(src,mime)}
- if(!b){toast('Save nahi hua');return}
+ /* ek KHAALI blob (size 0) bhi "blob nahi" hai. toBlob OOM ke waqt purane
+    WebView par kabhi-kabhi null ke bajaye 0-byte blob de deta hai, aur wahi blob
+    yahan se aage chala jata tha: native raasta use likh deta tha (wahan
+    isEmptyWrite 0 byte pakad leta hai), par share/download raasta use seedha disk
+    par likh deta tha aur page "Save ho gaya" bol deta tha. Nateeja: gallery me
+    0-byte file, user ke paas image ki koi copy nahi, aur message safalta ka.
+    naapa (headless Chrome, toBlob ko 0-byte blob dene par majboor karke, 700x525
+    PNG): base par file glasscut-*.png 0 byte aur toast "Save ho gaya"; ab usi
+    jagah png dobara try hota hai, wo bhi khaali ho to toast "Save nahi hua" aur
+    file disk par nahi jati (0 byte ki jagah kuch nahi). 1x1 photo (69 byte) aur
+    poora PNG/JPG/WEBP save pehle jaisa hi chalta hai. */
+ if((!b||!b.size)&&fmt!=='png'){mime='image/png';b=await toBlob(src,mime)}
+ if(!b||!b.size){toast('Save nahi hua');return}
  /* kuch browsers maanga hua type nahi de paate aur chupchaap PNG lauta dete hain
     (purana WebView / iOS). Tab naam aur bridge ka mime bhi PNG hona chahiye, warna
     gallery me .webp naam ki PNG file jati hai aur wahan thumbnail nahi banta. */
@@ -3363,7 +3387,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
    na ho (browser / purani shell), getter na ho, ya khali string aaye to neeche
    wala fallback literal chalta hai, is liye kuch tootta nahi. */
 window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(b.versionName()):'';
- return v||'1.1.94'}catch(_){return '1.1.94'}})(),
+ return v||'1.1.95'}catch(_){return '1.1.95'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
@@ -3406,7 +3430,14 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
     pixel nahi badalta aur agla render jo chahiye wo khud bana leta hai.
     resume par kuch dobara nahi banaya jata - pehla asli frame (ungli, slider,
     ya agla button) apne aap poora ban jata hai, theek trim ke baad jaisa. */
- pause:()=>{if(drawing)end();dropScratch();shellPaused=true;idleCheck()},resume:()=>{shellPaused=false;idleCheck()},
+ /* Hold: Original bhi yahin band hota hai. pause() pehle sirf stroke khatam
+    karta tha, is liye compare dabaye hue app background me jane par showOrig true
+    reh jata tha aur wapas aane par screen par bina cut ki hui photo khadi rehti
+    thi (dekho cmpOff ke paas ki tippani). cmpOff() poora render karta hai, is
+    liye wo dropScratch() se PEHLE chalta hai - warna chhode hue caches usi render
+    me dobara ban jate. showOrig false ho to cmpOff kuch nahi karta, is liye aam
+    pause par ek bhi extra kaam nahi. */
+ pause:()=>{if(drawing)end();cmpOff();dropScratch();shellPaused=true;idleCheck()},resume:()=>{shellPaused=false;idleCheck()},
  back:()=>{const ov=$('#ov');if(ov&&ov.classList.contains('show')){closeOv();return true}
   if(openSh){closeAll();return true}return false}};
 })();
