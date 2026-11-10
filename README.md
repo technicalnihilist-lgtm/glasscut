@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 274 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.94 (versionCode 94) |
+| **Version** | 1.1.97 (versionCode 97) |
 
 ---
 
@@ -48,6 +48,11 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### Undo/redo could clip the subject
+
+- **Redo could bring back the right mask and still draw the wrong picture** — after an undo/redo cycle that had passed through a Keep-painted state, the last Redo restored a mask that was byte-identical to the original (checksum `2533133719` on both sides) yet left 7,754 canvas pixels different (box 563,503–894,722), and the next Undo left 7,585. The cause was in the exact-`SUB` scan at the end of the alpha upload: it clipped its scan box to the *previous* `SUB` on the reasoning that alpha outside the uploaded box cannot have changed, so the previous `SUB` already bounds it. That reasoning does not survive `hist()`: undo/redo replaces the whole mask, one too-small `SUB` then sticks for every later frame, and `drawSubj` draws the subject from that `SUB`'s source rect — so the subject gets cut. The clip is gone; the scan box is now the same box the upload used (`SBOX` with feather, `MB` without), and the part that was just uploaded is still skipped, so only the remainder is read.
+- Verified for 1.1.97 (base 1.1.96 vs 1.1.97, headless Chrome): the failing sequence — 1400×1200 photo, erase, restore, Keep stroke, Edge Grow, Edge Shrink, Smooth, then 6× Undo and 6× Redo — went from 7,754 differing pixels to **0**, and the following Undo from 7,585 to **0**. On the ordinary flow (load/auto, wand, erase, undo, redo, reset, colour background, PNG save to disk, language toggle, window close/open, save again) all 14 canvas hashes and the saved PNG are byte-identical on both builds (84,426 bytes each), with zero page errors and zero console errors; the same holds for the wide feature flow (Keep, Grow/Shrink/Smooth/Invert, Hold: Original, outline 20, depth 60, tilt 20, 4D motion 50, own background photo, new photo, save) and the save matrix (PNG/JPG/WEBP × opaque/alpha photo, all six files land with the right format, size and corner pixels). Cost of the wider scan: none measurable — 30 stroke releases on 1400×1200 took 1103/1000 ms on the base build and 958/887 ms on this one.
 
 ### Save was fake
 The old `save()` called `window.claude.use('downloads')` — an API that only exists inside one particular preview environment. Everywhere else it silently fell through to an overlay that told you to *long-press the image and save it manually*. No file was ever written.
@@ -244,10 +249,10 @@ Verified for 1.1.77 (base 1.1.76 vs 1.1.77, headless Chrome, same instrumented b
 
 Download [`GlassCut.apk`](GlassCut.apk) on the phone, tap it, allow "install unknown apps" for your browser or file manager once. Android 7.0 (API 24) or newer.
 
-**This build has a new signing key again** — `/scratch/saved` was empty again when the 1.1.94 build came up (no `glasscut-signing-key.jks` was carried over), so `build.sh` generated a fresh keystore. `/scratch/saved` is mounted read-only in this session, so the new key could not be written back there either. Android will refuse to install it over any earlier build — uninstall the old app once, then install. The keystore is deliberately *not* committed and not shipped (a signing key is a credential); only `/scratch/saved` survives between runs, so as long as `glasscut-signing-key.jks` is put back there, every later build reuses it and upgrades install cleanly. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate for this build:
+**This build has a new signing key again** — `/scratch/saved` was empty again when the 1.1.97 build came up (no `glasscut-signing-key.jks` was carried over), so `build.sh` generated a fresh keystore. `/scratch/saved` is mounted read-only in this session, so the new key could not be written back there either. Android will refuse to install it over any earlier build — uninstall the old app once, then install this one. Its certificate SHA-256:
 
 ```
-94d5c4433688f2dd1294fe5803fa27ba054f31ce974b053ed5f9e397652a7823
+3c63e14c6d2ac74c38140db527a15e5d810d37039146acf387ecea1e6c499dbf
 ```
 ## Build it yourself
 

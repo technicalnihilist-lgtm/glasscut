@@ -1416,16 +1416,18 @@ const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
    let bx0=0,by0=0,bx1=W-1,by1=H-1;
    const bb=(soft?SBOX:MB);
    if(bb&&bb[2]>=bb[0]&&bb[3]>=bb[1]){bx0=bb[0];by0=bb[1];bx1=bb[2];by1=bb[3]}
-   /* pichhle frame ka SUB is mask ke box ke bahar wale hisse ka upper bound hai:
-      box ke bahar mask ek byte bhi nahi badla, is liye wahan jo kuch bhi 255 hai
-      wo pehle bhi tha aur tab wahi SUB me tha (SUB exact bbox hai, aur fast
-      preview frames use sirf bada karte hain - yaani har haalat me superset).
-      is liye bahar wali pattiyan SUB tak seemit ki ja sakti hain. SUB null ho
-      (nayi photo / trim) to purana poora box hi rehta hai. */
-   const oSUB=SUB;
-   if(oSUB&&oSUB[2]>=oSUB[0]&&oSUB[3]>=oSUB[1]){
-    if(oSUB[0]>bx0)bx0=oSUB[0];if(oSUB[1]>by0)by0=oSUB[1];
-    if(oSUB[2]<bx1)bx1=oSUB[2];if(oSUB[3]<by1)by1=oSUB[3]}
+   /* 1.1.97: yahan scan box ko pichhle SUB tak chhota kiya jata tha ("box ke bahar
+      alpha wahi hai, is liye wo pichhle SUB ke andar hi hai"). wo tark undo/redo
+      par nahi chalta: hist() mask poora badal deta hai, is liye ek baar SUB chhota
+      (galat) nikal aaye to wo agle saare frames me chalta reh jata hai - aur
+      drawSubj subject ko usi SUB ke source-rect se draw karta hai, yaani subject
+      katar jata hai. naapa (headless Chrome, 1400x1200, erase + restore + keep +
+      Grow + Shrink + Smooth, phir 6 undo + 6 redo): mask dono taraf bilkul wahi
+      (checksum 2533133719, byte-identical) par canvas me 7,754 pixel alag (box
+      563,503-894,722), aur uske agle Undo par 7,585 pixel; clip hataane par dono
+      0. is scan ka box ab wahi hai jo upload box tha (SBOX ya MB) - jo hissa
+      abhi upload hua hai wo pehle se scan nahi hota, is liye bacha hua hissa hi
+      padha jata hai (1400x1200 stroke release par ~1 ms, naapa). */
    /* box ka wo hissa jo abhi upload hua (qx0..qy1) pehle se hi scan ho chuka hai;
       sirf box ke bahar wale hisse wahi hain jo pichhle frame me the, is liye unhe
       hi padhna padta hai. jab upload box poora box dhak leta hai (Grow/Shrink/
