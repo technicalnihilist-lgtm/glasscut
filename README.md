@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 278 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.98 (versionCode 98) |
+| **Version** | 1.1.99 (versionCode 99) |
 
 ---
 
@@ -48,6 +48,12 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### A failed save kept quiet
+
+- **Three of the five ways a save can fail ended with no message at all.** The page says "Save nahi hua" when the shell reports a failure through `GlassCut.failed()` (the API<29 permission route), but the other three routes — the shell's `saveImage()` returning `err:…`, a `FileReader`/6 s-watchdog failure on the same bridge, and the last-resort download when both `navigator.share` and the `<a download>` click fail — only opened the long-press overlay. Same failure, two different outcomes: the user saw a picture appear over the editor and, in the download case, had nothing at all to tell them the file never reached the gallery. All three now say the same thing, once, in the language the user picked (`Save nahi hua` / `Save failed`), and the overlay still appears with the encoded blob.
+- Verified for 1.1.99 (base 1.1.98 vs 1.1.99, headless Chrome, a fake `GlassCutAndroid` bridge and a patched `HTMLAnchorElement.prototype.click`): with the bridge returning `err:disk` the toast went **empty → "Save nahi hua"**, with a bridge that throws **empty → "Save nahi hua"**, and with no bridge and a failing download **empty → "Save nahi hua"**; the overlay was shown before and after in all three, `saveImage()` returning `ok:…` still shows **"Save ho gaya"** with no overlay, and `ok:pending` followed by `GlassCut.failed()` still shows exactly one message. The 21-checkpoint flow (load/auto, wand, 12-move erase stroke, undo, redo, Grow/Shrink/Smooth/Invert/Reset, colour + gradient + blur backgrounds, PNG save to disk, language toggle, window close/open, then 1400×1050 / 320×240 / 1×1 / 1400×3 photos) gives **byte-identical canvas hashes at every checkpoint, the same 424,744-byte PNG, and zero page errors / zero console errors** on both builds; the edge battery (undo depth, pointer leaving the canvas, `pointercancel`, undo mid-stroke, double save, ratio change + undo, WEBP/JPEG/PNG saves, 1×1 photo, closing the window mid-stroke) is unchanged.
+- Also fixed on the same pass: the page's fallback version literal was still `1.1.95`, so with no bridge (browser, preview) or an empty `versionName()` the page reported a version three builds old. It now matches the manifest — `GlassCut.version` without a bridge reads **"1.1.95" → "1.1.99"**.
 
 ### The feather mask was blurred over the whole canvas
 
@@ -254,10 +260,10 @@ Verified for 1.1.77 (base 1.1.76 vs 1.1.77, headless Chrome, same instrumented b
 
 Download [`GlassCut.apk`](GlassCut.apk) on the phone, tap it, allow "install unknown apps" for your browser or file manager once. Android 7.0 (API 24) or newer.
 
-**This build has a new signing key again** — `/scratch/saved` was empty again when the 1.1.97 build came up (no `glasscut-signing-key.jks` was carried over), so `build.sh` generated a fresh keystore. `/scratch/saved` is mounted read-only in this session, so the new key could not be written back there either. Android will refuse to install it over any earlier build — uninstall the old app once, then install this one. Its certificate SHA-256:
+**This build has a new signing key again** — `/scratch/saved` was empty again when the 1.1.99 build came up (no `glasscut-signing-key.jks` was carried over), so `build.sh` generated a fresh keystore and `/scratch/saved` is mounted read-only here, so the key could not be written back. Android will refuse to install it over any earlier build — uninstall the old app once, then install this one. Its certificate SHA-256:
 
 ```
-3c63e14c6d2ac74c38140db527a15e5d810d37039146acf387ecea1e6c499dbf
+7371cd350f8ff62a7ab07db4b66b5bb369b7e009377af27f9c03b33f70b20d7a
 ```
 ## Build it yourself
 

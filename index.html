@@ -3379,7 +3379,16 @@ const save=async()=>{
   const bfin=ok=>{if(bdone)return;bdone=true;if(wd)clearTimeout(wd);saveBusy=false;
    if(stok!==MAINTOK){savePending=false;lastSaveBlob=null;return}
    savePending=false;
-   if(!ok)fallback(b);else savedOk()};
+   /* 1.1.99: native raaste par write fail hone (saveImage ka "err:...") ya
+      FileReader/watchdog fail hone par pehle sirf long-press overlay khulta tha -
+      koi "Save nahi hua" message nahi. wahi failure jab GlassCut.failed() se aata
+      hai (API<29 permission raasta) to message aata tha, yaani ek hi galti do
+      tarah se dikhti thi. ab teeno fail raaste (native err, FileReader error,
+      6 s watchdog) ek hi message dete hain. safal save aur "ok:pending" raaste
+      is line tak aate hi nahi, is liye wahan kuch nahi badalta. naapa (fake
+      bridge, 1400x1200): native err par toast khali -> "Save nahi hua", overlay
+      dono par wahi; native ok par toast "Save ho gaya" pehle jaisa. */
+   if(!ok){toast('Save nahi hua');fallback(b)}else savedOk()};
   wd=setTimeout(()=>bfin(false),6000);
   /* savePending yahin se true: blob yahan se native write ke jawab tak hi user ki
      image hai. pehle ye sirf "ok:pending" ke baad true hota tha, is liye FileReader
@@ -3419,7 +3428,10 @@ const save=async()=>{
  try{const u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download=name;a.rel='noopener';
   document.body.appendChild(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(u)},4000);
   savedOk();return}catch(_){}
- fallback(b)
+ /* 1.1.99: share aur download dono fail - pehle sirf long-press overlay khulta tha,
+    koi message nahi (aur user ko lagta tha save ho gaya). ab wahi message jo har
+    doosre fail raaste par aata hai. */
+ toast('Save nahi hua');fallback(b)
  }finally{if(!hold)saveBusy=false}};
 
 /* dock */
@@ -3462,7 +3474,13 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
    na ho (browser / purani shell), getter na ho, ya khali string aaye to neeche
    wala fallback literal chalta hai, is liye kuch tootta nahi. */
 window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(b.versionName()):'';
- return v||'1.1.95'}catch(_){return '1.1.95'}})(),
+ /* 1.1.99: ye fallback literal pichhle build par 1.1.95 rah gaya tha, jabki
+    manifest 1.1.98 par tha - yaani bridge na ho (browser/preview) ya versionName()
+    khali laute to page apni galat version batata tha (shell wala asli raasta wahi
+    PackageManager ki value deta hai, is liye app me ye kabhi nahi dikhta tha).
+    ab wahi value manifest ki versionName hai; verifiable: bina bridge
+    GlassCut.version -> "1.1.99" (base par "1.1.95"). */
+ return v||'1.1.99'}catch(_){return '1.1.99'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
