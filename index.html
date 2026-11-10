@@ -254,7 +254,13 @@ let SOK=false,PART=null;
 /* pichhle render ne kya background/depth/size use kiya - partBox isi se tay karta
    hai ki DIRT ke bahar ka content abhi bhi sahi hai. -1 se shuru, is liye pehla
    frame hamesha poora banta hai. */
-let PRVbgT='',PRVbgV=null,PRVdep=-1,PRVcw=-1,PRVch=-1;
+/* 1.1.92: PRVbgN (bgVer) aur PRVbl (P.bl) bhi. partBox ab photo wale background
+   (img/blur/bluetint) par bhi chalta hai, aur unka content bg.t/bg.v se poori
+   tarah tay nahi hota: "Apni photo" badalne par bg.v wahi (undefined) rehta hai
+   aur blur amount (P.bl) badalne par bg.t/bg.v dono wahi rehte hain. bgVer har
+   background-image/blue-blur/size badlav par badhta hai, is liye ye do value
+   usi cheez ko band karti hain jo rang/gradient ke liye bg.v pehle se karti thi. */
+let PRVbgT='',PRVbgV=null,PRVbgN=-1,PRVbl=-1,PRVdep=-1,PRVcw=-1,PRVch=-1;
 const SSB=[0,0,0,0],STt=[0,0,0,0,0,0],PB2=[0,0,0,0];
 const TPB=[0,0,0,0],TDB=[0,0,0,0];
 /* FGR = pichhle tmp build ke baad fgc (alpha) me jo rectangle badla hai; null ka
@@ -1511,9 +1517,21 @@ const partBox=fast=>{
     tha (naapa: dark halo jama hota tha). shadow / outline / opacity<100 pehle
     jaise bahar. */
  if(!fast||P.sh||P.op<100||P.line>0||P.depth>0)return null;
- if(bg.t!=='none'&&bg.t!=='color'&&bg.t!=='grad')return null;
+ /* 1.1.92: yahan pehle sirf 'none'/'color'/'grad' background par PART banta tha -
+   'Apni photo', 'Blur original' aur 'Blue blur' par har fast frame poora canvas
+   dobara banata tha (clearRect + background ka poora drawImage + subject ka
+   poora composite, 1400x1200 par 1.68 M pixel), halanki background subject par
+   depend hi nahi karta: DIRT ke bahar wo pichhle frame se bilkul wahi hai.
+   render() ka PART branch un teeno ko pehle se PART par clip karta hai (background
+   ka draw aur depth ki fill dono), is liye yahan sirf yeh tay karna hai ki
+   pichhla frame bilkul yahi background use kiya tha - wahi kaam jo 'color'/'grad'
+   ke liye bg.v pehle se karta tha. photo background par content bg.t/bg.v se
+   poori tarah tay nahi hota (nayi image par bg.v wahi rehta hai, blur amount
+   par bg.t/bg.v dono), is liye bgVer aur P.bl bhi compare hote hain - dono me se
+   koi bhi badla to poora frame, bilkul pehle jaisa. */
  if(P.motion>0)return null;
- if(P.depth!==PRVdep||bg.t!==PRVbgT||bg.v!==PRVbgV||CW!==PRVcw||CH!==PRVch)return null;
+ if(P.depth!==PRVdep||bg.t!==PRVbgT||bg.v!==PRVbgV||bgVer!==PRVbgN||P.bl!==PRVbl
+    ||CW!==PRVcw||CH!==PRVch)return null;
  if(!SUB||!FGR||!SOK)return null;
  const t=xf();tiltUpd();
  if(t[0]*P.f!==STt[0]||t[0]!==STt[1]||t[1]!==STt[2]||t[2]!==STt[3]||tiltCs!==STt[4]||tiltSh!==STt[5])return null;
@@ -1852,7 +1870,7 @@ function render(fast){if(!od)return;RFULL=!fast;cx.setTransform(1,0,0,1,0,0);cx.
    vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,'+(P.depth/100*0.42).toFixed(3)+')');depGrad=vg;dk[0]=CW;dk[1]=CH;dk[2]=P.depth}
   cx.fillStyle=depGrad;cx.fillRect(0,0,CW,CH)}
  drawSubj(fgc,fast);
- PRVbgT=bg.t;PRVbgV=bg.v;PRVdep=P.depth;PRVcw=CW;PRVch=CH;NORESTR=false}
+ PRVbgT=bg.t;PRVbgV=bg.v;PRVbgN=bgVer;PRVbl=P.bl;PRVdep=P.depth;PRVcw=CW;PRVch=CH;NORESTR=false}
 /* rAF ka callback pehle har schedule par ek naya closure tha (ek frame = ek
    function object), halanki wo har baar bilkul wahi kaam karta hai. ab ek hi
    named function hai - schedule karne par koi allocation nahi. */
@@ -3331,7 +3349,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
    na ho (browser / purani shell), getter na ho, ya khali string aaye to neeche
    wala fallback literal chalta hai, is liye kuch tootta nahi. */
 window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(b.versionName()):'';
- return v||'1.1.91'}catch(_){return '1.1.91'}})(),
+ return v||'1.1.92'}catch(_){return '1.1.92'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par

@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 270 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.91 (versionCode 91) |
+| **Version** | 1.1.92 (versionCode 92) |
 
 ---
 
@@ -221,6 +221,8 @@ Verified for 1.1.90 (base 1.1.89 vs 1.1.90, headless Chrome, instrumented builds
 - **The undo/redo diff scan divided per differing word** — `diffBox()` compared the two masks 32 bits at a time, and for every word that differed it recomputed `(byte/W)|0` and `((byte+3)/W)|0` to find the row. On a big undo the box is most of the canvas, so nearly every word takes that path and the loop becomes division-bound (`W` is not a multiple of 4, so V8 cannot turn it into a shift). The row start and end are already known, so a word is now classified with two compares — starts in the previous row, runs into the next row, or sits inside this one — and the row's box is merged once per row instead of once per word. Same box, byte for byte: 1170 mask pairs over 13 sizes (1400×1050, 1401×1051, 1400×1, 7×3, 2×2, 1×1 …), each with no box, a full-canvas box and a random sub-box, 0 mismatches. Speed on a 1400×1050 full-canvas box: 2.70 → 0.92 ms and 5.36 → 1.56 ms (2.9–3.4×); on a mostly-equal box 1.13 → 0.71 ms. In the app that is ~1.3 → ~0.5 ms per undo/redo press, i.e. about 7% of a press's JS time.
 - **The page reported the wrong version** — `GlassCut.version` was a hand-written string and had drifted one build behind (`'1.1.89'` while the manifest was at 90). It now asks the shell (`GlassCutAndroid.versionName()`, the same `PackageManager` value the manifest carries), so there is one source of truth and no drift; with no bridge, an empty answer or a throwing getter it falls back to the literal, which is now in step with the manifest.
 
+Verified for 1.1.92 (base 1.1.91 vs 1.1.92, headless Chrome, instrumented builds that expose the `PART` box the renderer actually uses): the same flow on 1400×1200 — load/auto, wand on the border, erase, restore, keep, Grow, Shrink, Smooth, Invert, undo ×2, redo ×2, Reset, undo of Reset, colour background, then a photo background, "Blur original", blur amount 30, "Blue blur" and a second background image, each with its own erase stroke at a fresh place — gave all 19 canvas hashes and all three saved files' sha1 identical (PNG 62,919 B, JPEG 33,227 B, WebP 15,506 B), zero page errors, zero console errors. With a photo, blur or blue-blur background the area a stroke frame redraws fell from 1,680,000 px (the whole canvas) to 3,844–4,356 px, about 390× less; on a colour background it stays at 4,290 px. The two new guards were checked directly: changing the blur amount and swapping the background image, each followed by a stroke, still produce the identical hash. A 1×1 PNG, a 3×900 PNG and a 1400×1 PNG, a triple tap on Save (exactly one file), and closing the window in the middle of a stroke all came out clean.
+
 Verified for 1.1.91 (base 1.1.90 vs 1.1.91, headless Chrome, same 24-checkpoint flow on 1400×1050): every canvas hash identical, all three saved files identical in size and magic (PNG 37,670 B, JPEG 37,649 B, WebP 15,676 B), zero page errors, zero console errors; the flow then went on to a 1200×900 PNG, a 6000×4000 JPEG and a 1×1 PNG, and 10 strokes + 10 undo + 10 redo returned the same hashes on both builds. The version path was checked with a stubbed bridge: shell value wins (`9.9.99-shell`), empty string / throwing getter / no bridge all give `1.1.91`, which matches `versionName` in the manifest.
 
 Verified in headless Chrome on 1.1.67: load → auto → wand → erase → undo ×2 → redo → grow → smooth → invert → feather → background colour/gradient → save (file on disk) → reset → language toggle → window close/open → stroke that leaves the canvas, on 1400×1050 PNG, 900×675 JPEG, 600×400 transparent PNG, 4000×3000 JPEG, 1400×3 and 1×1 — 13 canvas hashes byte-identical to 1.1.66 on every photo, saved files identical, zero pageerror, zero console error.
@@ -237,10 +239,10 @@ Verified for 1.1.77 (base 1.1.76 vs 1.1.77, headless Chrome, same instrumented b
 
 Download [`GlassCut.apk`](GlassCut.apk) on the phone, tap it, allow "install unknown apps" for your browser or file manager once. Android 7.0 (API 24) or newer.
 
-**This build has a new signing key again** — `/scratch/saved` was empty again when the 1.1.91 build came up (no `glasscut-signing-key.jks` was carried over), so `build.sh` generated a fresh keystore. Android will refuse to install it over any earlier build — uninstall the old app once, then install. The keystore is deliberately *not* committed and not shipped (a signing key is a credential); only `/scratch/saved` survives between runs, so as long as `glasscut-signing-key.jks` is put back there, every later build reuses it and upgrades install cleanly. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate for this build:
+**This build has a new signing key again** — `/scratch/saved` was empty again when the 1.1.92 build came up (no `glasscut-signing-key.jks` was carried over), so `build.sh` generated a fresh keystore. Android will refuse to install it over any earlier build — uninstall the old app once, then install. The keystore is deliberately *not* committed and not shipped (a signing key is a credential); only `/scratch/saved` survives between runs, so as long as `glasscut-signing-key.jks` is put back there, every later build reuses it and upgrades install cleanly. Self-signed 2048-bit RSA, v1+v2+v3, valid 30 years. SHA-256 of the certificate for this build:
 
 ```
-13ecf4cf120908e86e02e30701fead5a3d8a0c6d20ab24155be01b8077ebeace
+2591fda302b693dbb7035e300b4126f35d080a317a39c32e369e8a2704edda6c
 ```
 ## Build it yourself
 
