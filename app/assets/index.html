@@ -481,6 +481,31 @@ const imgOpaqueLater=im=>{const tok=++imgOTok;
    is liye cover() se pehle clearRect chalta hai (khaali canvas par cover()
    poore canvas ko dhakta hi hai, is liye nateeja fresh canvas jaisa hi hai). */
 let opc=null,opx=null;
+/* origc = original photo ka poora W x H surface. Isme sirf do cheezein padhi jati
+   hain: "Hold: Original" (compare) ka frame aur "Blur original"/"Blue blur"
+   background ka source (blurBg ka cover()). Ye surface fgi (ImageData, wahi pixel)
+   se bilkul exactly dobara banti hai - putImageData wahi RGBA value wapas likhta
+   hai jo getImageData ne di thi (koi premultiply/round trip nahi, kyunki dono
+   unpremultiplied hain) - is liye trim/pause par ise chhod dena screen par ek
+   pixel nahi badalta; jo raasta ise padhta hai wo pehle origC() se wapas bana leta
+   hai. 1400x1200 par ye 6.72 MB hai, yaani trim ke baad bacha sabse bada surface. */
+/* Trim par ise chhoda sirf tab jata hai jab photo poori opaque ho (photoOpaque) -
+   usi haalat me rebuild byte par byte exact hai: opaque pixel ka alpha 255 hota hai,
+   is liye drawImage/getImageData/putImageData ka koi premultiply rounding bacha hi
+   nahi (semi-transparent pixel par 1/255 ka farak ho sakta hai, is liye aisi photo
+   par origc pehle jaisa hi rakha jata hai - wahan kuch nahi badla). */
+let origStale=false;
+const origC=()=>{if(origStale&&fgi&&fgi.width===W&&fgi.height===H&&mask&&mask.length===W*H){
+ const d=fgi.data,n=W*H,m=mask;
+ /* fgi ka RGB kabhi nahi badalta (layer sirf alpha likhta hai), is liye wahi original
+    RGB hai; original alpha opaque photo par 255 tha. */
+ for(let i=3;i<n*4;i+=4)d[i]=255;
+ origc.width=W;origc.height=H;origc.getContext('2d').putImageData(fgi,0,0);
+ /* fgi ka alpha wapas working mask par: trim ke baad agla layer() poora upload karta
+    hai (fgFull), aur fgi ka alpha sirf layer likhta hai - koi padhta nahi. */
+ for(let i=0;i<n;i++)d[i*4+3]=m[i];
+ origStale=false}
+ return origc};
 /* background photo ab ImageBitmap bhi ho sakti hai (neeche #fBg dekho), aur bitmap
    par naturalWidth/naturalHeight nahi hote - sirf width/height. dono shapes ke liye
    ek hi getter, taaki cover()/opacity check har raaste par wahi size dekhein. */
@@ -801,6 +826,7 @@ const drawPhoto=(im,nw,nh)=>{
        mask/undo ko chhua bhi nahi jata. */
     try{if(fgi&&fgi.width){origc.width=fgi.width;origc.height=fgi.height;
       origc.getContext('2d').putImageData(fgi,0,0)}}catch(_){}
+    origStale=false
     return false
   }
   W=nW;H=nH;
@@ -809,6 +835,9 @@ const drawPhoto=(im,nw,nh)=>{
   if(retry){origc.width=nW;origc.height=nH;
     const ox=origc.getContext('2d');
     ox.setTransform(1,0,0,1,0,0);ox.globalAlpha=1;ox.drawImage(im,0,0,nW,nH)}
+  /* origc ab is nayi photo ka poora surface hai (upar wale dono raaste isi me likhte
+     hain) - origC() ko dobara banane ki zaroorat nahi. */
+  origStale=false
   /* pehle yahan photo ke pixel do baar rakhe jate the: getImageData ka data (od)
      aur usi ka ek copy jo fgi ka ImageData banta tha - 1400x1200 par 6.7 MB extra
      poore session ke liye. ab fgi hi od hai: layer() sirf alpha byte likhta hai
@@ -892,7 +921,7 @@ const drawPhoto=(im,nw,nh)=>{
      photo par kul ~8 MB pade reh jate the. size same ho (ek hi camera ki doosri
      photo - aam haalat) to sab pehle jaisa reuse hota hai. nateeja (mask, screen,
      save) par koi asar nahi - agla kaam buffer khud bana leta hai. */
-  if(NP!==oldNP){MBUF=null;FL=null;BLS=null;CC=null;BD=null;SD=null;XM=null;SEEDS=null;XR=null}
+  if(NP!==oldNP){MBUF=null;FL=null;BLS=null;CC=null;BD=null;SD=null;XM=null;SEEDS=null;XR=null;RR=null}
   /* JPEG ka safed flatten canvas (CW x CH ka poora surface - 1400x1050 par 5.88 MB)
      sirf ek haalat me kaam aata hai: save() use `fmt==='jpeg'` par hi chhuta hai.
      fmt PNG/WEBP ho to wo agle JPEG save tak bekaar pada rehta tha, aur nayi photo
@@ -1538,7 +1567,7 @@ const blurBg=()=>{const blue=bg.t==='bluetint'?1:0,sg=bgSig;
     nateeja byte-identical rehta hai. */
  if(sm.width!==sw||sm.height!==sh){sm.width=sw;sm.height=sh}
  else{smx.setTransform(1,0,0,1,0,0);smx.globalAlpha=1;smx.clearRect(0,0,sw,sh)}
- const sx=smx;cover(sx,origc,W,H,sw,sh);
+ const sx=smx;cover(sx,origC(),W,H,sw,sh);
  if(bgb.width!==CW||bgb.height!==CH){bgb.width=CW;bgb.height=CH}
  else{bxc.setTransform(1,0,0,1,0,0);bxc.globalAlpha=1;bxc.clearRect(0,0,CW,CH)}
  const bx=bxc;bx.imageSmoothingEnabled=true;bx.imageSmoothingQuality='high';bx.drawImage(sm,0,0,CW,CH);
@@ -1891,7 +1920,7 @@ function render(fast){if(!od)return;RFULL=!fast;cx.setTransform(1,0,0,1,0,0);cx.
     canvas par nahi bachta tha - 1400x1200 par har compare frame me 2 x 1.68 M
     clearRect + 1.68 M fillRect + background ka poora drawImage (blur background
     par 1.68 M source pixel). ab showOrig par seedha yahin se laut jate hain. */
- if(showOrig){cx.clearRect(0,0,CW,CH);dlbFull();PART=null;PRVcw=-1;drawSubj(origc,fast);NORESTR=false;return}
+ if(showOrig){cx.clearRect(0,0,CW,CH);dlbFull();PART=null;PRVcw=-1;drawSubj(origC(),fast);NORESTR=false;return}
  const pm=P.motion/100,pox=-mx*pm*CW*0.010,poy=-my*pm*CH*0.010;
  /* colour/gradient background poore canvas par ek opaque fillRect karta hai, aur
     bina parallax (pox=poy=0) wo bilkul canvas ke kinare se kinare tak dhakta hai -
@@ -3465,7 +3494,17 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
     opacity wale raaste ise bharte hain aur drawSubj apna size guard khud rakhta
     hai. yahi trim ke baad bacha sabse bada offscreen surface tha. THas/SOK reset
     se agla render poora banta hai, is liye canvas par ek pixel nahi badalta. */
- tmp.width=tmp.height=1;THas=false;SOK=false};
+ tmp.width=tmp.height=1;THas=false;SOK=false;
+ /* origc (W x H, 1400x1200 par 6.72 MB) yahan tak trim ke baad bacha sabse bada
+    surface tha, halanki ise sirf do raaste padhte hain (compare ka frame aur blur
+    background) aur dono fgi se bilkul exactly dobara bana sakte hain - dekho
+    origC(). origStale zaroori hai: 1x1 photo par origc ka size bhi 1x1 hi hota hai,
+    is liye sirf size compare karne se khaali surface ko "sahi" maan liya jata. */
+ if(photoOpaque){origc.width=origc.height=1;origStale=true}
+ /* island run table (RR) bhi pure cache hai: cutout use apne nw/nh guard se dobara
+    banata hai, aur trim ke baad agla Auto pehle jaisa hi nateeja deta hai. 1400x1200
+    par ye off + x0/x1 + vis = ~1.7 MB tha jo trim ke baad pada reh jata tha. */
+ RR=null};
 /* version pehle yahan ek haath se likhi hui string thi, aur wo drift ho gayi:
    manifest 1.1.90 par tha jabki page 1.1.89 bata raha tha (aur aage har build
    par yeh aur peeche chhut jati). ab page apni asli installed versionName shell
