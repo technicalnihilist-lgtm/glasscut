@@ -747,24 +747,74 @@ const drawPhoto=(im,nw,nh)=>{
      saare scratch buffer dead ho jate hain (har ek ka guard size match na hone par
      khud naya bana deta hai) */
   const oldNP=W*H;
-  const s=Math.min(1,1400/Math.max(nw,nh));
-  W=Math.max(1,Math.round(nw*s));H=Math.max(1,Math.round(nh*s));
-  /* canvas ki width set karna (chahe wahi value ho) poora backing store phenk kar
-     naya banata hai - 1400x1050 par 5.88 MB, aur wahi teen canvas par (origc,
-     fgc, outc) har photo load par. size match kare to canvas ko saaf karna usi
-     kaam ko bina allocation karta hai; origc par clearRect zaroori hai, warna
-     transparent PNG ka pixel purani photo ke pixel par blend ho jata. */
-  const crs=origc.width!==W||origc.height!==H;
-  if(crs){origc.width=W;origc.height=H}
-  const ox=origc.getContext('2d');
-  if(!crs){ox.setTransform(1,0,0,1,0,0);ox.globalAlpha=1;ox.clearRect(0,0,W,H)}
-  ox.drawImage(im,0,0,W,H);
+  /* 1.1.96: photo ka poora working-size readback (getImageData) kam RAM wale
+     WebView par throw kar sakta hai (InvalidStateError / OOM) - theek wahi cheez
+     jise imgOpaqueCheck pehle se apne try/catch me rakhta hai. yahan wo guard
+     nahi tha, is liye exception im.onload se seedha bahar jati thi (uncaught
+     pageerror) aur app chup-chaap purani photo par atki reh jati thi: origc me
+     nayi photo draw ho chuki hoti thi, par od/fgi/mask/undo sab purani photo ke -
+     ek hi session me do alag tasveer, aur user ko koi message bhi nahi.
+     ab readback chhote working size par retry hota hai (1400 ka cap pehle se hai,
+     yahi niyam 700/350/... par utar jata hai) aur jo state badalni hai wo safal
+     readback ke BAAD hi badalti hai. sab fail ho to origc purani photo se wapas
+     likh diya jata hai aur false laut jata hai - purani photo bilkul waisi hi
+     rehti hai, aur pickPhoto apna pehle se maujood 'Photo load nahi hui' message
+     dikha deta hai.
+     safal raasta bilkul wahi hai: pehla try wahi origc, wahi drawImage, wahi
+     getImageData, wahi W/H - is liye canvas, save aur mask par ek byte ka farak
+     nahi (dekho naap). */
+  let cap=1400,nW,nH,fg=null,retry=false;
+  for(;;){
+    const s2=Math.min(1,cap/Math.max(nw,nh));
+    nW=Math.max(1,Math.round(nw*s2));nH=Math.max(1,Math.round(nh*s2));
+    try{
+      if(!retry){
+        /* canvas ki width set karna (chahe wahi value ho) poora backing store phenk
+           kar naya banata hai - 1400x1050 par 5.88 MB, aur wahi teen canvas par
+           (origc, fgc, outc) har photo load par. size match kare to canvas ko saaf
+           karna usi kaam ko bina allocation karta hai; origc par clearRect zaroori
+           hai, warna transparent PNG ka pixel purani photo ke pixel par blend ho
+           jata. */
+        const crs=origc.width!==nW||origc.height!==nH;
+        if(crs){origc.width=nW;origc.height=nH}
+        const ox=origc.getContext('2d');
+        if(!crs){ox.setTransform(1,0,0,1,0,0);ox.globalAlpha=1;ox.clearRect(0,0,nW,nH)}
+        ox.drawImage(im,0,0,nW,nH);
+        fg=ox.getImageData(0,0,nW,nH)
+      }else{
+        /* retry ek alag surface par, taaki origc purani photo hi rakhe */
+        const rc=mk();rc.width=nW;rc.height=nH;
+        const rx=rc.getContext('2d');
+        rx.drawImage(im,0,0,nW,nH);
+        fg=rx.getImageData(0,0,nW,nH)
+      }
+      break
+    }catch(_){
+      if(cap<=16){fg=null;break}
+      cap=cap>>1;retry=true
+    }
+  }
+  if(!fg){
+    /* kuch bhi read nahi ho paya: origc ko purani photo se byte par byte wapas
+       likho. fgi abhi bhi purani photo ka ImageData hai (use yahan tak chhua nahi
+       gaya), is liye putImageData se origc purani haalat me laut jata hai. W/H/od/
+       mask/undo ko chhua bhi nahi jata. */
+    try{if(fgi&&fgi.width){origc.width=fgi.width;origc.height=fgi.height;
+      origc.getContext('2d').putImageData(fgi,0,0)}}catch(_){}
+    return false
+  }
+  W=nW;H=nH;
+  /* retry hua ho to origc abhi bhi pehle (bade) size par nayi photo rakhta hai -
+     use final size par dobara banao, wahi drawImage jo scratch par chala */
+  if(retry){origc.width=nW;origc.height=nH;
+    const ox=origc.getContext('2d');
+    ox.setTransform(1,0,0,1,0,0);ox.globalAlpha=1;ox.drawImage(im,0,0,nW,nH)}
   /* pehle yahan photo ke pixel do baar rakhe jate the: getImageData ka data (od)
      aur usi ka ek copy jo fgi ka ImageData banta tha - 1400x1200 par 6.7 MB extra
      poore session ke liye. ab fgi hi od hai: layer() sirf alpha byte likhta hai
      (RGB waise hi rehta hai), aur od ka asli alpha sirf neeche mask0 banate waqt
      padha jata hai, jo pehle render se pehle ho jata hai. */
-  fgi=ox.getImageData(0,0,W,H);od=fgi.data;mkOD32();mkFG32();
+  fgi=fg;od=fg.data;mkOD32();mkFG32();
   if(fgc.width!==W||fgc.height!==H){fgc.width=W;fgc.height=H}else{fgx.setTransform(1,0,0,1,0,0);fgx.globalAlpha=1;fgx.clearRect(0,0,W,H)}
   /* outc (silhouette) yahan se poore W x H par banaya jata tha - 1400x1050 par
      5.88 MB ka naya surface + uska zero-fill, aur phir har photo load par size
@@ -922,7 +972,15 @@ const pickPhoto=f=>{
     ab token badla ho to nateeja chhod diya jata hai (jaise pehle loadImg karta
     tha). rel sirf ImageBitmap band karta hai (memory turant wapas). */
  const go=(im,nw,nh,rel)=>{if(used)return;used=true;
-  try{if(MAINTOK===tok)drawPhoto(im,nw,nh)}finally{try{rel&&rel()}catch(_){}}};
+  /* 1.1.96: drawPhoto ab apne readback ki galti khud sambhalta hai (chhote size par
+     retry, warna false), par koi bhi doosri exception yahan se im.onload tak jaati
+     thi - uncaught pageerror, aur app purani photo par chup-chaap atki reh jati thi.
+     ab wo bhi isi pehle se maujood message par khatam hoti hai. token badal chuka
+     ho (beech me doosri photo chuni gayi) to koi message nahi - wo load ab kisi ka
+     kaam ka nahi. */
+  try{if(MAINTOK===tok&&drawPhoto(im,nw,nh)===false)toast('Photo load nahi hui')}
+  catch(_){if(MAINTOK===tok)toast('Photo load nahi hui')}
+  finally{try{rel&&rel()}catch(_){}}};
  const plain=()=>loadImg(f,im=>go(im,im.naturalWidth,im.naturalHeight),{t:0});
  (async()=>{
   let d=null;
