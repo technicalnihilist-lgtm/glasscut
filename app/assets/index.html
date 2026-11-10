@@ -1516,7 +1516,21 @@ const partBox=fast=>{
     hai aur wo subject ke box ke bahar bhi girta hai, is liye uske liye PART galat
     tha (naapa: dark halo jama hota tha). shadow / outline / opacity<100 pehle
     jaise bahar. */
- if(!fast||P.sh||P.op<100||P.line>0||P.depth>0)return null;
+ /* 1.1.93: yahan pehle `!fast` bhi tha - yaani PART sirf un "fast preview" frames
+    par banta tha jo ungli dabaye hue (stroke ke beech) aate hain. har *poora* render
+    (Wand ka tap, Undo/Redo, Grow/Shrink/Smooth, stroke ka release) isi shart par
+    ruk kar poora subject dobara paint karta tha, chahe mask ek chhote box me badla
+    ho. naapa (1400x1200, base build, canvas calls counter se): border par ek Wand
+    tap par clearRect 826,272 px + subject ka drawImage 818,108 px, halanki us tap ne
+    sirf kinare ki ek patti hati; wahi 8,26,272/8,18,108 Undo, Redo, Grow aur Smooth
+    ke har press par bhi. `fast` hataane ke baad wahi kaam PART ke box par hota hai.
+    niche ke saare guard (transform STt, subPad(SUB) vs SSB, bgVer/bg/blur, CW/CH,
+    SUB/FGR/SOK, aur effects) waise hi hain - aur poore render par layer() exact SUB
+    dobara nikalta hai, is liye SUB badalne par (naya kinara, nayi cheez) partBox
+    khud null lauta deta hai aur purana poora render hi chalta hai. Canvas size badalne
+    par setSize bgVer badhata hai, is liye nayi surface ka pehla render bhi poora hi
+    hota hai (PART kabhi khaali surface par nahi lagta). */
+ if(P.sh||P.op<100||P.line>0||P.depth>0)return null;
  /* 1.1.92: yahan pehle sirf 'none'/'color'/'grad' background par PART banta tha -
    'Apni photo', 'Blur original' aur 'Blue blur' par har fast frame poora canvas
    dobara banata tha (clearRect + background ka poora drawImage + subject ka
@@ -3349,7 +3363,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
    na ho (browser / purani shell), getter na ho, ya khali string aaye to neeche
    wala fallback literal chalta hai, is liye kuch tootta nahi. */
 window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(b.versionName()):'';
- return v||'1.1.92'}catch(_){return '1.1.92'}})(),
+ return v||'1.1.93'}catch(_){return '1.1.93'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
