@@ -3219,7 +3219,26 @@ const morph=g=>{
  if(!keepDirty&&!raf&&!rt&&RFULL&&!showOrig&&maskUniform()>=0)return;
  push();
  if(!MBUF||MBUF.length!==mask.length)MBUF=new Uint8Array(mask.length);
- const o=MBUF,m=g?Math.max:Math.min;o.set(mask);
+ const o=MBUF,m=g?Math.max:Math.min;
+ /* 1.1.110: pehle yahan poori mask ka copy hota tha (o.set(mask), 1400x1200 par
+    1.68 MB memcpy) halanki neeche ka har read MB ke +/-2 ke andar hi hota hai -
+    us box ke bahar mask aur uske padosi pakka 0 hain, is liye wahan ka copy
+    kabhi padha hi nahi jata. ab sirf wahi box copy hota hai. canvas ki kinare
+    wali strips (pehli/aakhri row aur column) bhi pehle poore canvas par chalti
+    thin; box ke bahar unka nateeja 0 hi hota hai aur mask wahan pehle se 0 hai,
+    is liye ab wo bhi box ke andar hi chalti hain, aur sirf tab jab box sach me
+    us kinare ko chhoota ho. mask byte-identical rehta hai (dekho naap). */
+ const cx0=Math.max(0,MB[0]-2),cx1=Math.min(W-1,MB[2]+2),
+       cy0=Math.max(0,MB[1]-2),cy1=Math.min(H-1,MB[3]+2);
+ /* W ya H 2 se chhota ho to neeche wala fallback loop poore canvas ko padhta hai
+    (usme kinare ka alag raasta nahi hai), is liye wahan poora copy hi hota hai */
+ if(W>2&&H>2){
+  if(MB[2]>=MB[0]){
+   /* rows ko subarray se copy karo (memcpy), byte loop se nahi: poora box poore
+      canvas jitna chauda ho to ek hi contiguous band hai */
+   if(cx0===0&&cx1===W-1)o.set(mask.subarray(cy0*W,(cy1+1)*W),cy0*W);
+   else for(let y=cy0;y<=cy1;y++){const row=y*W;o.set(mask.subarray(row+cx0,row+cx1+1),row+cx0)}}
+ }else o.set(mask);
  /* bheetar ka scan sirf MB+1 tak - box ke bahar mask (aur uske chaaron padosi)
    pakka 0 hain, is liye Grow ka max aur Shrink ka min wahan 0 hi aata, jo pehle
    se likha hua hai. kinare wali rows/columns (2W+2H pixel) pehle jaise chalti hain. */
@@ -3248,15 +3267,19 @@ const morph=g=>{
      const r=o[i+1],u=o[i-W],d=o[i+W];let v=c;
      if(l<v)v=l;if(r<v)v=r;if(u<v)v=u;if(d<v)v=d;
      mask[i]=v;l=c;c=r}}}
-  for(let x=1;x<W-1;x++){const i=x;mask[i]=m(m(o[i],o[i-1]),m(o[i+1],o[i+W]))}
-  for(let x=1;x<W-1;x++){const i=(H-1)*W+x;mask[i]=m(m(o[i],o[i-1]),m(o[i+1],o[i-W]))}
-  for(let y=1;y<H-1;y++){const row=y*W;let i=row;mask[i]=m(m(o[i],o[i+1]),m(o[i-W],o[i+W]));
-   i=row+W-1;mask[i]=m(m(o[i],o[i-1]),m(o[i-W],o[i+W]))}
-  /* chaar kone (dono taraf se kinare hain) */
-  mask[0]=m(o[0],m(o[1],o[W]));
-  mask[W-1]=m(o[W-1],m(o[W-2],o[2*W-1]));
-  mask[(H-1)*W]=m(o[(H-1)*W],m(o[(H-2)*W],o[(H-1)*W+1]));
-  mask[H*W-1]=m(o[H*W-1],m(o[H*W-2],o[(H-2)*W+W-1]))
+  /* kinare wali strips ab box ke andar hi: bahar ka nateeja 0 hai aur mask
+     wahan pehle se 0 hai, is liye ek bhi byte nahi badalta */
+  const sx0=Math.max(1,cx0),sx1=Math.min(W-2,cx1),sy0=Math.max(1,cy0),sy1=Math.min(H-2,cy1);
+  if(MB[2]>=MB[0]){
+   if(cy0===0)for(let x=sx0;x<=sx1;x++){const i=x;mask[i]=m(m(o[i],o[i-1]),m(o[i+1],o[i+W]))}
+   if(cy1===H-1)for(let x=sx0;x<=sx1;x++){const i=(H-1)*W+x;mask[i]=m(m(o[i],o[i-1]),m(o[i+1],o[i-W]))}
+   if(cx0===0)for(let y=sy0;y<=sy1;y++){const i=y*W;mask[i]=m(m(o[i],o[i+1]),m(o[i-W],o[i+W]))}
+   if(cx1===W-1)for(let y=sy0;y<=sy1;y++){const i=y*W+W-1;mask[i]=m(m(o[i],o[i-1]),m(o[i-W],o[i+W]))}
+   /* chaar kone (dono taraf se kinare hain) */
+   if(cy0===0&&cx0===0)mask[0]=m(o[0],m(o[1],o[W]));
+   if(cy0===0&&cx1===W-1)mask[W-1]=m(o[W-1],m(o[W-2],o[2*W-1]));
+   if(cy1===H-1&&cx0===0)mask[(H-1)*W]=m(o[(H-1)*W],m(o[(H-2)*W],o[(H-1)*W+1]));
+   if(cy1===H-1&&cx1===W-1)mask[H*W-1]=m(o[H*W-1],m(o[H*W-2],o[(H-2)*W+W-1]))}
  }else for(let y=0;y<H;y++)for(let x=0;x<W;x++){const i=y*W+x;let v=o[i];if(x>0)v=m(v,o[i-1]);if(x<W-1)v=m(v,o[i+1]);if(y>0)v=m(v,o[i-W]);if(y<H-1)v=m(v,o[i+W]);mask[i]=v}
  /* Grow har taraf ek pixel badhta hai - box bhi ek pixel bada */
  if(g&&MB[2]>=MB[0])mbAdd(Math.max(0,MB[0]-1),Math.max(0,MB[1]-1),Math.min(W-1,MB[2]+1),Math.min(H-1,MB[3]+1));
@@ -3653,7 +3676,23 @@ const save=async()=>{
       pehle page isi par "Save ho gaya" dikha deta tha aur phir native "Save nahi
       hua" - ulta message. ab pending par page chup rehta hai; asli nateeja
       native GlassCut.saved() se aata hai. */
-   if(r.indexOf('ok:pending')===0){bdone=true;savePending=true;if(wd)clearTimeout(wd);saveBusy=false;return}
+   if(r.indexOf('ok:pending')===0){bdone=true;savePending=true;if(wd)clearTimeout(wd);saveBusy=false;
+    /* 1.1.110: is raaste par 6 s ka watchdog clear ho jata tha aur asli jawab
+       GlassCut.saved()/failed() se aata hai - par shell kabhi jawab hi na de to
+       (permission dialog bina result ke band, request drop) savePending hamesha
+       true reh jata tha: dropScratch aur closeOv dono usi par rukte hain, is liye
+       multi-MB lastSaveBlob poore session ke liye pinned reh jata tha (theek usi
+       tarah ka leak jo FileReader/watchdog/share ke liye pehle theek hua). ab
+       45 s ka bound hai: utni der me koi asli native write poori ho jati hai.
+       jawab aane par saved()/failed() saveTok -1 kar dete hain, is liye ye timer
+       chup-chaap laut jata hai (late jawab bhi token se stale ho kar chhut jata
+       hai - wahi raasta jo nayi photo chunne par pehle se hai). timeout par wahi
+       message + overlay jo har doosre fail raaste par aata hai, aur blob chhod
+       diya jata hai. */
+    const ptok=saveTok;
+    wd=setTimeout(()=>{if(saveTok!==ptok)return;saveTok=-1;savePending=false;
+     lastSaveBlob=null;toast('Save nahi hua');fallback(b)},45000);
+    return}
    if(!r||r.indexOf('err')===0)bfin(false);else bfin(true)};
   fr.onerror=()=>bfin(false);
   try{fr.readAsDataURL(b)}catch(_){bfin(false)}
@@ -3765,8 +3804,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    bridge GlassCut.version -> "1.1.106".
    1.1.107: sync rakha gaya - bina bridge GlassCut.version -> "1.1.107".
    1.1.108: sync rakha gaya - bina bridge GlassCut.version -> "1.1.108".
-   1.1.109: sync rakha gaya - bina bridge GlassCut.version -> "1.1.109". */
- return v||'1.1.109'}catch(_){return '1.1.109'}})(),
+   1.1.109: sync rakha gaya - bina bridge GlassCut.version -> "1.1.109".
+   1.1.110: sync rakha gaya - bina bridge GlassCut.version -> "1.1.110". */
+ return v||'1.1.110'}catch(_){return '1.1.110'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
