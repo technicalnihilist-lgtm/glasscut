@@ -592,9 +592,23 @@ public class MainActivity extends Activity {
                     c = cr.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                             new String[]{MediaStore.Images.Media._ID,
                                     MediaStore.Images.Media.DATE_ADDED},
-                            MediaStore.Images.Media.RELATIVE_PATH + "=? AND "
+                            /* RELATIVE_PATH ko dono tarah match karo. MediaStore
+                               ise normalise karke hamesha "/" par khatam karta hai
+                               (insert "Pictures/GlassCut" bhi "Pictures/GlassCut/"
+                               ban jata hai), aur yahan pehle sirf bina-slash wali
+                               value se "=" compare hota tha - yaani ye sweep apni
+                               hi rows kabhi nahi pakadta tha aur dead code tha:
+                               har killed save ka IS_PENDING=1 row hamesha ke liye
+                               pada reh jata tha (gallery me nahi dikhta, user use
+                               kabhi dhoond bhi nahi sakta, aur jagah bhi nahi
+                               chhut-ti). sqlite par wahi predicate chala kar
+                               dekha: normalised row ke saath "=" 0 row deta hai,
+                               IN(dono) 1 row. dono form rakhne se baat provider
+                               ke normalise karne ya na karne par nahi tikti. */
+                            MediaStore.Images.Media.RELATIVE_PATH + " IN (?,?) AND "
                                     + MediaStore.Images.Media.IS_PENDING + "=1",
-                            new String[]{Environment.DIRECTORY_PICTURES + "/GlassCut"},
+                            new String[]{Environment.DIRECTORY_PICTURES + "/GlassCut",
+                                    Environment.DIRECTORY_PICTURES + "/GlassCut/"},
                             null);
                     if (c == null) return;
                     final int idCol = c.getColumnIndex(MediaStore.Images.Media._ID);

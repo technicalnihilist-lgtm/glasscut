@@ -767,6 +767,12 @@ const imgDims=async f=>{
  try{d=parseDims(head)}catch(_){}
  return d};
 let MAINTOK=0;
+/* PTOK = "photo ke RGB pixel kab badle" ka counter. sirf drawPhoto ise badhata
+   hai, kyunki od (photo ke pixel) kahin aur likhe hi nahi jate - layer() sirf
+   alpha byte (byte 3) likhta hai, RGB ko chhoota nahi, aur cutout ka coarse
+   downscale sirf RGB padhta hai. is liye PTOK wahi ek sach hai jo "SD (coarse
+   copy) abhi bhi od ka sahi downscale hai" ke liye chahiye. */
+let PTOK=0;
 const drawPhoto=(im,nw,nh)=>{
   /* purani photo ka pixel count - nayi photo ka size isse alag hua to neeche wale
      saare scratch buffer dead ho jate hain (har ek ka guard size match na hone par
@@ -843,7 +849,7 @@ const drawPhoto=(im,nw,nh)=>{
      poore session ke liye. ab fgi hi od hai: layer() sirf alpha byte likhta hai
      (RGB waise hi rehta hai), aur od ka asli alpha sirf neeche mask0 banate waqt
      padha jata hai, jo pehle render se pehle ho jata hai. */
-  fgi=fg;od=fg.data;mkOD32();mkFG32();
+  fgi=fg;od=fg.data;PTOK++;mkOD32();mkFG32();
   if(fgc.width!==W||fgc.height!==H){fgc.width=W;fgc.height=H}else{fgx.setTransform(1,0,0,1,0,0);fgx.globalAlpha=1;fgx.clearRect(0,0,W,H)}
   /* outc (silhouette) yahan se poore W x H par banaya jata tha - 1400x1050 par
      5.88 MB ka naya surface + uska zero-fill, aur phir har photo load par size
@@ -2355,7 +2361,7 @@ const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;
 /* coarse-to-fine cutout: flood a downscaled copy, then snap the edge back at full res */
 /* boxDown ka output, xmap aur seeds har Auto press par naye bante the (1400x1200 par
    ~1.68 MB + 5.6 KB garbage). ab wahi buffers dobara use hote hain. */
-let SD=null,XM=null,SEEDS=null,XR=null,RUN=null;
+let SD=null,SDtok=-1,XM=null,SEEDS=null,XR=null,RUN=null;
 /* island labelling ke stats: island ki size aur rang ka jod. buffer sirf tab bada
    hota hai jab islands ki ginti capacity se zyada ho - warna wahi ek set reuse. */
 let ISL=null;
@@ -2442,8 +2448,18 @@ let CC=null;
 const BK=new Int32Array(2048),CND=new Int32Array(512),CNDC=new Int32Array(512);
 const REF={r:new Float64Array(4),g:new Float64Array(4),b:new Float64Array(4)};
 const cutout=()=>{const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.round(H/f)),N=nw*nh,M=W*H;
- if(!SD||SD.length!==N*4)SD=new Uint8ClampedArray(N*4);
- const sd=boxDown(od,W,H,nw,nh,SD);
+ /* SD = od ka aadha downscale (coarse grid ka rang). ye poori tarah photo ke RGB
+    pixel + size par depend karta hai, aur dono sirf nayi photo par badalte hain
+    (PTOK, dekho drawPhoto). pehle yahan har Auto press par poora boxDown chalta
+    tha - 1400x1200 par 16-21 ms, jabki input bilkul wahi tha: Auto dobara dabane
+    ka aam raasta (tolerance badalna, ya erase/wand ke baad phir Auto) har baar
+    yahi ek jaise 700x600 grid ko dobara banata tha. ab wahi ek baar, PTOK ke
+    saath. SD.length guard size badalne par (aur SD=null hone par) khud naya
+    buffer deta hai, is liye SDtok bhi wahin -1 ho jata hai; dropScratch aur
+    photo-load ka SD=null usi guard se guzarte hain. nateeja byte-identical: same
+    od + same nw/nh par boxDown ka output pehle bhi wahi tha. */
+ if(!SD||SD.length!==N*4){SD=new Uint8ClampedArray(N*4);SDtok=-1}
+ const sd=SDtok===PTOK?SD:(SDtok=PTOK,boxDown(od,W,H,nw,nh,SD));
  /* border seed colours: pehle har seed ek {n,r,g,b} object me jata tha aur baad me
     Object.values + filter + sort + slice + map paanch alag arrays banate the -
     har Auto press par ~512 chhote object aur paanch array. ab 512 slot ke typed
@@ -3518,8 +3534,12 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
     khali laute to page apni galat version batata tha (shell wala asli raasta wahi
     PackageManager ki value deta hai, is liye app me ye kabhi nahi dikhta tha).
     ab wahi value manifest ki versionName hai; verifiable: bina bridge
-    GlassCut.version -> "1.1.99" (base par "1.1.95"). */
- return v||'1.1.99'}catch(_){return '1.1.99'}})(),
+    GlassCut.version -> "1.1.99" (base par "1.1.95").
+    1.1.101: wahi drift dobara ho gaya tha - manifest 1.1.100 par tha aur ye
+    literal 1.1.99, yaani bina bridge (browser/preview) page apni version ek build
+    peeche batata tha. ab manifest ke saath sync; verifiable: bina bridge
+    GlassCut.version -> "1.1.101" (base par "1.1.99"). */
+ return v||'1.1.101'}catch(_){return '1.1.101'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par

@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 278 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.100 (versionCode 100) |
+| **Version** | 1.1.101 (versionCode 101) |
 
 ---
 
@@ -48,6 +48,21 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### Auto re-downscaled the same photo on every press
+
+- **The coarse grid Auto floods was rebuilt from scratch on every press, from a photo that had not changed.** `cutout()` first halves the working photo into a 700×600 RGB grid (`boxDown`) and floods that; its only inputs are the photo's RGB pixels and its size, and neither changes between presses — `od` is written in exactly one place (`drawPhoto`), and `layer()` only ever touches the alpha byte. So every repeat Auto (change the tolerance, or erase something and tap Auto again) spent 16–21 ms rebuilding a byte-identical grid. The downscale is now cached against a photo token (`PTOK`, bumped only by `drawPhoto`), and `SD = null` on a new photo or on `GlassCut.trim()` still falls through the same length guard, so the cache can only ever be dropped, never stale.
+- Verified for 1.1.101 (base 1.1.100 vs 1.1.101, headless Chrome): on an instrumented build (a timer wrapped around `boxDown`, then 8 × erase-stroke + Auto cycles on a 1400×1200 photo) **`boxDown` calls went 7 → 1 and its total time 150.7 ms → 28.6 ms** (each warm call is ~21 ms, so six calls ≈ 126 ms saved), with the **median Auto press 61.7 ms → 28.1 ms**; on a 4000×3000 source photo (working size 1400×1050) the same 7 → 1 calls, 148.4 ms → 20.9 ms, median 100.6 ms → 52.4 ms. The result is byte-identical — both builds end on canvas hash `2435957686`. The cache is proven to invalidate on a same-size new photo: loading `t.png` → `t2.png` → `t.png` (both 1400×1200) gives Auto hashes `1779089996 / 2727522054 / 1779089996`, and `2727522054` is exactly what `t2.png` gives in a fresh page. The 19-checkpoint flow (load/auto, wand, 14-move erase, undo, redo, Grow/Shrink/Smooth/Invert/Reset, colour background, PNG to disk, language toggle, window close/open, 320×240 reload) is **identical at all 19 checkpoints with the same 40,564-byte PNG (sha1 6b0dbce9…)**, the same holds for a 4000×3000 and a 320×240 photo, and the edge battery (save-vs-canvas pixel compare = 0 diff, undo-all/redo-all, language toggle, ratio 1:1 round-trip, slider + save, two fingers, window closed mid-stroke, empty wand tap, 1×1 photo) is unchanged. Zero page errors, zero console errors.
+
+### The stale-save sweep could never find its own rows
+
+- **`sweepPending()` — the pass that reclaims `IS_PENDING=1` MediaStore rows left by a killed save — queried `RELATIVE_PATH = 'Pictures/GlassCut'`.** MediaStore normalises `RELATIVE_PATH` to always end with `/` (inserting `Pictures/GlassCut` stores `Pictures/GlassCut/`), so that equality matched nothing and the sweep was dead code: every orphaned pending row stayed invisible to the gallery, unfindable by the user and unreclaimed, for ever. The selection is now `RELATIVE_PATH IN (?,?)` with both forms, so it no longer depends on whether the provider normalises.
+- Verified for 1.1.101: the predicate itself was run against a SQLite table holding the normalised value (`Pictures/GlassCut/`, `IS_PENDING=1`) — `=` returns **0 rows**, `IN` with both forms returns **1**, and a neighbouring `Pictures/GlassCut2/` row is matched by neither (so the sweep still cannot touch another folder's files). The APK compiles and links with the new selection (`build.sh`, versionCode 101).
+
+### The page's own version fell behind again
+
+- The fallback literal behind `GlassCut.version` is only read when there is no shell bridge (browser, preview) or `versionName()` returns empty — and it had slipped to `1.1.99` while the manifest was at `1.1.100`, the same drift fixed in 1.1.99. It now matches the manifest.
+- Verified for 1.1.101: `GlassCut.version` with no bridge reads **"1.1.99" → "1.1.101"** (base vs this build), with zero page errors.
 
 ### A failed save kept quiet
 
