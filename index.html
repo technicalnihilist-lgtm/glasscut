@@ -3406,6 +3406,17 @@ const save=async()=>{
     bante hain; state (transform/alpha) saaf likh di jati hai taaki purane save ka
     koi asar na bache - safed fill + drawImage bilkul wahi kram me, is liye file
     ke byte wahi rehte hain. */
+ /* jcv = JPEG ke liye transparent canvas ko safed par flatten karne wali surface
+    (CW x CH, 1400x1200 par 5.88 MB). format PNG/WEBP par jaane par use pehle se
+    chhod diya jata hai (dekho #fmts ka seg handler), par ek raasta bacha hua tha:
+    format JPEG hi rehta hai aur background opaque ho jata hai. us haalat me neeche
+    ka `if` kabhi nahi chalta, yaani jcv poore session ke liye padi rehti hai aur
+    usse koi padhta bhi nahi - theek usi waqt jab save ka apna multi-MB blob bhi
+    zinda hota hai. ab har save par ek check: agar ye save flatten ke raaste par
+    nahi ja raha to surface chhod di jati hai (width=1 backing store turant free
+    karta hai). agla JPEG+transparent save use waise hi dobara bana leta hai
+    (neeche ka `if(!jcv)`), is liye file me ek byte nahi badalta. */
+ if(!(fmt==='jpeg'&&!opaqueBg())&&jcv){jcv.width=jcv.height=1;jcvx=null;jcv=null}
  if(fmt==='jpeg'&&!opaqueBg()){
   if(!jcv){jcv=mk();jcvx=jcv.getContext('2d');jcv.width=CW;jcv.height=CH}
   else if(jcv.width!==CW||jcv.height!==CH){jcv.width=CW;jcv.height=CH}

@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 278 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.102 (versionCode 102) |
+| **Version** | 1.1.103 (versionCode 103) |
 
 ---
 
@@ -48,6 +48,12 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### A dead JPEG surface, and a shell that rebuilt itself for no reason
+
+- **The JPEG flatten surface stayed alive for the whole session on one route.** Saving a JPEG with a transparent background flattens the canvas onto white through `jcv`, a `CW × CH` surface (6.72 MB at 1400×1200). Choosing PNG or WEBP already dropped it, but if the format stayed JPEG and the background became opaque (a colour, a gradient, a blur, an opaque photo), the flatten branch is never entered again — so the surface sat there unused, exactly while a save's own multi-MB blob was alive. `save()` now drops it whenever the save it is about to do will not use it; the existing `if(!jcv)` rebuilds it on the next transparent-background JPEG save, so the file is unchanged.
+- **The shell's `configChanges` list was missing every configuration a phone can change while the app is open except the visual ones.** `locale`, `layoutDirection`, `keyboard`, `navigation`, `colorMode`, `fontWeightAdjustment` and `grammaticalGender` were not listed, so changing the system (or per-app) language, switching night/colour mode, or attaching a hardware keyboard or navigation device made Android destroy and recreate the activity — which reloads the WebView, i.e. the chosen photo, the mask and the whole undo history disappear silently. All seven are now handled in place.
+- Verified for 1.1.103 (base 1.1.102 vs 1.1.103, headless Chrome): an instrumented build exposes `jcv`'s size. JPEG save on a transparent background → `jcv` `[1400, 1200]`; then a white colour background (opaque) with the format still JPEG → the base build still holds `[1400, 1200]` (6.72 MB dead), this build holds `null`. Not one byte of output changed: all three saves are the same **41,778-byte JPEG, sha1 `fc013de800d5`**, and going back to a transparent background rebuilds the surface and produces that same file again. The manifest side is checked on the built APK with `aapt2 dump xmltree`: `configChanges` went **0x40001FA0 → 0x5000FFF4** — exactly `locale` 0x4, `keyboard` 0x10, `navigation` 0x40, `layoutDirection` 0x2000, `colorMode` 0x4000, `fontWeightAdjustment` 0x8000 and `grammaticalGender` 0x10000000 added, with the eight previous flags unchanged. The 20-checkpoint flow (load/auto, wand, 14-move erase, undo, redo, Grow/Shrink/Smooth/Invert ×2, blur background, gradient background, Reset, colour background, PNG to disk, language toggle, window close/open, 320×240 reload + second save) is **identical at all 20 checkpoints, same 211,561-byte PNG and same 26,573-byte second save**, zero page errors, zero console errors.
 
 ### Whole-mask byte loops still walked one byte at a time
 
