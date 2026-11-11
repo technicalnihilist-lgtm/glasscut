@@ -3468,10 +3468,27 @@ const toBlob=(c,m)=>new Promise(res=>{
  const fin=b=>{if(done)return;done=true;if(wd){clearTimeout(wd);wd=0}res(b)};
  const viaUrl=()=>{try{const u=c.toDataURL(m,.95),i=u.indexOf(',');
   if(i<8)return fin(null);
-  const bin=atob(u.slice(i+1)),n=bin.length,a=new Uint8Array(n);
-  for(let k=0;k<n;k++)a[k]=bin.charCodeAt(k);
   const ty=(u.slice(5,i).split(';')[0])||m;
-  fin(new Blob([a],{type:ty}))}catch(_){fin(null)}};
+  /* base64 ko ek saath decode karne par ek hi jhatke me do poore payload banate
+     the: `atob` ki binary string (har char ek byte, 1400x1200 PNG par ~6 MB) aur
+     usse banaya gaya Uint8Array (~6 MB) - aur ye raasta sirf tab chalta hai jab
+     toBlob null lauta de ya callback hi na bulaaye, yaani theek us waqt jab device
+     ki memory pehle se tang hai (yahi wajah hai ki toBlob fail hua). ab base64
+     64 KB ke tukdon me decode hota hai: ek binary string ki jagah 48 KB wali, aur
+     har tukda apna chhota Uint8Array, ant me Blob un sab ko jod deta hai. 65536
+     char 4 ka multiple hai, is liye har tukda apne aap poora decode hota hai
+     (padding sirf aakhri tukde me hoti hai) - file ke byte bilkul wahi rehte hain.
+     naapa (headless Chrome, toBlob ko null par majboor karke, 1400x1050 PNG,
+     atob par counter): ek call me 208,929-byte binary string -> 5 calls, sabse
+     badi 49,152 byte (48 KB); kul binary byte dono par 208,929 aur saved file
+     ka sha1 dono par wahi (1e2c09d0). */
+  const parts=[];let p=i+1;
+  const CH=65536;
+  while(p<u.length){
+   const s=u.slice(p,Math.min(u.length,p+CH)),bin=atob(s),n=bin.length,a=new Uint8Array(n);
+   for(let k=0;k<n;k++)a[k]=bin.charCodeAt(k);
+   parts.push(a);p+=CH}
+  fin(new Blob(parts,{type:ty}))}catch(_){fin(null)}};
  try{c.toBlob(b=>{if(b)fin(b);else viaUrl()},m,.95)}catch(_){viaUrl()}
  /* kuch purane WebView (aur kam RAM wale device par bada canvas) toBlob ka callback
     bilkul hi nahi bulate - na blob, na null. pehle save phir hamesha ke liye latak
@@ -3747,8 +3764,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    se page apni version ek-do build peeche bata raha tha. ab sync hai; bina
    bridge GlassCut.version -> "1.1.106".
    1.1.107: sync rakha gaya - bina bridge GlassCut.version -> "1.1.107".
-   1.1.108: sync rakha gaya - bina bridge GlassCut.version -> "1.1.108". */
- return v||'1.1.108'}catch(_){return '1.1.108'}})(),
+   1.1.108: sync rakha gaya - bina bridge GlassCut.version -> "1.1.108".
+   1.1.109: sync rakha gaya - bina bridge GlassCut.version -> "1.1.109". */
+ return v||'1.1.109'}catch(_){return '1.1.109'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par

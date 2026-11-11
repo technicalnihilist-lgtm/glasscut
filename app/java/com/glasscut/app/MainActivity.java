@@ -431,8 +431,23 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** base64 slice size: a multiple of 4 so every slice decodes on its own. */
-    private static final int B64_CHUNK = 16384;
+    /**
+     * base64 slice size: a multiple of 4 so every slice decodes on its own.
+     *
+     * 1.1.109: 16384 -> 262144. Every slice costs one decode call, one decoded
+     * byte[] and one write() into the output stream, and a 1400x1200 PNG is a
+     * ~6 MB payload - so 16 KB slices meant 512 decodes, 512 short-lived 12 KB
+     * arrays and 512 write() calls into MediaStore, on the save path that already
+     * holds the WebView's canvas and the page's encoded blob. 256 KB slices cut
+     * all three to 32 with byte-identical output: the slice is still a whole
+     * number of 4-char groups, so each one decodes on its own, and padding only
+     * ever occurs in the last slice. Measured on a plain JVM with the same
+     * chunking body and java.util.Base64 standing in for the platform decoder -
+     * 6,291,456-byte payload 512 decodes / 512 writes -> 32 / 32; 123,457-byte
+     * payload 11 -> 1; a line-wrapped 300,000-byte payload 25 -> 2; and every
+     * case decodes to exactly the input bytes, at both sizes.
+     */
+    private static final int B64_CHUNK = 262144;
 
     /**
      * Decodes a base64 payload straight into the output stream, 16 KB at a time.
@@ -1071,9 +1086,17 @@ public class MainActivity extends Activity {
             pendingFiles = null;
         }
         pendingData = pendingName = pendingMime = null;
-        if (web != null) {
-            web.destroy();
-            web = null;
+        WebView w = web;
+        web = null;
+        if (w != null) {
+            /* WebView.destroy() is only safe once the view has left the hierarchy.
+               onRenderProcessGone already removes the dead view from `root` before
+               destroying it; this path did not, so a WebView destroyed while still
+               attached kept its AwContents - and the window it was attached to -
+               reachable, i.e. the activity leaked for as long as the process lived.
+               Removing it first is the documented order and costs nothing. */
+            try { root.removeView(w); } catch (Exception ignored) { }
+            try { w.destroy(); } catch (Exception ignored) { }
         }
         super.onDestroy();
     }

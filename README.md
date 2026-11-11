@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 282 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.107 (versionCode 107) |
+| **Version** | 1.1.109 (versionCode 109) |
 
 ---
 
@@ -48,6 +48,13 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### The save path's two biggest allocations, and a leaked WebView
+
+- **The URL fallback decoded the whole payload in one go.** When `toBlob` returns null or never calls back — exactly the low-memory case that made it fail — the fallback re-encodes with `toDataURL` and decodes the base64 with `atob`. That produced one binary string the size of the entire image and one `Uint8Array` to match it, both in a single synchronous step, on top of the data URL that `toDataURL` had just returned. The payload is now decoded in 64 KB slices (65536 is a multiple of 4, so each slice is a whole number of base64 groups and decodes on its own; padding only ever occurs in the last one) and the `Blob` joins the pieces, so the peak is one 48 KB binary string instead of the whole picture.
+- **The shell's `writeBase64` did 512 decodes, 512 arrays and 512 writes for a 6 MB save.** Both gallery paths (MediaStore on API 29+, `.tmp`-then-rename on API 24–28) stream the base64 payload through 16 KB slices, and every slice cost one `Base64.decode`, one decoded `byte[]` and one `write()` into the output stream. The slice is now 256 KB: the same bytes, 32 calls instead of 512, on the save path that already holds the WebView's canvas and the page's encoded blob.
+- **`onDestroy` destroyed the WebView while it was still attached.** `onRenderProcessGone` already removes the dead view from its parent before destroying it; the normal teardown path did not. A `WebView` destroyed while still in the hierarchy keeps its `AwContents` — and the window it was attached to — reachable, so the activity leaked for the rest of the process's life. It is now removed first, then destroyed, which is the documented order.
+- Verified for 1.1.109 (base 1.1.108 vs 1.1.109): the fallback decode is measured with a counter on `atob` — one call returning a **208,929-byte** binary string becomes **5 calls, largest 49,152 bytes**, with the total binary bytes still 208,929 and the saved PNG's sha1 unchanged (`1e2c09d0`); forced-fallback saves of PNG, JPG, WEBP and a 1×1 photo are all byte-identical between the two builds. The shell's chunking is measured on a plain JVM with the same body and `java.util.Base64` standing in for the platform decoder: a 6,291,456-byte payload goes **512 decodes / 512 writes → 32 / 32**, a 123,457-byte payload **11 → 1**, a line-wrapped 300,000-byte payload **25 → 2**, and every case decodes to exactly the input bytes at both slice sizes. Nothing else moved: the 28-checkpoint flow (load + Auto, Wand tap, 12-move erase, undo, redo, Grow, Shrink, Smooth, Invert ×2, feather 6, blur background, gradient background, transparent background, PNG/JPG/WEBP to disk, language en/hi, 9:16 and back to original, Reset, window close/open, `trim` + pause/resume, a second photo + Wand + save) is **identical at every checkpoint — same canvas hashes, same sha1 on all five saved files** — and the edge battery (truncated JPEG, a non-image file, a 3000×2000 PNG, four photos uploaded back to back, 14 undos past the end of history, Reset + undo, Invert twice, Keep + Grow, double-tap save, sheet open + Escape, 1×1, 1400×3, 4000×3000, 9:16 and 1:1) matches the base build exactly, with **zero page errors and zero console errors**.
 
 ### Refine buttons that could not change a pixel
 
