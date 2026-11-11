@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 282 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.105 (versionCode 105) |
+| **Version** | 1.1.106 (versionCode 106) |
 
 ---
 
@@ -48,6 +48,12 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### The Wand's mask scan, and Grow/Shrink's five loads per pixel
+
+- **The Wand's mask-clear loop read one byte at a time.** A span of background that the flood fills also has to be cleared out of the mask (255 → 0, counted in `cnt`, boxed in `ka`/`kb`). Inside the mask's bounding box that loop walked the span byte by byte — on a 1400×1200 photo a full-background tap is 631,681 of those single-byte tests, and after Auto almost every one of them reads a byte that is already 0. It now reads the mask four bytes at a time through one `Uint32Array` view built once per flood: a word that is zero skips four pixels with a single load, and a word that is not zero runs the same byte loop it always did, so `mask`, `cnt` and the changed box are untouched. The view is built per flood rather than cached, for the same reason `diffView` is not cached: a cached view would pin the previous mask's 1.68 MB buffer after an undo or a new photo.
+- **Grow and Shrink loaded five bytes per pixel.** `max`/`min` of a pixel and its four neighbours means `o[i-1]`, `o[i]`, `o[i+1]`, `o[i-W]`, `o[i+W]` — but `o[i-1]` and `o[i]` are the previous pixel's `o[i]` and `o[i+1]`. A sliding window (`l`, `c`, `r`) carries them forward, so each step reads only `r`, `u` and `d`: three loads instead of five, with the same values in the same order.
+- Verified for 1.1.106 (base 1.1.105 vs 1.1.106, headless Chrome): the mask-clear loop on a 1400×1200 corner tap went **631,681 byte iterations → 156,992 word iterations + 3,713 byte iterations (160,705, −75 %)**, and the 631,790 / 326,606 figures for the second corner and a subject tap fall to **157,007 / 80,930** the same way. Grow on the same photo walks **1,039,304** interior pixels, so it drops **2,078,608 byte loads per press** (5 → 3 per pixel, −40 %). Every pixel is identical: the full 24-checkpoint flow (load + Auto, Auto again, Wand tap, 12-move erase, undo, redo, undo ×2, redo ×2, Grow, Shrink, Smooth, Reset, colour background, blur background, 9:16 ratio, back to original, PNG to disk, language en/hi, window close/open, second photo) is **identical at every checkpoint — same hashes, same 236,789-byte PNG** — and so are the edge cases: 1×1 (88-byte PNG), 60×40 (1,716-byte WEBP), 4000×3000 → 1400×1050 (31,962-byte JPG, 21,876-byte WEBP), Invert twice, Keep + undo, double-tap save (one file), all with **zero page errors and zero console errors**. `GlassCut.version` without a bridge reported **1.1.102** while the manifest said 1.1.105; the fallback literal is now **1.1.106**.
 
 ### Interactions that changed nothing still repainted the whole frame
 

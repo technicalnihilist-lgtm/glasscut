@@ -2294,6 +2294,9 @@ const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;
     yani speed par asar nahi) aur flood ka nateeja byte-identical. */
  if(++FL.g>255){FL.vis.fill(0);FL.g=1}
  const vis=FL.vis,st=FL.st,g=FL.g,t2=t*t;let sp=0,cnt=0;
+ /* mask ka 32-bit view ek hi baar per flood (dekho neeche mask-clear loop). array
+    4-byte aligned na ho to null, aur tab purana byte loop chalta hai. */
+ const MW=(LE32&&mask&&mask.byteOffset===0&&mask.length>=4)?new Uint32Array(mask.buffer,0,mask.length>>>2):null;
  /* sach me badle hue pixel ka box (mask 255 -> 0) */
  let cx0=W,cy0=H,cx1=-1,cy1=-1;
  /* keepMask sirf tab dekha jata hai jab sach me kuch protect kiya gaya ho
@@ -2355,8 +2358,29 @@ const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;
      Smooth aur enforce pehle se chalte hain, aur flood mask me sirf 0 likhta hai
      (255 kabhi nahi), is liye box ko chauda karne ki zaroorat bhi nahi. */
   const mx0=xl>MB[0]?xl:MB[0],mx1=xr<MB[2]?xr:MB[2];
-  if(mx0<=mx1&&ry>=MB[1]&&ry<=MB[3])
+  /* mask ka scan ab 32-bit word par: background ka poora span MB ke andar aata
+     hai, aur usme mask pehle se 0 hi hota hai (auto ke baad sabse aam tap), is
+     liye byte-by-byte `if(mask[j])` 1400x1200 par 1.68 M baar chalta tha. ab ek
+     word me chaar byte ek saath padhe jate hain aur word 0 ho to chaar byte
+     bina kisi kaam ke chhod diye jate hain - wahi 1.68 M byte load 4,20,000
+     word load ban jate hain (chaar guna kam, aur poora row lagataar padha jata
+     hai). jis word me kuch hai usme purana byte loop hi chalta hai, is liye
+     mask, cnt aur ka/kb (badle hue pixel ka box) bilkul wahi rehte hain. mask
+     ka word view ek hi baar per flood banta hai (mu32 har call par naya view
+     banata hai, is liye yahan wo use nahi hota); array 4-byte aligned na ho to
+     purana byte loop chalta hai. */
+  if(mx0<=mx1&&ry>=MB[1]&&ry<=MB[3]){
+   if(MW){
+    let k=mx0;const e=mx1+1;
+    while(k<e&&((base+k)&3)){j=base+k;if(mask[j]){mask[j]=0;cnt++;if(ka<0)ka=k;kb=k}k++}
+    const n4=(e-k)>>2;let w=(base+k)>>>2;
+    for(let t=0;t<n4;t++,w++){if(MW[w]){const wb=w<<2;
+     for(let q=0;q<4;q++){const xk=(wb+q)-base;if(mask[wb+q]){mask[wb+q]=0;cnt++;if(ka<0)ka=xk;kb=xk}}}}
+    k+=n4<<2;
+    while(k<e){j=base+k;if(mask[j]){mask[j]=0;cnt++;if(ka<0)ka=k;kb=k}k++}
+   }else
    for(let k=mx0;k<=mx1;k++){j=base+k;if(mask[j]){mask[j]=0;cnt++;if(ka<0)ka=k;kb=k}}
+  }
   if(ka>=0){if(ka<cx0)cx0=ka;if(kb>cx1)cx1=kb;if(ry<cy0)cy0=ry;if(ry>cy1)cy1=ry}
   /* upar aur neeche wali row me span ke neeche har lagataar background run ka
      pehla pixel stack par. vis push ke waqt hi lagta hai, is liye ek pixel
@@ -3141,16 +3165,28 @@ const morph=g=>{push();
  const bxa=Math.max(1,MB[0]-1),bxb=Math.min(W-2,MB[2]+1),bya=Math.max(1,MB[1]-1),byb=Math.min(H-2,MB[3]+1);
  const bOK=bxa<=bxb&&bya<=byb;
  if(W>2&&H>2){
+  /* bheetar ke loop me har pixel par paanch byte load chalti thi (khud, baayen,
+     daayen, upar, neeche). baayen aur khud pichhle pixel ke "khud" aur "daayen"
+     hi hain, is liye ek sliding window rakha jata hai: l = o[i-1], c = o[i],
+     aur har step par sirf r = o[i+1], u = o[i-W], d = o[i+W] padhe jate hain -
+     paanch ki jagah teen load per pixel. (x aage badhne par naya c wahi hai jo
+     abhi r tha, aur naya l wahi jo abhi c tha.) max/min ka kram aur values
+     bilkul wahi hain, is liye mask byte-identical rehta hai. bxa>=1 aur
+     bxb<=W-2 hain, is liye row+bxa-1 aur i+1 hamesha andar hain. */
   if(g){
    for(let y=bya;bOK&&y<=byb;y++){const row=y*W;
-    for(let x=bxa;x<=bxb;x++){const i=row+x;let v=o[i],w;
-     w=o[i-1];if(w>v)v=w;w=o[i+1];if(w>v)v=w;w=o[i-W];if(w>v)v=w;w=o[i+W];if(w>v)v=w;
-     mask[i]=v}}
+    let l=o[row+bxa-1],c=o[row+bxa];
+    for(let x=bxa;x<=bxb;x++){const i=row+x;
+     const r=o[i+1],u=o[i-W],d=o[i+W];let v=c;
+     if(l>v)v=l;if(r>v)v=r;if(u>v)v=u;if(d>v)v=d;
+     mask[i]=v;l=c;c=r}}
   }else{
    for(let y=bya;bOK&&y<=byb;y++){const row=y*W;
-    for(let x=bxa;x<=bxb;x++){const i=row+x;let v=o[i],w;
-     w=o[i-1];if(w<v)v=w;w=o[i+1];if(w<v)v=w;w=o[i-W];if(w<v)v=w;w=o[i+W];if(w<v)v=w;
-     mask[i]=v}}}
+    let l=o[row+bxa-1],c=o[row+bxa];
+    for(let x=bxa;x<=bxb;x++){const i=row+x;
+     const r=o[i+1],u=o[i-W],d=o[i+W];let v=c;
+     if(l<v)v=l;if(r<v)v=r;if(u<v)v=u;if(d<v)v=d;
+     mask[i]=v;l=c;c=r}}}
   for(let x=1;x<W-1;x++){const i=x;mask[i]=m(m(o[i],o[i-1]),m(o[i+1],o[i+W]))}
   for(let x=1;x<W-1;x++){const i=(H-1)*W+x;mask[i]=m(m(o[i],o[i-1]),m(o[i+1],o[i-W]))}
   for(let y=1;y<H-1;y++){const row=y*W;let i=row;mask[i]=m(m(o[i],o[i+1]),m(o[i-W],o[i+W]));
@@ -3634,8 +3670,11 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
     literal 1.1.99, yaani bina bridge (browser/preview) page apni version ek build
     peeche batata tha. ab manifest ke saath sync; verifiable: bina bridge
     GlassCut.version -> "1.1.101" (base par "1.1.99").
-   1.1.102: sync rakha gaya - bina bridge GlassCut.version -> "1.1.102". */
- return v||'1.1.102'}catch(_){return '1.1.102'}})(),
+   1.1.102: sync rakha gaya - bina bridge GlassCut.version -> "1.1.102".
+   1.1.106: phir drift (manifest 1.1.105 par, ye literal 1.1.102) - teen build
+   se page apni version ek-do build peeche bata raha tha. ab sync hai; bina
+   bridge GlassCut.version -> "1.1.106". */
+ return v||'1.1.106'}catch(_){return '1.1.106'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
