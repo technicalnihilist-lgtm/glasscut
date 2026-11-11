@@ -6,10 +6,10 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 
 | | |
 |---|---|
-| **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 278 KB, Android 7.0+ |
+| **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 282 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.104 (versionCode 104) |
+| **Version** | 1.1.105 (versionCode 105) |
 
 ---
 
@@ -48,6 +48,12 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### Interactions that changed nothing still repainted the whole frame
+
+- **A tap that cannot change a pixel still ran a full render.** Four paths did it: the Wand tapped on a part that is already removed, the aspect ratio that is already selected, the background swatch that is already selected, and the "Blur original" tile when the background is already that blur. In each case the mask, the transform and the background were untouched, so the frame the render produced was byte-for-byte the one already on the canvas.
+- **The fix is the same test `save()` already uses** before it decides whether a render is needed: no pending fast preview frame (`raf`), no pending slider render (`rt`), the canvas holds a complete frame (`RFULL`) and compare is off. Only then is the render skipped — otherwise every one of those paths still does exactly what it did before, which is what keeps a pending hard-edge preview from surviving on screen. The Wand path additionally needs `fgSoft === feather`, because otherwise the next frame still has to rebuild `fgc`'s alpha from hard to soft (the same rule 1.1.47 established for `mver`). The swatch path also checks the button's `on` class, so a colour that came from the `#cCol` picker (no swatch marked) keeps the old route.
+- Verified for 1.1.105 (base 1.1.104 vs 1.1.105, headless Chrome, canvas-call counter on a 1400×1200 photo): **empty Wand tap — `clearRect` 529,884 px + subject `drawImage` 524,076 px → 0**; **same ratio re-tap — 2 `clearRect` (3,360,000 px) + 2 `drawImage` (1,048,152 px) → 0**; **same swatch re-tap — 2 `drawImage` 1,048,152 px → 1 (524,076 px)**; **"Blur original" re-tap — the click handler's synchronous work 186–200 ms → 0.1 ms, 8 `drawImage` (7,783,462 px) + 2 `clearRect` → 0**. Every one of those interactions leaves the canvas hash **exactly as it was** (that is the point — the skipped frame was identical), and the full 14-checkpoint flow (load/auto, wand tap, 3-move erase, undo, redo, Grow, Invert, blur background, colour background, Reset, Auto again, language toggle en→hi→en, window close/open, 320×240 reload + second save) is **identical at all 14 checkpoints, same 133,292-byte PNG and same 7,193-byte second save**, zero page errors, zero console errors. Save-vs-canvas pixel compare after load, stroke, undo, keep, restore, feather 6, a photo background and Reset is **0 differing bytes on all eight**.
 
 ### A dead JPEG surface, and a shell that rebuilt itself for no reason
 

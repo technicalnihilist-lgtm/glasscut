@@ -394,7 +394,11 @@ window.addEventListener('pageshow',idleCheck);
 try{window.addEventListener('deviceorientation',e=>{
  if(e.gamma==null&&e.beta==null)return;gyro=true;gx=(e.gamma||0)/28;gy=((e.beta||0)-45)/28;},{passive:true})}catch(_){}
 seg('tools',v=>{stopDraw();mode=v;toast(v==='wand'?'Photo par tap karo, same color hat jayega':v==='erase'?'Ungli se mitao':v==='keep'?'Object par ungli phero, wo kabhi nahi hatega':'Ungli se wapas lao')});
-seg('ratios',v=>{stopDraw();ratio=v;if(od){setSize();fullRender()}});
+/* 1.1.105: pehle se chuna hua ratio dobara dabane par setSize() + poora render
+   chalta tha aur nateeja byte par byte wahi hota (CW/CH, transform, mask - kuch
+   nahi badla). naapa (1400x1200, canvas-call counter): doosre tap par 1.68 M
+   clearRect + 1.68 M subject drawImage bekaar, ab 0; canvas hash wahi. */
+seg('ratios',v=>{stopDraw();if(v===ratio)return;ratio=v;if(od){setSize();fullRender()}});
 /* JPEG se koi doosra format chunne par flatten canvas (CW x CH ka poora surface,
    1400x1050 par 5.88 MB) dead ho jata hai - save() use sirf `fmt==='jpeg'` par
    chhuta hai. agle JPEG save par `if(!jcv)` use turant dobara bana leta hai, is
@@ -434,14 +438,28 @@ const noSw=()=>$$('.sw').forEach(s=>s.classList.remove('on'));
 (()=>{let h='<button class="sw" data-t="none" aria-label="Transparent" style="background:conic-gradient(#ccc 25%,#fff 0 50%,#ccc 0 75%,#fff 0) 0 0/12px 12px"></button><label class="sw" style="background:conic-gradient(#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)"><input type="color" id="cCol" value="#ff6a88"></label>';
  COLORS.forEach(c=>h+=`<button class="sw" data-t="color" data-v="${c}" style="background:${c}"></button>`);$('#cols').innerHTML=h;
  $('#grads').innerHTML=GRADS.map((g,i)=>`<button class="sw" data-t="grad" data-v="${i}" style="background:linear-gradient(135deg,${g[0]},${g[1]})"></button>`).join('')})();
-document.addEventListener('click',e=>{const b=e.target.closest('button.sw');if(!b)return;noSw();b.classList.add('on');bg={t:b.dataset.t,v:b.dataset.v};fullRender()});
+/* 1.1.105: wahi swatch dobara dabane par (background pehle se bilkul wahi) poora
+   render bekaar tha - mask, transform aur background sab pehle jaise. naapa
+   (1400x1200, canvas-call counter): doosre tap par clearRect 5,32,800 + background
+   ka drawImage + subject ka drawImage (kul ~1.05 M pixel) jaate the, ab 0; canvas
+   hash dono par wahi. class ka 'on' bhi check hota hai, taaki rang-input (#cCol) se
+   aaya hua rang jo kisi swatch par 'on' nahi hai, wo purana raasta hi chale. */
+document.addEventListener('click',e=>{const b=e.target.closest('button.sw');if(!b)return;
+ if(bg.t===b.dataset.t&&bg.v===b.dataset.v&&b.classList.contains('on'))return;
+ noSw();b.classList.add('on');bg={t:b.dataset.t,v:b.dataset.v};fullRender()});
 /* rang chunne wala input drag karte waqt har `input` event par ek poora render
    karta tha - ek hi frame me 20 event aayein to 20 poore render (20 x 1.47 M
    fillRect + 20 x subject ka composite), jabki screen par sirf aakhri rang dikhta
    hai. baaki saare sliders pehle se sched() se ek frame me ek render karte hain;
    ab rang bhi wahi karta hai. nateeja wahi rehta hai, bas ek frame baad. */
 $('#cCol').oninput=function(){noSw();this.parentElement.classList.add('on');bg={t:'color',v:this.value};sched(false)};
-$('#cBlur').onclick=need(()=>{noSw();bg={t:'blur'};bgVer++;fullRender();toast('Blur lag gaya')});
+/* 1.1.105: "Blur original" dobara dabane par bgVer badh kar poora blur dobara banta
+   tha (1400x1200 par bgb ka drawImage + subject, ~3.9 M pixel) halanki background
+   pehle se bilkul wahi tha. blur slider (P.bl) khud sched(false) se render karta hai,
+   is liye uske bad bhi koi frame chhoota nahi. naapa: doosre tap par 4 drawImage /
+   3.89 M pixel -> 0, canvas hash wahi. */
+$('#cBlur').onclick=need(()=>{if(bg.t==='blur'){toast('Blur lag gaya');return}
+ noSw();bg={t:'blur'};bgVer++;fullRender();toast('Blur lag gaya')});
 $('#cBlue').onclick=need(()=>{noSw();const r=$('#sBl');r.value=48;r.dispatchEvent(new Event('input',{bubbles:true}));
  bg={t:'bluetint'};bgVer++;
  /* portrait mode: sirf insaan, background ka koi tukda nahi */
@@ -3003,7 +3021,8 @@ cv.addEventListener('pointerdown',e=>{if(!od||drawing)return;
     button bhi erase stroke shuru kar deta tha (aur undo history me jagah leta tha) */
  if(e.button>0)return;e.preventDefault();refreshRect();const p=pt(e);
  if(mode==='wand'){if(p[0]<0||p[1]<0||p[0]>=W||p[1]>=H)return;
-  push();if(!wand(p[0],p[1])){recycle(undo.pop());abortPush();
+  push();let skipR=false;
+  if(!wand(p[0],p[1])){recycle(undo.pop());abortPush();
    /* kuch nahi hata (tap aise hisse par jo pehle se mitaya hua hai): mask ek byte
       bhi nahi badla, is liye mver badhane ka matlab tha layer() ka poora W*H upload
       dobara - 1400x1050 par 1.47 M alpha byte + 6 MB putImageData - bilkul bekaar,
@@ -3012,12 +3031,22 @@ cv.addEventListener('pointerdown',e=>{if(!od||drawing)return;
       banana zaroori hai. warna layer() apne cache par laut jata hai aur nateeja
       bilkul wahi rehta hai (canvas hash pehle jaisa). */
    if(feather>0&&fgSoft!==feather)mver++;
+   /* 1.1.105: jab fgc bhi pehle se sahi hai (fgSoft wahi feather, is liye upar
+      mver nahi badha) aur canvas par bhi poora frame hi pada hai, to neeche wala
+      fullRender ek byte bhi nahi badal sakta - mask badla nahi, transform/background
+      badle nahi. wahi shart jo save() apne render ke liye lagata hai (showOrig /
+      pending fast frame raf / pending slider render rt / RFULL). naapa (headless
+      Chrome, 1400x1200, canvas-call counter): aise tap par clearRect 5,29,884 px +
+      subject ka drawImage 5,24,076 px bekaar jaate the, ab 0 - aur canvas hash
+      dono par bilkul wahi. */
+   else if(!raf&&!rt&&RFULL&&!showOrig)skipR=true;
    toast('Kuch nahi hata. Tolerance badhao ya Wand use karo')}
   /* render() ki jagah fullRender(): slider ka fast preview rAF me pending reh jata
      hai aur wo is render ke baad chal kar soft frame ko hard edge se dhak deta tha
      (wahi bug jo 1.1.45 me buttons ke liye theek hua; auto() pehle se fullRender
-     use karta hai) */
-  fullRender();return}
+     use karta hai). jis tap ne kuch nahi badla aur jiske liye koi preview pending
+     bhi nahi hai, uske liye koi render hi nahi (upar skipR). */
+  if(!skipR)fullRender();return}
  push();strokeCh=0;stR=-1;drawing=true;pid=e.pointerId;lastX=p[0];lastY=p[1];try{cv.setPointerCapture(e.pointerId)}catch(_){}
  const rs=ringSize()+'px';ring.style.width=ring.style.height=rs;ring.style.display='block';ringAt(e.clientX,e.clientY);strokeCh+=stroke(p[0],p[1],p[0],p[1],p[2])});
 /* coalesced pointer samples: touchscreen 120-240 Hz par sample karti hai, par
