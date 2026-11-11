@@ -448,6 +448,17 @@ public class MainActivity extends Activity {
         final int n = b64.length();
         int i = from;
         long wrote = 0;
+        /* 1.1.108: har chunk pehle `b64.substring(i,end)` se decode hota tha - ek
+           naya 16 KB String (aur uske andar 16 KB ka char[]), yaani 6 MB payload
+           par ~380 chunk x 32 KB = ~12 MB bekaar garbage, theek us waqt jab save
+           sabse zyada memory maangta hai (WebView ke paas canvas abhi bhi hai).
+           ab ek hi byte window reuse hoti hai aur usi offset se decode hota hai.
+           Byte value bilkul wahi hai: base64 alphabet ASCII hai aur yahan sirf
+           ASCII whitespace aa sakta hai (dekho ws), is liye (byte)charAt(k) wahi
+           byte hai jo String.getBytes(US_ASCII) deta, aur decode ka nateeja
+           byte-identical (JVM par dono raaste 6 MB payload par 0 byte diff).
+           android.util.Base64.decode(byte[],int,int,int) API 8 se hai. */
+        final byte[] win = new byte[B64_CHUNK];
         while (i < n) {
             int end = Math.min(n, i + B64_CHUNK);
             if (end < n) {
@@ -469,7 +480,9 @@ public class MainActivity extends Activity {
                and then drops the bytes returns normally here - the API<29 path
                already checks its .tmp for exactly that (length() <= 0), and this
                counter is the same test for the MediaStore path. */
-            final byte[] buf = Base64.decode(b64.substring(i, end), Base64.DEFAULT);
+            final int len = end - i;
+            for (int k = 0; k < len; k++) win[k] = (byte) b64.charAt(i + k);
+            final byte[] buf = Base64.decode(win, 0, len, Base64.DEFAULT);
             os.write(buf);
             wrote += buf.length;
             i = end;

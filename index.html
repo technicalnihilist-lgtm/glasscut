@@ -2823,6 +2823,16 @@ if(i<N-nw){j=i+nw;if(!bg[j]&&MATCH[j]){bg[j]=1;st2[gp++]=(x<<20)|j}}}
     &&(y===0||(bg[i-nw]&&(x===0||bg[i-nw-1])&&(x===nw-1||bg[i-nw+1])))
     &&(y===nh-1||(bg[i+nw]&&(x===0||bg[i+nw-1])&&(x===nw-1||bg[i+nw+1]))))?1:0}}
  let hd=0,sp2=0,cnt=0;
+ /* 1.1.108: inner run ka mask-clear 32-bit word par. Background ka poora hissa
+    inner runs me aata hai, is liye ek Auto press par ~11 lakh mask byte ek-ek
+    kar ke padhe/ likhe jate the. ab ek word me chaar byte: khaali word par kuch
+    nahi hota, poora 255 wale word par ek hi store (0xFFFFFFFF - LE/BE ka farak
+    nahi padta) aur count 4, aur baaki word par purana byte loop. cnt sirf
+    "kitne byte sach me 255 se 0 hue" hai, is liye ginti bilkul wahi rehti hai
+    aur mask byte-identical (dekho naap). view har cutout par ek hi baar banta
+    hai; array 4-byte aligned na ho to purana byte loop chalta hai. */
+ const MWC=(mask&&mask.byteOffset===0&&mask.length>=4)
+  ?new Uint32Array(mask.buffer,0,mask.length>>>2):null;
  /* MB yahin nikalta hai: bg cell ka har pixel pakka 0 ho jata hai (inner seedha
     clear hota hai, baaki poora BFS se), is liye bacha hua non-zero sirf non-bg
     cells me ho sakta hai - unka full-res failaav hi naya MB hai. ye hisaab usi
@@ -2848,7 +2858,16 @@ if(i<N-nw){j=i+nw;if(!bg[j]&&MATCH[j]){bg[j]=1;st2[gp++]=(x<<20)|j}}}
     run[rn3*3]=xr[i];run[rn3*3+1]=xr[j];run[rn3*3+2]=k;rn3++;i=j}}
   for(let r=0;r<rn3;r++){const x0=run[r*3],x1=run[r*3+1],k=run[r*3+2];
    if(k===0){seen.fill(gen,base+x0,base+x1);
-    for(let x=x0;x<x1;x++){const i=base+x;if(mask[i]){mask[i]=0;cnt++}}}
+    if(MWC){let i=base+x0;const e=base+x1;
+     while(i<e&&(i&3)){if(mask[i]){mask[i]=0;cnt++}i++}
+     const n4=(e-i)>>2;let w=i>>>2;
+     for(let t=0;t<n4;t++,w++){const wd=MWC[w];
+      if(!wd)continue;
+      if(wd===0xFFFFFFFF){MWC[w]=0;cnt+=4}
+      else{const wb=w<<2;for(let q=0;q<4;q++){const bq=wb+q;if(mask[bq]){mask[bq]=0;cnt++}}}}
+     i+=n4<<2;
+     while(i<e){if(mask[i]){mask[i]=0;cnt++}i++}
+    }else for(let x=x0;x<x1;x++){const i=base+x;if(mask[i]){mask[i]=0;cnt++}}}
    else if(k===1){
     /* boundary run: yahan har pixel par do constant write (seen=gen, lev=0) aur
        ek queue entry hoti thi. dono constant hain aur BFS is scan ke baad hi
@@ -3727,8 +3746,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.106: phir drift (manifest 1.1.105 par, ye literal 1.1.102) - teen build
    se page apni version ek-do build peeche bata raha tha. ab sync hai; bina
    bridge GlassCut.version -> "1.1.106".
-   1.1.107: sync rakha gaya - bina bridge GlassCut.version -> "1.1.107". */
- return v||'1.1.107'}catch(_){return '1.1.107'}})(),
+   1.1.107: sync rakha gaya - bina bridge GlassCut.version -> "1.1.107".
+   1.1.108: sync rakha gaya - bina bridge GlassCut.version -> "1.1.108". */
+ return v||'1.1.108'}catch(_){return '1.1.108'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
