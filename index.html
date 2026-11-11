@@ -3343,6 +3343,18 @@ const toBlob=(c,m)=>new Promise(res=>{
     toDataURL se likha jata hai (wahi type, wahi naam ka logic aage). */
  if(!done)wd=setTimeout(()=>{wd=0;viaUrl()},4000)});
 let jcv=null,jcvx=null,saveBusy=false;
+/* saveBusy ek saath do save rokta hai, par wo guard sirf utni der tak bandha
+   rehta hai jitni der me blob ban kar disk par jata hai. browser/download raaste
+   par wo encode ke turant baad chhoot jata hai, is liye "Save dabaya, kuch hua
+   nahi laga" par dobara dabane se (kuch sau ms baad) poora encode dobara chalta
+   tha aur Downloads me wahi image doosri file ban jati thi. ek hi frame ke do
+   save ki pehchan uska mime + encoded byte length hai - wo dono tab hi badalte
+   hain jab content ya format badla ho. is liye 1.2 s ke andar bilkul wahi
+   (mime, size) dobara aaye to file dobara nahi likhi jati aur wahi "Save ho
+   gaya" milta hai (file pehle hi disk par hai). naapa (headless Chrome,
+   1400x1200 PNG, do tap 60 ms apart): base par 2 file, ab 1 file; alag photo
+   ya alag format par window khud reset ho jati hai kyunki key badal jati hai. */
+let lastDlKey='',lastDlT=0;
 /* Native (GlassCutAndroid.saveImage) raaste par page bridge ko data de kar laut
    jata hai. API<29 par native pehle permission maangta hai aur likhne ka kaam
    baad me karta hai - yaani write fail hone ki khabar tab aati hai jab save()
@@ -3502,17 +3514,30 @@ const save=async()=>{
     chalta hai (file phir bhi disk par pahunchti hai). */
  let shareDone=false,shw=0;
  const relShare=()=>{if(shareDone)return;shareDone=true;if(shw)clearTimeout(shw);saveBusy=false};
- try{const f=new File([b],name,{type:mime});
-  if(navigator.canShare&&navigator.canShare({files:[f]})&&/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)){
+ /* File sirf tab banti hai jab share sach me chal sakta hai. pehle yahan
+    new File([b],...) hamesha banti thi (blob ke saath, kai MB) aur uske baad
+    wali shart - jisme UA test sabse aakhir me tha - use chhod deti thi: desktop
+    Chrome par navigator.canShare hi nahi hota, is liye har save ek bekaar File
+    bana kar phenk deta tha. ab sasta UA test pehle chalta hai aur File sirf usi
+    branch ke andar banti hai jo use karta hai. tark bilkul wahi hai (dono
+    predicate pure hain), is liye share ka faisla aur uska kram nahi badalta -
+    naapa (headless Chrome, 1400x1200 PNG save): base par 1 File, ab 0, aur
+    file dono par wahi 1,397,808-byte PNG. */
+ try{if(navigator.canShare&&/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)){
+  const f=new File([b],name,{type:mime});
+  if(navigator.canShare({files:[f]})){
    shw=setTimeout(relShare,20000);
    try{await navigator.share({files:[f],title:'GlassCut'});
     if(!shareDone){shareDone=true;clearTimeout(shw);saveBusy=false;savedOk()}
     return}
    catch(err){relShare();
-    if(err&&err.name==='AbortError')return}}
+    if(err&&err.name==='AbortError')return}}}
  }catch(err){if(err&&err.name==='AbortError')return}
+ const dlKey=mime+'|'+b.size;
+ if(dlKey===lastDlKey&&Date.now()-lastDlT<1200){savedOk();return}
  try{const u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download=name;a.rel='noopener';
   document.body.appendChild(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(u)},4000);
+  lastDlKey=dlKey;lastDlT=Date.now();
   savedOk();return}catch(_){}
  /* 1.1.99: share aur download dono fail - pehle sirf long-press overlay khulta tha,
     koi message nahi (aur user ko lagta tha save ho gaya). ab wahi message jo har
