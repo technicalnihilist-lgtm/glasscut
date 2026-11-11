@@ -924,12 +924,35 @@ public class MainActivity extends Activity {
         });
     }
 
+    /**
+     * "Did the user grant it?" — kept free of Android types so the same body runs on
+     * a plain JVM (like isEmptyWrite / isStalePending).
+     *
+     * The old inline test was `res.length > 0 && res[0] == GRANTED`. The platform is
+     * allowed to answer a permission request with an empty (or absent) array when the
+     * request is interrupted - dialog dismissed by the system, activity recreated
+     * under it, another request already in flight. `res.length` on a null array is a
+     * NullPointerException on the UI thread, i.e. a crash on the API 24-28 save path
+     * (the only path that ever asks for a permission). A missing answer is not a
+     * grant, so it must fail the save like a denial does - the page still holds the
+     * encoded blob and shows its own long-press overlay.
+     */
+    static boolean permGranted(int[] res) {
+        return res != null && res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED;
+    }
+
     @Override
     public void onRequestPermissionsResult(int req, String[] perms, int[] res) {
+        /* super pehle, bilkul onActivityResult jaisa: jab tak ye call nahi hoti,
+           superclass (ActivityResultRegistry / fragment dispatch) ko permission ke
+           nateeje ki khabar hi nahi jati. onActivityResult me yahi galti 1.1.9x me
+           theek hui thi, par ye call site us waqt chhoot gayi thi - is app me ab
+           har result callback super ko aage bhejta hai. */
+        super.onRequestPermissionsResult(req, perms, res);
         if (req == REQ_WRITE) {
             final String d = pendingData, n = pendingName, m = pendingMime;
             pendingData = pendingName = pendingMime = null;
-            if (res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED) finishPendingSave(d, n, m);
+            if (permGranted(res)) finishPendingSave(d, n, m);
             else failPage();
         }
     }

@@ -1278,7 +1278,21 @@ const mbAdd=(x0,y0,x1,y1)=>{if(x0<MB[0])MB[0]=x0;if(y0<MB[1])MB[1]=y0;if(x1>MB[2
    dono number hain, is liye ab wahi do value seedhe number ki tarah rakhi aur
    compare hoti hain (soft na ho to fgSoft = -1), yaani render loop se ek aur
    per-frame allocation gaya. nateeja wahi: key bhi inhi do value se banti thi. */
-const maskAll255=()=>{const m=mask;for(let i=0,n=m.length;i<n;i++)if(m[i]!==255)return false;return true};
+/* mask ke poore-canvas byte loops (ye check aur Invert) 32-bit word par chalte hain: chaar byte ek load/ek store me. LE/BE ka
+   koi farak nahi padta - yahan byte ke andar ka matlab nahi dekha jata, sirf
+   "ye word poora 255 hai" / "~word" / "kaunse byte non-zero hain". mask ke saare
+   arrays byteOffset 0 par bante hain (new Uint8Array(W*H) / mask0.slice()), is
+   liye view seedha buffer par ban jata hai; koi bhi guard fail ho to purana
+   byte raasta chalta hai, is liye nateeja kabhi kam nahi padta. view har call par
+   naya banta hai (32 byte ka object, koi copy nahi) - cache karne se wo purane
+   mask ke 1.68 MB buffer ko pakde rakhta (undo / nayi photo ke baad zinda
+   memory, wahi galti jo DVA/DVB par nayi photo par theek ki gayi thi). */
+const mu32=()=>(mask&&mask.byteOffset===0&&mask.length>=4)
+ ?new Uint32Array(mask.buffer,0,mask.length>>>2):null;
+const maskAll255=()=>{const m=mask,u=mu32();
+ if(u){const n=u.length;for(let k=0;k<n;k++)if(u[k]!==0xFFFFFFFF)return false;
+  for(let i=n*4,e=m.length;i<e;i++)if(m[i]!==255)return false;return true}
+ for(let i=0,n=m.length;i<n;i++)if(m[i]!==255)return false;return true};
 const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
  if(mver===fgVer&&sv===fgSoft)return;
  /* feather 0 par softM use hi nahi hota, par mask badal chuka hota hai: yahan
@@ -2759,7 +2773,14 @@ if(i<N-nw){j=i+nw;if(!bg[j]&&MATCH[j]){bg[j]=1;st2[gp++]=(x<<20)|j}}}
   for(let r=0;r<rn3;r++){const x0=run[r*3],x1=run[r*3+1],k=run[r*3+2];
    if(k===0){seen.fill(gen,base+x0,base+x1);
     for(let x=x0;x<x1;x++){const i=base+x;if(mask[i]){mask[i]=0;cnt++}}}
-   else if(k===1){for(let x=x0;x<x1;x++){const i=base+x;seen[i]=gen;lev[i]=0;q[sp2++]=(x<<21)|i}}
+   else if(k===1){
+    /* boundary run: yahan har pixel par do constant write (seen=gen, lev=0) aur
+       ek queue entry hoti thi. dono constant hain aur BFS is scan ke baad hi
+       shuru hota hai, is liye wahi do value ek-ek memset se likhi jaati hain aur
+       per-pixel loop me sirf queue entry bachti hai. queue ka kram (x chadhta
+       hua) aur uske entries bilkul wahi, is liye mask/BFS byte-identical. */
+    seen.fill(gen,base+x0,base+x1);lev.fill(0,base+x0,base+x1);
+    for(let x=x0;x<x1;x++){const i=base+x;q[sp2++]=(x<<21)|i}}
    else{if(x0<mbx0)mbx0=x0;if(x1-1>mbx1)mbx1=x1-1;if(y<mby0)mby0=y;mby1=y}}}
  /* per-pixel closure allocation hata di: har pixel par ek naya function banta tha */
  /* har pixel ka rang ab ek hi baar padha jata hai: pehle near() har neighbour
@@ -3120,7 +3141,16 @@ const morph=g=>{push();
     poora raasta hi leta hai. */
  enforce();mver++;softTouch(MB[0],MB[1],MB[2],MB[3]);fullRender()};
 $('#bGrow').onclick=need(()=>morph(1));$('#bShr').onclick=need(()=>morph(0));
-$('#bInv').onclick=need(()=>{push();for(let i=0;i<mask.length;i++)mask[i]=255-mask[i];mbAll();enforce();mver++;softKill();fullRender()});
+$('#bInv').onclick=need(()=>{push();
+ /* Invert poore mask par ek byte loop tha (1.68 M iteration, 1400x1200). ab wahi
+    kaam 32-bit word par: 0xFFFFFFFF - w koi borrow nahi banata, wo poora word ka
+    bitwise NOT hai, is liye har byte alag-alag 255-b banta hai - bilkul wahi
+    nateeja. length 4 ka multiple na ho to aakhri 0..3 byte purane raaste se. */
+ const m=mask,u=mu32();
+ if(u){const n=u.length;for(let k=0;k<n;k++)u[k]=(0xFFFFFFFF-u[k])>>>0;
+  for(let i=n*4,e=m.length;i<e;i++)m[i]=255-m[i]}
+ else for(let i=0;i<m.length;i++)m[i]=255-m[i];
+ mbAll();enforce();mver++;softKill();fullRender()});
 /* Smooth ka box blur bhi sirf MB+2 tak: radius 2 ka blur MB se do pixel door ke
    bahar har jagah 0 deta hai, aur 0 par (0-128)*3+128 clamp hokar 0 hi banta hai -
    yaani wahan mask pehle se 0 hai, likhne ki zaroorat nahi. */
@@ -3538,8 +3568,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
     1.1.101: wahi drift dobara ho gaya tha - manifest 1.1.100 par tha aur ye
     literal 1.1.99, yaani bina bridge (browser/preview) page apni version ek build
     peeche batata tha. ab manifest ke saath sync; verifiable: bina bridge
-    GlassCut.version -> "1.1.101" (base par "1.1.99"). */
- return v||'1.1.101'}catch(_){return '1.1.101'}})(),
+    GlassCut.version -> "1.1.101" (base par "1.1.99").
+   1.1.102: sync rakha gaya - bina bridge GlassCut.version -> "1.1.102". */
+ return v||'1.1.102'}catch(_){return '1.1.102'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par

@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 278 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.101 (versionCode 101) |
+| **Version** | 1.1.102 (versionCode 102) |
 
 ---
 
@@ -48,6 +48,18 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### Whole-mask byte loops still walked one byte at a time
+
+- **The three loops that touch every mask pixel ran a byte per iteration, and two of them wrote the same constant value per pixel.** `layer()` asks "is the whole mask 255?" before every full feather-blur rebuild; Invert flips all `W*H` bytes; and `cutout()`'s full-resolution pass writes `seen = generation` and `lev = 0` for every pixel of every background run it queues. All three are pure per-byte work with no byte-internal meaning, so they now run on 32-bit words: `w !== 0xFFFFFFFF` for the check, `0xFFFFFFFF - w` for the flip (that subtraction borrows nothing — it *is* the word's bitwise NOT, so each byte becomes exactly `255 - b`), and two `memset`s (`seen.fill`, `lev.fill`) instead of two stores per pixel.
+- Verified for 1.1.102 (base 1.1.101 vs 1.1.102, headless Chrome): in a microbenchmark on a 1400×1200 mask the all-255 scan went **2.1 ms → 0.5 ms** and Invert **2.1 ms → 0.6 ms**; the boundary-run writes went **2.0 ms → 1.2 ms** per 480,000 pixels. Every one of them is byte-identical — mask diff 0 over 1,680,000 bytes, `cnt` 439,780 on both, `seen`/`lev` diff 0 — because `mask.length` is not a multiple of 4 only for the last 0–3 bytes, which keep the old byte path, and the queue is still filled in the same ascending-`x` order. End to end, the JS stages of a cutout (`match + pass1 + pass2 + islands + snap`, minimum of 15 Auto presses on 1400×1200) went **27.2 / 29.0 ms → 22.5 / 21.7 ms**. The view is built per call, not cached: a cached `Uint32Array` would keep the previous mask's 1.68 MB buffer alive after undo or a new photo — the same pinning that was fixed for `DVA`/`DVB`.
+- The 22-checkpoint flow (load/auto, wand, 14-move erase, undo, redo, Grow/Shrink/Smooth/Invert ×2, blur background, gradient background, Reset, colour background, PNG to disk, language toggle, window close/open, 320×240 reload + second save) is **identical at all 22 checkpoints with the same 44,890-byte PNG (sha1 `29ad73ec92…`) and the same 3,018-byte second save**, zero page errors, zero console errors.
+
+### The permission result never reached the superclass, and could NPE
+
+- **`onRequestPermissionsResult` was the one result callback in the shell that did not forward to `super`** — `onActivityResult` was fixed for exactly this earlier, and this call site was missed, so `ActivityResultRegistry` / fragment dispatch never heard about a storage-permission answer.
+- **Its grant test was `res.length > 0 && res[0] == GRANTED`.** The platform may answer an interrupted request with an empty — or absent — array, and `res.length` on a null array is a `NullPointerException` on the UI thread, i.e. a crash on the API 24–28 save path (the only path that ever asks for a permission).
+- Verified for 1.1.102: the test is now the static `permGranted(int[] res)` (kept free of Android types, like `isEmptyWrite` / `isStalePending`, so the same body runs on a plain JVM). The JVM test passes — `null → false`, empty → `false`, `DENIED → false`, `GRANTED → true` — and the old expression throws `NullPointerException` on `null` in the same test. A missing answer now fails the save exactly like a denial, so the page still shows its own long-press overlay.
 
 ### Auto re-downscaled the same photo on every press
 
