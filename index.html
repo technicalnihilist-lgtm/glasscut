@@ -460,7 +460,20 @@ $('#cCol').oninput=function(){noSw();this.parentElement.classList.add('on');bg={
    3.89 M pixel -> 0, canvas hash wahi. */
 $('#cBlur').onclick=need(()=>{if(bg.t==='blur'){toast('Blur lag gaya');return}
  noSw();bg={t:'blur'};bgVer++;fullRender();toast('Blur lag gaya')});
-$('#cBlue').onclick=need(()=>{noSw();const r=$('#sBl');r.value=48;r.dispatchEvent(new Event('input',{bubbles:true}));
+/* "Blue blur" dobara dabane par pehle wahi sab kuch hota tha jo pehla tap karta hai:
+   mask ko mask0 par lauta kar poora cutout (1400x1200 par ~700 ms ka long task),
+   phir poora render, aur undo history me ek step. par jab tak mask me kuch nahi
+   badla (mver wahi), mask pehle se hi usi cutout ka nateeja hai, is liye dobara
+   chalane se nateeja byte par byte wahi aata hai. BTK pichhle safal press ka
+   signature hai (photo ka PTOK, tolerance, aur us waqt ka mver); teeno same hon
+   aur state pehle se portrait wali ho (bg bluetint, keepObj 0, blur 48) to sirf
+   wahi message dikhta hai jo pehla press dikhata tha. koi bhi cheez badli ho
+   (nayi photo, tolerance, undo, erase, slider) to poora purana raasta chalta hai. */
+let BTK=null;
+$('#cBlue').onclick=need(()=>{
+ if(bg.t==='bluetint'&&keepObj===0&&P.bl===48&&BTK&&BTK.ptok===PTOK&&BTK.tol===tol&&BTK.mv===mver){
+  toast('Blue blur lag gaya - sirf insaan dikhega');return}
+ noSw();const r=$('#sBl');r.value=48;r.dispatchEvent(new Event('input',{bubbles:true}));
  bg={t:'bluetint'};bgVer++;
  /* portrait mode: sirf insaan, background ka koi tukda nahi */
  keepObj=0;const kk=$('#tKeep');if(kk)kk.setAttribute('aria-checked','false');
@@ -469,7 +482,7 @@ $('#cBlue').onclick=need(()=>{noSw();const r=$('#sBl');r.value=48;r.dispatchEven
     Reset/Blue-blur ab naya 1.3 MB buffer banane ke bajaye wahi reuse karte hain) */
  const om=mask;if(om&&om!==mask0&&om.length===W*H&&POOL.length<2)POOL.push(om);
  const nm=bufOf();nm.set(mask0);mask=nm;mbAll();mver++;softKill();try{cutout()}catch(_){}
- fullRender();toast('Blue blur lag gaya - sirf insaan dikhega')});
+ fullRender();BTK={ptok:PTOK,tol:tol,mv:mver};toast('Blue blur lag gaya - sirf insaan dikhega')});
 $('#bBgImg').onclick=()=>$('#fBg').click();
 /* "Apni photo" wala background cover() se poore canvas par ek hi drawImage se aata
    hai, is liye agar uske har pixel ka alpha 255 hai to wo canvas ko kinare se
@@ -1311,6 +1324,27 @@ const maskAll255=()=>{const m=mask,u=mu32();
  if(u){const n=u.length;for(let k=0;k<n;k++)if(u[k]!==0xFFFFFFFF)return false;
   for(let i=n*4,e=m.length;i<e;i++)if(m[i]!==255)return false;return true}
  for(let i=0,n=m.length;i<n;i++)if(m[i]!==255)return false;return true};
+/* mask ke saare byte ek jaise hain? 255 = kuch nahi hata (photo load hote hi, ya
+   Reset ke baad), 0 = sab hata. in dono haalat me Grow / Shrink / Smooth ka nateeja
+   bilkul wahi mask hota hai (255 ka max/min/blur 255 hi rehta hai, 0 ka 0 - blur ke
+   kinare par clamp padosi pixel dohrata hai, is liye constant 255 ka window jod
+   255*n hi rehta hai). warna -1.
+   pehle in teeno buttons par yahi mask copy (1.68 MB) + poora MB scan + feather ka
+   poora blur + poora canvas render chalta tha, aur undo history me ek khaali step
+   bhi jud jata tha. naapa (headless Chrome, 1400x1200, photo load ke turant baad
+   aur Reset ke baad): Grow 185 ms, Smooth 184 ms, Shrink 233 ms - teeno par mask ek
+   byte nahi badla, ab ~1 ms. 32-bit word se compare hota hai (chaar byte ek saath),
+   is liye aam (non-uniform) mask par ye check pehle hi byte par laut jata hai. */
+const maskUniform=()=>{const m=mask;if(!m||!m.length)return -1;
+ const u=mu32();
+ if(u){const n=u.length;let w=u[0];
+  if(w!==0&&w!==0xFFFFFFFF)return -1;
+  for(let k=1;k<n;k++)if(u[k]!==w)return -1;
+  /* aakhri 0..3 byte jo poore word me nahi aate */
+  const v=w&255;for(let i=n*4,e=m.length;i<e;i++)if(m[i]!==v)return -1;
+  return v}
+ const v=m[0];if(v!==0&&v!==255)return -1;
+ for(let i=1,n=m.length;i<n;i++)if(m[i]!==v)return -1;return v};
 const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
  if(mver===fgVer&&sv===fgSoft)return;
  /* feather 0 par softM use hi nahi hota, par mask badal chuka hota hai: yahan
@@ -3156,7 +3190,15 @@ window.addEventListener('pagehide',()=>{if(drawing)end()});
    Math.min builtin calls. ab copy ek scratch buffer me hoti hai (nayi photo par
    chhod diya jata hai) aur andar ka hissa seedha compare karta hai. */
 let MBUF=null;
-const morph=g=>{push();
+/* ek hi shart jo save() aur Wand ke khaali tap par pehle se lagi hui hai: canvas par
+   poora frame pada hai (koi fast preview raf / slider render rt nahi, RFULL,
+   compare off). us haalat me uniform mask par morph kuch bhi badal nahi sakta, is
+   liye na copy, na scan, na render - aur undo history me khaali step bhi nahi.
+   keepDirty ho to enforce() mask ko wapas laa sakta hai, is liye wo raasta chhua
+   nahi jata (purana poora kaam hi chalta hai). */
+const morph=g=>{
+ if(!keepDirty&&!raf&&!rt&&RFULL&&!showOrig&&maskUniform()>=0)return;
+ push();
  if(!MBUF||MBUF.length!==mask.length)MBUF=new Uint8Array(mask.length);
  const o=MBUF,m=g?Math.max:Math.min;o.set(mask);
  /* bheetar ka scan sirf MB+1 tak - box ke bahar mask (aur uske chaaron padosi)
@@ -3227,7 +3269,11 @@ $('#bInv').onclick=need(()=>{push();
 const SMOOTH_LUT=(()=>{const t=new Uint8Array(256);
  for(let i=0;i<256;i++){const v=(i-128)*3+128;t[i]=v<0?0:v>255?255:v}
  return t})();
-$('#bSmo').onclick=need(()=>{push();
+$('#bSmo').onclick=need(()=>{
+ /* uniform mask (255 ya 0) par Smooth ka nateeja bilkul wahi mask hai - dekho
+    maskUniform. pehle yahan poora blur + render + ek khaali undo step chalta tha. */
+ if(!keepDirty&&!raf&&!rt&&RFULL&&!showOrig&&maskUniform()>=0)return;
+ push();
  const bxa=Math.max(0,MB[0]-2),bxb=Math.min(W-1,MB[2]+2),bya=Math.max(0,MB[1]-2),byb=Math.min(H-1,MB[3]+2);
  if(bxb>=bxa&&byb>=bya){
   /* 1.1.89: Smooth ka blur nateeja pehle BLS.o me jata tha - ek poora W*H scratch
@@ -3251,7 +3297,14 @@ $('#bSmo').onclick=need(()=>{push();
    jata hai aur bufOf() use hi lauta deta hai - ek allocation kam, aur uska 1.3 MB
    zero-fill bhi. nateeja wahi: nm.set(mask0) purane array par bhi bilkul wahi
    value likhta hai. */
-$('#bRst').onclick=need(()=>{push();
+$('#bRst').onclick=need(()=>{
+ /* mask pehle se bilkul wahi hai jo Reset banata hai (photo load ke turant baad ka
+    aam Reset, ya dobara Reset): pehle yahan 1.68 MB snapshot + 1.68 MB mask copy +
+    poora canvas render (~64 ms) chalta tha aur undo history me ek khaali step jud
+    jata tha, halanki mask ek byte nahi badalta. diffBox yahi predicate hai jo
+    undo/redo use karta hai; barabar hone par null lauta deta hai. */
+ if(!keepDirty&&!raf&&!rt&&RFULL&&!showOrig&&diffBox(mask,mask0)===null){toast('Reset ho gaya');return}
+ push();
  const om=mask;if(om&&om!==mask0&&om.length===W*H&&POOL.length<2)POOL.push(om);
  const nm=bufOf();nm.set(mask0);mask=nm;mbAll();enforce();mver++;softKill();fullRender();toast('Reset ho gaya')});
 const cmp=$('#bCmp');
@@ -3673,8 +3726,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.102: sync rakha gaya - bina bridge GlassCut.version -> "1.1.102".
    1.1.106: phir drift (manifest 1.1.105 par, ye literal 1.1.102) - teen build
    se page apni version ek-do build peeche bata raha tha. ab sync hai; bina
-   bridge GlassCut.version -> "1.1.106". */
- return v||'1.1.106'}catch(_){return '1.1.106'}})(),
+   bridge GlassCut.version -> "1.1.106".
+   1.1.107: sync rakha gaya - bina bridge GlassCut.version -> "1.1.107". */
+ return v||'1.1.107'}catch(_){return '1.1.107'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
