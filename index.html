@@ -364,7 +364,18 @@ slider('sO',v=>{const b=v/100;root.setProperty('--o',b);root.setProperty('--spri
 slider('sG',v=>root.setProperty('--ga',(.04+v/100*.46).toFixed(3)));
 slider('sGB',v=>root.setProperty('--gb',v+'px'));
 slider('sS',v=>{P.s=v;qr()});slider('sX',v=>{P.x=v;qr()});slider('sY',v=>{P.y=v;qr()});slider('sL',v=>{P.line=v;qr()});
-slider('sOp',v=>{P.op=v;sched(false)});slider('sBl',v=>{P.bl=v;sched(false)});
+slider('sOp',v=>{P.op=v;sched(false)});
+/* 1.1.111: Blur Amount sirf do backgrounds par asar dalta hai - 'Blur original'
+   aur 'Blue blur' (P.bl sirf blurBg() padhta hai, aur blurBg sirf inhi do par
+   chalta hai). transparent / rang / gradient / "Apni photo" background par P.bl
+   kisi bhi draw call me nahi jata, phir bhi har input step ek poora render
+   chalata tha: partBox P.bl!==PRVbl par null lauta deta hai, is liye PART bhi
+   nahi banta aur poora canvas clearRect + subject ka composite (~1.68 M pixel)
+   bekaar jata hai. ab value likhi jati hai (blur background chunne par wahi
+   value use hoti hai - blurBg apni cache key P.bl par khud naya blur banata hai)
+   par render sirf tab hota hai jab background sach me blur ho. canvas hash dono
+   par bilkul wahi. */
+slider('sBl',v=>{P.bl=v;if(bg.t==='blur'||bg.t==='bluetint')sched(false)});
 slider('sDp',v=>{P.depth=v;sched(false)});slider('sTt',v=>{P.tilt=v;sched(false)});
 slider('sM',v=>{P.motion=v;startMotion()});
 /* 4D Motion ka timer har 60 ms par ek poora render karta tha - chahe page hidden ho,
@@ -428,7 +439,14 @@ const applyLang=(l,init)=>{lang=l;const t=langTable(),en=l==='en';
     pehle se wahi ho to likhne ki zaroorat nahi */
  if(!init&&savedLang!==l){savedLang=l;try{localStorage.setItem('gc-lang',l)}catch(_){}}
  if(!init)toast(en?'Language: English':'Language: Hinglish')};
-seg('langs',v=>applyLang(v));
+/* 1.1.111: pehle se chuni hui language dobara dabane par applyLang poore document
+   ke har text node par nodeValue likhta tha (langTable me ~330 entry) aur wahi
+   toast dobara dikhata tha, halanki ek byte badalne wala nahi tha - yeh wahi
+   "no-op input" raasta hai jo ratio (1.1.105), background swatch, "Blur original"
+   aur "Blue blur" par pehle theek hua. ab sirf wahi toast chalta hai jo pehle
+   chalta tha (message bilkul wahi, tr() ke through), text nodes ko haath nahi
+   lagaya jata. dikhne me ek pixel nahi badalta. */
+seg('langs',v=>{if(v===lang){toast(v==='en'?'Language: English':'Language: Hinglish');return}applyLang(v)});
 try{const sl=localStorage.getItem('gc-lang');if(sl){savedLang=sl;applyLang(sl,true)}}catch(_){}
 sw('tFlip',v=>{P.f=v?-1:1;sched(false)});sw('tSh',v=>{P.sh=v?1:0;sched(false)});
 sw('tKeep',v=>{keepObj=v?1:0;toast(v?'Objects bachaye jayenge':'Sirf main object rahega')});
@@ -3805,8 +3823,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.107: sync rakha gaya - bina bridge GlassCut.version -> "1.1.107".
    1.1.108: sync rakha gaya - bina bridge GlassCut.version -> "1.1.108".
    1.1.109: sync rakha gaya - bina bridge GlassCut.version -> "1.1.109".
-   1.1.110: sync rakha gaya - bina bridge GlassCut.version -> "1.1.110". */
- return v||'1.1.110'}catch(_){return '1.1.110'}})(),
+   1.1.110: sync rakha gaya - bina bridge GlassCut.version -> "1.1.110".
+   1.1.111: sync rakha gaya - bina bridge GlassCut.version -> "1.1.111". */
+ return v||'1.1.111'}catch(_){return '1.1.111'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
