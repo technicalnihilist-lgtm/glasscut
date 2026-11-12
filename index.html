@@ -409,7 +409,22 @@ seg('tools',v=>{stopDraw();mode=v;toast(v==='wand'?'Photo par tap karo, same col
    chalta tha aur nateeja byte par byte wahi hota (CW/CH, transform, mask - kuch
    nahi badla). naapa (1400x1200, canvas-call counter): doosre tap par 1.68 M
    clearRect + 1.68 M subject drawImage bekaar, ab 0; canvas hash wahi. */
-seg('ratios',v=>{stopDraw();if(v===ratio)return;ratio=v;if(od){setSize();fullRender()}});
+/* 1.1.113: 1.1.105 me "pehle se chuna hua wahi ratio dobara dabane" ka raasta ruk
+   gaya tha, par do *alag* ratio jab ek hi canvas size dete hain wo raasta bacha hua
+   tha. aisa aam hai: 1400x1400 photo par Original aur 1:1 dono 1400x1400 dete hain,
+   1000x1000 par bhi wahi, aur 1120x1400 photo par Original aur 4:5 dono 1120x1400.
+   us haalat me setSize() ka koi pixel nahi badalta (cv.width/height wahi hain, is
+   liye surface bhi wahi rehti hai), transform xf() bhi CW/CH par hi depend karta
+   hai, aur background/depth/mask sab wahi - yaani agla frame pichhle frame ke
+   bilkul barabar hota hai. phir bhi poora render chalta tha: 1400x1400 par
+   19,60,000 px ka clearRect + background ka fillRect + subject ka composite.
+   ab CW/CH badle hi na to render chhoda jata hai. setSize ke apne cache resets
+   (bgVer/THas/SOK/PART) waise hi chalte hain, is liye agla asli render poora hi
+   hota hai - sirf ye ek bekaar frame bachta hai. naapa (headless Chrome, square
+   photo, canvas-call counter): Original -> 1:1 par 19,60,000 clearRect px +
+   19,60,000 fillRect px + 5,45,436 drawImage px -> 0 call / 0 px, canvas hash
+   dono par bilkul wahi. */
+seg('ratios',v=>{stopDraw();if(v===ratio)return;ratio=v;if(od){const oc=CW,oh=CH;setSize();if(CW!==oc||CH!==oh)fullRender()}});
 /* JPEG se koi doosra format chunne par flatten canvas (CW x CH ka poora surface,
    1400x1050 par 5.88 MB) dead ho jata hai - save() use sirf `fmt==='jpeg'` par
    chhuta hai. agle JPEG save par `if(!jcv)` use turant dobara bana leta hai, is
@@ -2104,7 +2119,37 @@ const sched=fast=>{if(fast)fastReq=true;if(!raf)raf=requestAnimationFrame(onRaf)
    usi canvas par chadh jata hai (hard edge, outline ke sirf 8 shift). yaani screen par
    wahi reh jata tha jo file me save nahi hota. ab poora render aate waqt pending fast
    frame cancel ho jata hai. */
-const qr=()=>{sched(true);clearTimeout(rt);rt=setTimeout(()=>{rt=0;if(raf){cancelAnimationFrame(raf);raf=0;fastReq=false}render(false)},160)};
+/* 1.1.113: fast frame aur poora render har haalat me alag nahi hote. `fast` sirf
+   teen jagah asar dalta hai - layer() ka soft (feather>0) raasta, layer() ka
+   SDIRT upload, aur drawSubj ka outline ring (n=8 badle 16). partBox() me `fast`
+   ab padha hi nahi jata (1.1.93), aur baaki poora render (clear, background,
+   depth, fgc ka seedha draw) dono par bilkul wahi hai. yaani jab feather 0 ho,
+   koi outline na ho (P.line<=0) aur koi pending stroke box (SDIRT) na ho, to
+   rAF wala fast frame poore render se byte par byte wahi frame banata hai.
+   Scale / Position X / Position Y slider inhi teeno ki default haalat me chalte
+   hain, is liye unke har step par 160 ms baad wala poora render ek *dusra* frame
+   likhta tha jo pehle se pada frame ke bilkul barabar hota tha.
+   naapa (headless Chrome, 1400x1200, canvas-call counter, ek step): Scale par
+   raf frame 60,77,078 px aur uske baad t160 frame 74,12,002 px - dono ka canvas
+   hash bilkul wahi (f61c3762), yaani 74,12,002 px poora bekaar.
+   ab wo deferred render sirf tab chalta hai jab fast frame sach me kam pad sakta
+   hai, ya jab wo abhi tak chala hi na ho (throttled rAF - us haalat me pehle
+   jaisa cancel + poora render, taaki screen kabhi purani na reh jaye).
+   "kam pad sakta hai" ki theek shart: feather>0 (layer ka soft blur sirf poore
+   render par chalta hai) ya P.line>0 (outline ring fast par 8 shift, poore par
+   16). inke alawa layer() ka upload bhi dono par ek hi hai - jab mver===fgVer
+   aur fgSoft===-1 ho to layer() sabse pehle hi laut jata hai, is liye DIRT
+   (fast) aur SDIRT (poora) ka farak hi nahi padta; warna mask sach me badla
+   hua hai aur poora render zaroori hai (is liye mver/fgSoft ki shart). SDIRT
+   ko akela dekhna galat tha - cutout/stamp2 use chhod jate hain aur layer()
+   us cache-hit par use consume bhi nahi karta, is liye wo hamesha set milta
+   aur ye poora faayda band kar deta.
+   RFULL ko jaan-boojh kar false hi chhoda jata hai: save() aur wand ka skip
+   guard apna poora render tab hi chhodte hain jab RFULL sach me true ho, is
+   liye ek extra render to hota hai par galat frame kabhi save nahi hota. */
+const qr=()=>{sched(true);clearTimeout(rt);rt=setTimeout(()=>{rt=0;
+ if(feather<=0&&P.line<=0&&mver===fgVer&&fgSoft===-1&&!raf&&!fastReq)return;
+ if(raf){cancelAnimationFrame(raf);raf=0;fastReq=false}render(false)},160)};
 /* fullRender = "poora render, aur uske baad koi purana fast frame na aaye".
    slider ka fast preview rAF me pending reh jata hai; agar usi frame me koi
    button dab jaye (Grow/Shrink/Smooth/Invert/Reset/Undo/Redo/Auto/background)
@@ -3843,8 +3888,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.109: sync rakha gaya - bina bridge GlassCut.version -> "1.1.109".
    1.1.110: sync rakha gaya - bina bridge GlassCut.version -> "1.1.110".
    1.1.111: sync rakha gaya - bina bridge GlassCut.version -> "1.1.111".
-   1.1.112: sync rakha gaya - bina bridge GlassCut.version -> "1.1.112". */
- return v||'1.1.112'}catch(_){return '1.1.112'}})(),
+   1.1.112: sync rakha gaya - bina bridge GlassCut.version -> "1.1.112".
+   1.1.113: sync rakha gaya - bina bridge GlassCut.version -> "1.1.113". */
+ return v||'1.1.113'}catch(_){return '1.1.113'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par

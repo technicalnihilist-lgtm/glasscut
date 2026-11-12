@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 286 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.112 (versionCode 112) |
+| **Version** | 1.1.113 (versionCode 113) |
 
 ---
 
@@ -48,6 +48,12 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### A deferred render that painted the frame already on screen, and a ratio switch that repainted an identical canvas
+
+- **Scale / Position sliders painted their frame twice.** `qr()` gives a slider a cheap rAF preview and then a full render 160 ms later, so that a throttled rAF can never leave a hard-edge preview on screen. But a *fast* frame and a full render are not always different: `fast` reaches only three places — `layer()`'s soft (feather > 0) path, `layer()`'s `SDIRT` upload, and `drawSubj`'s outline ring (8 shifts instead of 16). `partBox()` no longer reads it at all (1.1.93), and the clear, background, depth and the direct subject draw are identical either way. So with **Edge Softness at 0** (the crisp-edge setting, and the slider's own minimum) and no outline, the preview frame is already byte-for-byte what the full render produces — and the deferred render painted it a second time. The deferred render now runs only when the preview really can fall short (feather > 0, outline on, or a mask change still pending in `mver`/`fgSoft`) or when the preview has not run yet (throttled rAF), and then exactly as before. `RFULL` is deliberately left `false`, so `save()` and the wand's skip guard still do their own full render rather than trusting the flag.
+- **Two different ratios that give the same canvas repainted an identical frame.** 1.1.105 stopped a *repeated* ratio from re-rendering, but `Original → 1:1` on a square photo (or `Original → 4:5` on a 1120×1400 one) is a different ratio that lands on the same `CW`/`CH`. `setSize()` changes no pixel in that case, `xf()` depends only on `CW`/`CH`, and the mask and background are untouched — the next frame was the previous frame exactly. The full render is now skipped when `CW`/`CH` did not change; `setSize()`'s own cache resets (`bgVer`/`THas`/`SOK`/`PART`) still run, so the next real render is a full one.
+- Verified for 1.1.113 (base 1.1.112 vs 1.1.113, headless Chrome, pixel-area counters on `CanvasRenderingContext2D.prototype`): at Edge Softness 0 a **Scale** step goes **25,99,840 px / 4 calls → 12,99,920 px / 2 calls (−50%)**, **Left/Right** 26,05,156 → 13,81,034 px (−47%) and **Size** 23,66,998 → 12,24,122 px — with the canvas hash **identical** at every step. The guard is precise, not blanket: with **White Outline 5** the same step is unchanged (2,14,00,037 px on both, the 16 ring shifts are real work) and with **Edge Softness 3** it is unchanged too (35,56,112 px on both). A ratio switch that keeps the canvas size goes **12,02,964 px / 2 calls → 0 px / 0 calls** with the hash identical, while a real ratio change still renders (21,19,404 and 25,11,404 px). Nothing else moved: two full flows are **identical at every checkpoint** — 55 canvas hashes plus five saved files (same SHA-1 and same byte size) on a 1400×1200 JPEG, a 1400×1400 JPEG, a 700×525 PNG and a 1×1 PNG — covering load + auto, Wand, erase, undo, redo, Grow, Shrink, Smooth, Invert ×2, Reset, Auto again, colour, gradient, "Blur original" ×2, "Blue blur" ×2, transparent, 1:1, 9:16, Original, Edge Softness 0 → 4, White Outline 5 → 0, the Scale/Left-Right pair at feather 0, opacity, depth, tilt, Blur Amount 20/70/0, language en/hi, PNG + JPG + WEBP saves, window close/open, a second photo and a 1×1 photo — plus 9 interaction edge cases (close, trim, pause and save in the middle of a stroke; a two-finger stroke; a 14-stroke undo storm) and the 1×1 / 1400×3 / 6000×4000 / rapid-double-load suite, all with **zero page errors and zero console errors**.
 
 ### Two full-canvas clears on every photo load, and Escape that could not close the save overlay
 
