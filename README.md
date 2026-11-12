@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 286 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.115 (versionCode 115) |
+| **Version** | 1.1.116 (versionCode 116) |
 
 ---
 
@@ -48,6 +48,12 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### A full alpha upload that wrote the photo's own alpha back over itself
+
+- **The first upload of an opaque photo rewrote alpha 255 over alpha 255, then uploaded 6.7 MB.** `layer()` fills the subject canvas by writing the mask into the photo's alpha channel and pushing the whole `ImageData` with `putImageData`. On a photo with no transparency and nothing removed yet — every fresh photo load, and every Reset — that mask *is* the photo's own alpha, so the 1.68 M-pixel loop was a no-op and the upload was a byte-for-byte copy of a canvas that already held the same pixels.
+- **Now it is one `drawImage` from `origc`.** The shortcut is taken only when `!part2 && photoOpaque && !origStale && origc` is `W×H` and `maskAll255()`; a normal (non-uniform) mask bails on the first 32-bit word, and a transparent photo fails `photoOpaque` before the scan even runs, so every other frame is untouched.
+- Verified for 1.1.116 (base 1.1.115 vs 1.1.116, headless Chrome, 1400×1200, `putImageData` patched with a pixel counter, median of 5 runs): photo load goes **2 calls / 18,30,192 px / 31.7 ms → 1 call / 1,50,192 px / 4.2 ms** (−91.8% pixels, −86.8% time), paid for by one extra `drawImage` (3 → 4 calls, total `drawImage` time 36.6 → 26.6 ms); Reset after an erase stroke goes **1 call / 16,80,000 px → 0**. Nothing else moved: all 20 canvas checkpoints of the flow are byte-identical to 1.1.115 (load + auto, Auto again, Wand, 14-move erase, undo, redo, Grow, Shrink, Smooth, Reset, Auto 2, colour background, blurred background, 1:1, window close/open, reopen, 12-step undo storm, redo storm), the saved PNG is **1,69,566 bytes** and the WEBP **23,656 bytes** with the same magic bytes, the edge suite is identical too (1×1 → 88 B PNG / 542 B WEBP, 3×900 → 217 / 592, 700×525 → 68,187 / 8,294, 6000×4000 → 1400×933) — 0 pageerror, 0 console error.
 
 ### A cutout that ran in the interpreter, and a keep-mask scan that walked byte by byte
 

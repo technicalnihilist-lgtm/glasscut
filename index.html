@@ -1637,6 +1637,23 @@ const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
   const uw=ux1-ux0+1,uh=uy1-uy0+1;
   if(uw<1||uh<1||uw*uh>=W*H*0.9){ux0=0;uy0=0;ux1=W-1;uy1=H-1}
   const part2=!(ux0===0&&uy0===0&&ux1===W-1&&uy1===H-1);
+  /* 1.1.116: opaque photo + kuch nahi hata (mask poora 255) + origc taaza -
+     us haalat me jo alpha upload hota hai wo photo ka apna alpha hai (255), aur
+     fgc ka poora content bilkul origc jaisa hi hota hai. phir bhi poora kaam
+     chalta tha: 1.68 M pixel ka JS loop jo od me wahi 255 dobara likhta hai
+     (u[i]=(u[i]&0xffffff)|(v<<24) me v=255 aur u[i] ka alpha pehle se 255 hai,
+     yaani no-op), aur uske baad 6.7 MB ka putImageData. ab wahi ek drawImage
+     (origc -> fgc) hai: source poora opaque hai, is liye source-over har pixel
+     ko poora replace karta hai (clearRect ki zaroorat nahi) aur premultiply
+     alpha 255 par identity hai - fgc ke byte bilkul wahi. maskAll255() aam
+     (non-uniform) mask par pehle hi word par lautta hai, is liye baaki har frame
+     ka raasta chhua nahi gaya. mask poora 255 ho to MB poora canvas hai, is liye
+     part2 khud false hota hai aur SUB poora canvas - wahi jo neeche ka loop
+     nikaalta. */
+  if(!part2&&photoOpaque&&!origStale&&origc.width===W&&origc.height===H&&maskAll255()){
+   fgx.setTransform(1,0,0,1,0,0);fgx.globalAlpha=1;fgx.drawImage(origc,0,0);
+   SUB=[0,0,W-1,H-1];SUBX=false;
+  }else{
   let bx0=W,by0=H,bx1=-1,by1=-1;
   if(FG32){const u=FG32;
    for(let y=uy0;y<=uy1;y++){const b=y*W;let f=-1,l=-1;
@@ -1656,6 +1673,7 @@ const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
    fgx.putImageData(fgi,0,0,ux0,uy0,ux1-ux0+1,uy1-uy0+1)
   }else fgx.putImageData(fgi,0,0);
   SUB=bx1<0?null:[bx0,by0,bx1,by1];SUBX=false;
+  }
  }
  if(part){
   /* partial upload: sirf yahi rectangle badla (part2 wala clear sirf poore upload
@@ -3950,8 +3968,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.111: sync rakha gaya - bina bridge GlassCut.version -> "1.1.111".
    1.1.112: sync rakha gaya - bina bridge GlassCut.version -> "1.1.112".
    1.1.114: sync rakha gaya - bina bridge GlassCut.version -> "1.1.114".
-   1.1.115: sync rakha gaya - bina bridge GlassCut.version -> "1.1.115". */
- return v||'1.1.115'}catch(_){return '1.1.115'}})(),
+   1.1.115: sync rakha gaya - bina bridge GlassCut.version -> "1.1.115".
+   1.1.116: sync rakha gaya - bina bridge GlassCut.version -> "1.1.116". */
+ return v||'1.1.116'}catch(_){return '1.1.116'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
