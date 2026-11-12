@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 286 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.111 (versionCode 111) |
+| **Version** | 1.1.112 (versionCode 112) |
 
 ---
 
@@ -48,6 +48,12 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### Two full-canvas clears on every photo load, and Escape that could not close the save overlay
+
+- **A same-size photo reload cleared two whole canvases for nothing.** Loading a second photo of the same size (the common case — another shot from the same camera) skipped the canvas resize, so both `drawPhoto` and `setSize` took their "size unchanged" branch and wiped the surface with a full `W×H` / `CW×CH` `clearRect`: 1,680,000 px each on a 1400×1200 photo. Neither clear could ever be seen. The very next call is `fullRender()`, and on that path `drawPhoto` has just set `SUB = null` and `fgFull = true`, so the first `layer()` writes the whole alpha channel back (inside the box plus the four outside strips, or one whole-canvas `putImageData` when the box is the whole canvas) and `render()` covers or clears every pixel of the canvas for every background type — a full `clearRect` for a transparent one, a full `fillRect` for a colour or gradient, a full-canvas `drawImage` for blur or a photo background. The old alpha is never read in between: `drawSubj` only touches `fgc` after `layer()`. Both clears are gone; only the transform/alpha reset stays.
+- **Escape did not close the "long-press to save" overlay.** The Android back button already closes `#ov` first and the sheet second (`GlassCut.back`), but the keyboard handler called `closeAll()` — sheets only — so with the overlay open (a save whose share *and* download both failed) the keyboard had no way to dismiss it. Escape now follows the same order as back; the back button's behaviour is unchanged.
+- Verified for 1.1.112 (base 1.1.111 vs 1.1.112, headless Chrome, pixel-area counters on `CanvasRenderingContext2D.prototype`): a same-size 1400×1200 reload goes **`clearRect` 9 calls / 95,82,100 px → 7 calls / 62,22,100 px** (−33,60,000 px, exactly the two full-canvas clears), while `drawImage` (3 calls / 5,86,012 px) and `putImageData` (2 calls / 17,61,532 px) are unchanged and the canvas hash is **exactly the same**. Escape: with the download forced to throw so the overlay really opens, the base build leaves `#ov` at `class="show"` after Escape and the new build leaves it at `""` — and `GlassCut.back()` still returns `true` and closes it. Nothing else moved: two full flows are **identical at every checkpoint** on six photos (1400×1200 JPEG, 700×600, 2000×300 → 1400×210, 4×3, transparent PNG, 1400×1) — load + auto, same-size reload, Wand tap, erase, undo, redo, Grow, Smooth, Reset, colour, gradient, "Blur original", Blur Amount 8 → 30, "Blue blur", 1:1, 9:16, 4:5, back to original, save to disk (same byte sizes), language en, window close/open — and on a second flow of three photos covering reload-after-background-change, with **zero page errors and zero console errors**.
 
 ### The save path's two biggest allocations, and a leaked WebView
 

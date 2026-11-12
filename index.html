@@ -899,7 +899,14 @@ const drawPhoto=(im,nw,nh)=>{
      (RGB waise hi rehta hai), aur od ka asli alpha sirf neeche mask0 banate waqt
      padha jata hai, jo pehle render se pehle ho jata hai. */
   fgi=fg;od=fg.data;PTOK++;mkOD32();mkFG32();
-  if(fgc.width!==W||fgc.height!==H){fgc.width=W;fgc.height=H}else{fgx.setTransform(1,0,0,1,0,0);fgx.globalAlpha=1;fgx.clearRect(0,0,W,H)}
+  /* 1.1.112: same-size reload par yahan poora W*H clearRect chalta tha, halanki
+     iske turant baad wala pehla layer() fgc ko poora dobara likhta hai (fgFull=true
+     hai, is liye `part&&fgFull` use poore-upload raaste par bhej deta hai: box ke
+     andar alpha + box ke bahar chaar patti ka clearRect, ya box poora canvas ho to
+     seedha putImageData). yaani purani photo ka alpha us ek frame se pehle kabhi
+     padha hi nahi jata - drawSubj fgc ko layer() ke BAAD hi chhoota hai. ab sirf
+     transform/alpha reset hota hai. nateeja byte-identical (dekho naap). */
+  if(fgc.width!==W||fgc.height!==H){fgc.width=W;fgc.height=H}else{fgx.setTransform(1,0,0,1,0,0);fgx.globalAlpha=1}
   /* outc (silhouette) yahan se poore W x H par banaya jata tha - 1400x1050 par
      5.88 MB ka naya surface + uska zero-fill, aur phir har photo load par size
      match hone par poora W*H clearRect. par outc sirf outline (P.line>0) wale
@@ -1134,7 +1141,14 @@ const setSize=()=>{if(!od)return;
     load par setSize hamesha chalta hai. size wahi ho to canvas saaf karna usi
     kaam ko bina allocation karta hai - render() nateeja waise bhi poora likh
     deta hai, is liye ek bhi pixel nahi badalta. */
- if(cv.width!==CW||cv.height!==CH){cv.width=CW;cv.height=CH}else{cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1;cx.clearRect(0,0,CW,CH)}
+ /* 1.1.112: same-size par yahan bhi poora CW*CH clearRect chalta tha, aur ise
+    hamesha turant ek fullRender() follow karta hai jo canvas ko kinare se kinare tak
+    khud likh deta hai - drawPhoto SUB=null kar deta hai, is liye render ka sbox
+    null hota hai aur us haalat me har background par poora canvas dhak jata hai:
+    'none'/transparent par poora clearRect, rang/gradient par poora fillRect, blur
+    par poora bgb drawImage, photo-background par poora cover(). upar wala clear
+    is liye ek bhi pixel nahi bachata. sirf transform/alpha reset rakha gaya. */
+ if(cv.width!==CW||cv.height!==CH){cv.width=CW;cv.height=CH}else{cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1}
  /* tmp (composite surface) sirf outline/shadow/depth/opacity wale raaste me padha
     jata hai. har photo load par use CW x CH par banaya jata tha (1400x1050 par
     5.88 MB + zero-fill), aur usi photo ka pehla render use turant 1x1 kar deta tha
@@ -3447,7 +3461,11 @@ $('#bRedo').onclick=need(()=>{if(redo.length)hist(redo,undo);else toast('Redo ke
 document.addEventListener('keydown',e=>{
  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'&&od){e.preventDefault();if(e.shiftKey)$('#bRedo').click();else $('#bUndo').click()}
  else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='y'&&od){e.preventDefault();$('#bRedo').click()}
- else if(e.key==='Escape')closeAll()});
+ /* 1.1.112: Escape sirf sheet band karta tha, jabki Android ka back button pehle
+    save ka long-press overlay (#ov) band karta hai aur uske baad sheet (dekho
+    GlassCut.back). yaani overlay khula hone par keyboard wala raasta use band nahi
+    kar sakta tha. ab wahi kram yahan bhi hai - back ka behaviour bilkul wahi. */
+ else if(e.key==='Escape'){const ov=$('#ov');if(ov&&ov.classList.contains('show')){closeOv();return}closeAll()}});
 
 /* save */
 const fallback=b=>{if(ovUrl)URL.revokeObjectURL(ovUrl);ovUrl=URL.createObjectURL(b);$('#ovImg').src=ovUrl;$('#ov').classList.add('show')};
@@ -3824,8 +3842,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.108: sync rakha gaya - bina bridge GlassCut.version -> "1.1.108".
    1.1.109: sync rakha gaya - bina bridge GlassCut.version -> "1.1.109".
    1.1.110: sync rakha gaya - bina bridge GlassCut.version -> "1.1.110".
-   1.1.111: sync rakha gaya - bina bridge GlassCut.version -> "1.1.111". */
- return v||'1.1.111'}catch(_){return '1.1.111'}})(),
+   1.1.111: sync rakha gaya - bina bridge GlassCut.version -> "1.1.111".
+   1.1.112: sync rakha gaya - bina bridge GlassCut.version -> "1.1.112". */
+ return v||'1.1.112'}catch(_){return '1.1.112'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
