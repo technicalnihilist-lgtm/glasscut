@@ -2068,6 +2068,20 @@ let RFULL=false;
    nateeja deta hai (naapa: 12,830 pixel ka farak isi raaste se aata tha). blur aur
    alpha upload phir bhi chhote box par hi chalte hain. */
 let NORESTR=false;
+/* 1.1.118: parallax se background ke kinare par jo patti khaali reh jati thi (dekho
+   render) use canvas ki apni sabse kareebi row/column se bharta hai - wo row/column
+   abhi isi frame me bhari hui background ka hi kinara hai, is liye rang bilkul
+   milta hai aur photo/blur background ko zoom karna nahi padta. pox/poy sign se
+   pata chalta hai patti kis taraf hai (background usi taraf khisakta hai jis taraf
+   translate jata hai, is liye khaali jagah ulti taraf banti hai). draw canvas par
+   translate(pox,poy) ke andar chal raha hota hai, is liye pehle usse utna hi
+   ulta translate karke canvas ke asli coordinates me kaam kiya jata hai. */
+const bgEdge=(c,px,py,pox,poy)=>{c.save();c.translate(-pox,-poy);
+ if(px>0)c.drawImage(cv,px,0,1,CH,0,0,px,CH);
+ else if(px<0)c.drawImage(cv,CW+px-1,0,1,CH,CW+px,0,-px,CH);
+ if(py>0)c.drawImage(cv,0,py,CW,1,0,0,CW,py);
+ else if(py<0)c.drawImage(cv,0,CH+py-1,CW,1,0,CH+py,CW,-py);
+ c.restore()};
 function render(fast){if(!od)return;RFULL=!fast;const fresh=cvFresh;cvFresh=false;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1;
  /* "Hold: Original" (compare) me background, uska clearRect aur depth ka gradient
     sab bekaar the: pehle yahan poora background banta tha aur neeche wala showOrig
@@ -2130,18 +2144,45 @@ function render(fast){if(!od)return;RFULL=!fast;const fresh=cvFresh;cvFresh=fals
     draw hi nahi hota, is liye wahan clip bekaar ka kaam hota) */
  cx.save();if(PART&&bg.t!=='none'){cx.beginPath();cx.rect(PART[0],PART[1],PART[2]-PART[0],PART[3]-PART[1]);cx.clip()}
  cx.translate(pox,poy);
- if(bg.t==='color'){cx.fillStyle=bg.v;cx.fillRect(0,0,CW,CH)}
+ /* 1.1.118: 4D Motion on hone par background khud poore canvas par nahi girta tha.
+    pox/poy parallax se background (aur depth ka gradient) translate(pox,poy) ke
+    baad theek 0..CW x 0..CH par bhare jate the, yaani us taraf ek patti (max
+    CW*0.010 = 1400 par 14 px, 1050 par 10 px) khaali reh jati thi: usme pichhla
+    frame nahi hota (clearRect usi frame me ho chuka hota hai) is liye wo poori
+    transparent thi - screen par stage ka gehra rang, aur save ki file me alpha 0
+    (JPEG me kaali patti). yeh har opaque background par tha - rang, gradient,
+    "Apni photo" aur blur - kyunki sab isi ek translate ke andar draw hote hain.
+    ab rang/gradient wahi gradient object (user space me hai, is liye har pixel ka
+    rang bilkul wahi) thodi badi rect par bharte hain: -padX,-padY se CW+2*padX,
+    CH+2*padY tak, yaani patti bhi background se bhar jati hai. photo/blur
+    background ko zoom nahi kiya jata (warna motion ke saath background saans
+    lene lagega) - unme patti canvas ki apni sabse kareebi row/column se bharee
+    jati hai, jo background ka hi kinara hai (blur par iska pata bhi nahi chalta).
+    pox=poy=0 (aam haalat: Motion 0) par padX=padY=0 hai, is liye fillRect bilkul
+    wahi 0,0,CW,CH rehta hai, gap-fill chalta hi nahi, aur drawImage/cover ka
+    purana 1:1 call hi jata hai - yaani default par ek byte bhi nahi badalta
+    (dekho naap). */
+ const padX=pox<0?-Math.ceil(-pox):Math.ceil(pox),padY=poy<0?-Math.ceil(-poy):Math.ceil(poy);
+ /* rect dono taraf |pad| se badi hoti hai: background jis taraf khisakta hai, khaali
+    patti ulti taraf banti hai - is liye dono taraf barabar badhana hi dono sign par
+    sahi baithta hai (rang/gradient user space me hote hain, is liye badi rect se
+    andar ke kisi pixel ka rang nahi badalta). */
+ const apx=padX<0?-padX:padX,apy=padY<0?-padY:padY;
+ const gx=-apx,gy=-apy,gw=CW+apx*2,gh=CH+apy*2;
+ if(bg.t==='color'){cx.fillStyle=bg.v;cx.fillRect(gx,gy,gw,gh)}
  else if(bg.t==='grad'){const gk=bgGK,gv=+bg.v;
   if(gk[0]!==CW||gk[1]!==CH||gk[2]!==gv){const g=GRADS[bg.v];bgGrad=cx.createLinearGradient(0,0,CW,CH);bgGrad.addColorStop(0,g[0]);bgGrad.addColorStop(1,g[1]);gk[0]=CW;gk[1]=CH;gk[2]=gv}
-  cx.fillStyle=bgGrad;cx.fillRect(0,0,CW,CH)}
- else if(bg.t==='img'&&bgImg)cover(cx,bgImg,imW(bgImg),imH(bgImg),CW,CH);
- else if(bg.t==='blur'||bg.t==='bluetint'){blurBg();cx.drawImage(bgb,0,0)}
+  cx.fillStyle=bgGrad;cx.fillRect(gx,gy,gw,gh)}
+ else if(bg.t==='img'&&bgImg){cover(cx,bgImg,imW(bgImg),imH(bgImg),CW,CH);
+  if(apx||apy)bgEdge(cx,padX,padY,pox,poy)}
+ else if(bg.t==='blur'||bg.t==='bluetint'){blurBg();cx.drawImage(bgb,0,0);
+  if(apx||apy)bgEdge(cx,padX,padY,pox,poy)}
  cx.restore();
  /* depth: background ko halka gehra karo taaki subject aage ubhre */
  if(P.depth>0){const dk=depGK;
   if(dk[0]!==CW||dk[1]!==CH||dk[2]!==P.depth){const vg=cx.createRadialGradient(CW/2,CH*0.42,Math.min(CW,CH)*0.18,CW/2,CH*0.42,Math.max(CW,CH)*0.72);
    vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,'+(P.depth/100*0.42).toFixed(3)+')');depGrad=vg;dk[0]=CW;dk[1]=CH;dk[2]=P.depth}
-  cx.fillStyle=depGrad;cx.fillRect(0,0,CW,CH)}
+  cx.fillStyle=depGrad;cx.fillRect(gx,gy,gw,gh)}
  drawSubj(fgc,fast);
  PRVbgT=bg.t;PRVbgV=bg.v;PRVbgN=bgVer;PRVbl=P.bl;PRVdep=P.depth;PRVcw=CW;PRVch=CH;NORESTR=false}
 /* rAF ka callback pehle har schedule par ek naya closure tha (ek frame = ek
