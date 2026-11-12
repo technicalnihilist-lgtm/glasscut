@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 286 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.113 (versionCode 113) |
+| **Version** | 1.1.115 (versionCode 115) |
 
 ---
 
@@ -48,6 +48,12 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### A cutout that ran in the interpreter, and a keep-mask scan that walked byte by byte
+
+- **`cutout()` was too big for V8 to keep optimised.** The whole Auto pipeline — the MATCH scan, both coarse BFS passes, island labelling and the full-resolution snap — was one 24,514-character function. `%GetOptimizationStatus` shows what that costs: on the first Auto it is `1` (interpreter only, so all of those loops are interpreted too), on the second `16641` (baseline, concurrent optimisation just starting), on the third `41` (`kTurboFanned|kMaybeDeopted` — TurboFan fanned out and deoptimised on the very same call), and `41` again on the fourth and sixth. The MATCH scan, both coarse BFS passes and the snap BFS are now their own functions: on the same page they are `4194305` (Maglev) on the *first* Auto, which is the one that runs by itself when a photo is picked. The arithmetic, the visit order, the queue packing and the reference-colour test are unchanged, so the mask is byte-identical.
+- **The keep-mask scan was the last full-canvas byte loop in the mask pipeline.** Invert, the cutout's interior clear and the Wand's flood already work on 32-bit words; `enforce()` did not. A `keepMask` is usually almost empty (the user protected one object), so it now reads one word: a zero word skips four pixels without reading the mask at all, and an all-`0xFFFFFFFF` mask word skips the group because there is nothing to write. Only words with real work fall back to the old byte loop, and a word that would run past the end of the row is left to the byte loop so nothing outside the box is touched.
+- Verified for 1.1.115 (base 1.1.114 vs 1.1.115, headless Chrome, 1400×1200): the first Auto's cutout, one fresh page per sample (an app launch), goes **702.9 / 806.5 / 789.2 / 784.9 / 923.4 / 882.9 ms → 684.8 / 688.1 / 783.8 / 625.3 / 675.2 / 559.1 ms, median 806.5 → 684.8 (−15%)**. A counter-instrumented build on the keep-tool flow (keep paint, erase over it, undo, redo, Grow, Shrink, Smooth, Invert, Auto, Reset — 8 `enforce()` calls) goes **1,00,95,698 pixel tests → 25,23,674 word + 14,026 byte tests (−75%)** with the same **10,446** mask writes. Nothing else moved: the 18-checkpoint flow is identical at every checkpoint (load + auto, Wand, erase, undo, redo, undo, redo, Grow, Shrink, Smooth, Invert ×2, Reset, colour background, 9:16, PNG save, language en/hi, window close/open) with the saved PNG **1,72,807 bytes, SHA-1 `cabcf8a3a685` on both**, the 11-checkpoint keep flow is identical, and the edge suite is identical too (1×1 → 88 B PNG, 700×600 → 9,816 B WEBP, 4000×3000 → 1400×1050 with a 23,304 B JPG, same SHA-1s) — 0 pageerror, 0 console error.
 
 ### A deferred render that painted the frame already on screen, and a ratio switch that repainted an identical canvas
 
