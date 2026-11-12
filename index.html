@@ -1146,6 +1146,12 @@ stage.addEventListener('dragover',e=>{e.preventDefault()});
 stage.addEventListener('drop',e=>{e.preventDefault();const f=e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0];if(f&&/^image\//.test(f.type))pickPhoto(f)});
 document.addEventListener('paste',e=>{if(!e.clipboardData)return;const it=[...e.clipboardData.items].find(x=>/^image\//.test(x.type));if(it){const f=it.getAsFile();if(f)pickPhoto(f)}});
 
+/* 1.1.114: setSize jab canvas ka backing store dobara banata hai (cv.width=CW),
+   spec ke mutabik canvas us waqt poora transparent ho jata hai - uske turant baad
+   jo render chalta hai uska clearRect (PART/sbox/DLB ka jod, ya poora CW*CH) ek
+   bhi pixel nahi bachata. flag wahi ek render khaata hai, is liye baaki har frame
+   ka clear pehle jaisa hi chalta hai. */
+let cvFresh=false;
 const setSize=()=>{if(!od)return;
  if(ratio==='0'){CW=W;CH=H}
  else{const[a,b]=ratio.split(':').map(Number),r=a/b,M=Math.min(1400,Math.max(W,H));
@@ -1163,7 +1169,7 @@ const setSize=()=>{if(!od)return;
     'none'/transparent par poora clearRect, rang/gradient par poora fillRect, blur
     par poora bgb drawImage, photo-background par poora cover(). upar wala clear
     is liye ek bhi pixel nahi bachata. sirf transform/alpha reset rakha gaya. */
- if(cv.width!==CW||cv.height!==CH){cv.width=CW;cv.height=CH}else{cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1}
+ if(cv.width!==CW||cv.height!==CH){cv.width=CW;cv.height=CH;cvFresh=true}else{cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1}
  /* tmp (composite surface) sirf outline/shadow/depth/opacity wale raaste me padha
     jata hai. har photo load par use CW x CH par banaya jata tha (1400x1050 par
     5.88 MB + zero-fill), aur usi photo ka pehla render use turant 1x1 kar deta tha
@@ -2032,14 +2038,14 @@ let RFULL=false;
    nateeja deta hai (naapa: 12,830 pixel ka farak isi raaste se aata tha). blur aur
    alpha upload phir bhi chhote box par hi chalte hain. */
 let NORESTR=false;
-function render(fast){if(!od)return;RFULL=!fast;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1;
+function render(fast){if(!od)return;RFULL=!fast;const fresh=cvFresh;cvFresh=false;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1;
  /* "Hold: Original" (compare) me background, uska clearRect aur depth ka gradient
     sab bekaar the: pehle yahan poora background banta tha aur neeche wala showOrig
     branch turant poora canvas clear kar deta tha, is liye un teeno ka ek bhi pixel
     canvas par nahi bachta tha - 1400x1200 par har compare frame me 2 x 1.68 M
     clearRect + 1.68 M fillRect + background ka poora drawImage (blur background
     par 1.68 M source pixel). ab showOrig par seedha yahin se laut jate hain. */
- if(showOrig){cx.clearRect(0,0,CW,CH);dlbFull();PART=null;PRVcw=-1;drawSubj(origC(),fast);NORESTR=false;return}
+ if(showOrig){if(!fresh)cx.clearRect(0,0,CW,CH);dlbFull();PART=null;PRVcw=-1;drawSubj(origC(),fast);NORESTR=false;return}
  const pm=P.motion/100,pox=-mx*pm*CW*0.010,poy=-my*pm*CH*0.010;
  /* colour/gradient background poore canvas par ek opaque fillRect karta hai, aur
     bina parallax (pox=poy=0) wo bilkul canvas ke kinare se kinare tak dhakta hai -
@@ -2072,7 +2078,7 @@ function render(fast){if(!od)return;RFULL=!fast;cx.setTransform(1,0,0,1,0,0);cx.
     bilkul wahi hai). */
  const sbox=(PART||bg.t!=='none'||pox!==0||poy!==0||P.motion!==0
    ||P.line>0||P.op<100||P.sh||P.depth>0)?null:subjBox();
- if(PART){cx.clearRect(PART[0],PART[1],PART[2]-PART[0],PART[3]-PART[1]);
+ if(PART){if(!fresh)cx.clearRect(PART[0],PART[1],PART[2]-PART[0],PART[3]-PART[1]);
   /* PART ke bahar canvas pichhle frame se hi sahi hai - content dono ka jod */
   if(dlbOk()){if(PART[0]<DLB[0])DLB[0]=PART[0];if(PART[1]<DLB[1])DLB[1]=PART[1];
    if(PART[2]>DLB[2])DLB[2]=PART[2];if(PART[3]>DLB[3])DLB[3]=PART[3]}else dlbFull()}
@@ -2080,9 +2086,9 @@ function render(fast){if(!od)return;RFULL=!fast;cx.setTransform(1,0,0,1,0,0);cx.
   let x0=DLB[0],y0=DLB[1],x1=DLB[2],y1=DLB[3];
   if(sbox[0]<x0)x0=sbox[0];if(sbox[1]<y0)y0=sbox[1];
   if(sbox[2]>x1)x1=sbox[2];if(sbox[3]>y1)y1=sbox[3];
-  cx.clearRect(x0,y0,x1-x0,y1-y0);
+  if(!fresh)cx.clearRect(x0,y0,x1-x0,y1-y0);
   dlbSet(sbox[0],sbox[1],sbox[2],sbox[3])}
- else if(!(opaqueBg()&&pox===0&&poy===0)){cx.clearRect(0,0,CW,CH);
+ else if(!(opaqueBg()&&pox===0&&poy===0)){if(!fresh)cx.clearRect(0,0,CW,CH);
   /* clear poora hua: ab canvas par sirf wahi hoga jo is frame me banta hai */
   if(sbox)dlbSet(sbox[0],sbox[1],sbox[2],sbox[3]);else dlbFull()}
  else dlbFull();
@@ -3889,8 +3895,8 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.110: sync rakha gaya - bina bridge GlassCut.version -> "1.1.110".
    1.1.111: sync rakha gaya - bina bridge GlassCut.version -> "1.1.111".
    1.1.112: sync rakha gaya - bina bridge GlassCut.version -> "1.1.112".
-   1.1.113: sync rakha gaya - bina bridge GlassCut.version -> "1.1.113". */
- return v||'1.1.113'}catch(_){return '1.1.113'}})(),
+   1.1.114: sync rakha gaya - bina bridge GlassCut.version -> "1.1.114". */
+ return v||'1.1.114'}catch(_){return '1.1.114'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par

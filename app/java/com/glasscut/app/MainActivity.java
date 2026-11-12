@@ -549,6 +549,28 @@ public class MainActivity extends Activity {
     }
 
     /**
+     * Publishes the finished .tmp under its final name, never at another file's cost.
+     *
+     * 1.1.114: this used to be an inline `if (!tmp.renameTo(f)) { if (f.exists())
+     * f.delete(); if (!tmp.renameTo(f)) throw ... }`. On the one hand the delete was
+     * dead weight on Android: rename(2) on ext4/f2fs *replaces* an existing target
+     * atomically, so "the target exists" can never be why the first rename failed.
+     * On the other hand, when a rename did fail for a real reason (card pulled,
+     * EACCES, ENOSPC on the directory) and the final name happened to exist - two
+     * saves inside the same millisecond, or a re-save of a name already on disk -
+     * that delete removed an image that was already complete and correct, and the
+     * save then failed anyway. The user lost the earlier copy and got nothing.
+     * Now the existing file is never touched: rename is retried once (a stale
+     * directory entry or a transient mount state can clear) and a second failure
+     * fails the save through the page's normal fallback, which still holds the
+     * encoded blob for exactly that case. Kept free of Android types so the same
+     * body runs on a plain JVM, like isEmptyWrite / permGranted.
+     */
+    static boolean publishTmp(File tmp, File f) {
+        return tmp.renameTo(f) || tmp.renameTo(f);
+    }
+
+    /**
      * Removes "glasscut-*.tmp" leftovers of saves that were killed mid-write.
      *
      * Before the temp-then-rename change a killed save left a truncated *image*
@@ -773,10 +795,7 @@ public class MainActivity extends Activity {
                    WebP is never 0 bytes, so this cannot reject a good save. */
                 if (tmp.length() <= 0 || wrote <= 0) throw new IOException("empty");
                 /* publish: atomic rename, and only now is the final name an image */
-                if (!tmp.renameTo(f)) {
-                    try { if (f.exists()) f.delete(); } catch (Exception ignored) { }
-                    if (!tmp.renameTo(f)) throw new IOException("rename");
-                }
+                if (!publishTmp(tmp, f)) throw new IOException("rename");
             } catch (Exception e) {
                 try { if (tmp.exists()) tmp.delete(); } catch (Exception ignored) { }
                 throw e;
