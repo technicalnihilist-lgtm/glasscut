@@ -1178,9 +1178,21 @@ const setSize=()=>{if(!od)return;
     effect sach me on ho; effect on hote hi drawSubj apne guard (tmp.width!==CW) se
     ise bana leta hai aur THas=false se poora composite dobara banta hai, is liye
     nateeja byte-identical rehta hai. */
+ /* 1.1.117: same-size par yahan tmp ka poora CW*CH clearRect chalta tha, halanki
+    turant neeche THas=false likha jata hai - yaani agla drawSubj ka composite
+    pehle se "tmp me kuch bhi sahi nahi" maan kar poora dobara banata hai. us
+    rebuild me jo box sach me likha jata hai (qx0..qy1 = SUB + outline ring +
+    2 px bilinear pad) wo khud clear hota hai, aur tmp ke bahar ka purana content
+    kabhi padha hi nahi jata: cx par composite sirf TDB box se hota hai aur TDB
+    usi naye box par set hota hai. yaani ye clear ek bhi pixel nahi bachata tha -
+    ek poora surface (1400x1200 par 1.68 M pixel, 1400x1400 par 1.96 M) bekaar,
+    theek usi waqt jab nayi photo ka decode + ImageData chal raha hota hai.
+    transform/alpha reset rakha gaya hai (wahi ek sasta state write). nateeja
+    byte-identical: THas=false par drawSubj ka restr raasta chalta hi nahi, full
+    par poora clear hota hai, aur baaki me naya box clear hota hai. */
  if(P.line>0||P.op<100||P.sh||P.depth>0){
   if(tmp.width!==CW||tmp.height!==CH){tmp.width=CW;tmp.height=CH}
-  else{tcx.setTransform(1,0,0,1,0,0);tcx.globalAlpha=1;tcx.clearRect(0,0,CW,CH)}}
+  else{tcx.setTransform(1,0,0,1,0,0);tcx.globalAlpha=1}}
  bgVer++;THas=false;SOK=false;PART=null;
  /* photo ya ratio badalne par CW/CH badal jata hai, aur uske saath cover() ka crop
     bhi - "Apni photo" wala opaque flag purane size ka jawab tha. galat "opaque" par
@@ -3969,8 +3981,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.112: sync rakha gaya - bina bridge GlassCut.version -> "1.1.112".
    1.1.114: sync rakha gaya - bina bridge GlassCut.version -> "1.1.114".
    1.1.115: sync rakha gaya - bina bridge GlassCut.version -> "1.1.115".
-   1.1.116: sync rakha gaya - bina bridge GlassCut.version -> "1.1.116". */
- return v||'1.1.116'}catch(_){return '1.1.116'}})(),
+   1.1.116: sync rakha gaya - bina bridge GlassCut.version -> "1.1.116".
+   1.1.117: sync rakha gaya - bina bridge GlassCut.version -> "1.1.117". */
+ return v||'1.1.117'}catch(_){return '1.1.117'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par

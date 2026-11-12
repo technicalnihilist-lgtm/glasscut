@@ -6,10 +6,10 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 
 | | |
 |---|---|
-| **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 286 KB, Android 7.0+ |
+| **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 290 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.116 (versionCode 116) |
+| **Version** | 1.1.117 (versionCode 117) |
 
 ---
 
@@ -48,6 +48,12 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### A full-canvas clear of the composite surface that the very next line invalidated
+
+- **`setSize()` cleared the whole composite surface, then marked it empty.** When an effect was on (outline, shadow, depth, opacity) and the canvas size did not change — loading a second photo from the same camera, or a ratio switch that lands on the same `CW`/`CH` — `setSize()` ran a full `CW×CH` `clearRect` on `tmp` and then, one line later, set `THas=false`. That flag is exactly "the composite surface holds nothing valid", so the next `drawSubj` rebuilds it from scratch: it clears the box it is about to draw (`qx0..qy1` = the subject box plus the outline ring plus the 2 px bilinear pad), or the whole canvas on the `full` path. Everything `tmp` still held outside that box is never read, because the composite to the visible canvas copies only the `TDB` box and `TDB` is set to the new box in the same call. The clear saved nothing, on any of the three paths — `restr` requires `THas`, `full` clears by itself, and the ordinary path clears its own box.
+- **Now the clear is gone; the transform and alpha reset stay.** Nothing else in `setSize()` moved, so `bgVer`, `THas`, `SOK` and `PART` are still reset in the same order and the next real render is still a full one.
+- Verified for 1.1.117 (base 1.1.116 vs 1.1.117, headless Chrome, 1400×1200 photo, White Outline 5 on, pixel-area counters on `CanvasRenderingContext2D.prototype` with every canvas tagged, same-size photo loaded again): the composite surface's full-canvas `clearRect` goes **3 calls / 50,40,000 px → 2 calls / 33,60,000 px (−16,80,000 px, −33 %)**, while everything else on that surface is untouched (the 16 outline ring shifts, 34 `drawImage` calls / 4,14,88,644 px, the silhouette and the subject upload are all identical). Nothing else moved: a 51-checkpoint flow is **byte-identical at every checkpoint** — load, Auto ×2, Wand tap on the border and on the subject, a 5-move erase, undo ×2, redo, Grow, Shrink, Smooth, Invert ×2, Reset, Edge Softness 0/6, White Outline 6, Depth 60, Opacity 70, Shadow, 3D Tilt 12, Scale 115, Left/Right 20, colour / gradient / blurred / Blur Amount 20 / Blue blur / transparent background, 1:1 and back to Original, PNG + JPG + WEBP to disk, language en/hi, window close/open, six photos (1×1, 900×3, a transparent PNG, 4000×3000, 320×274, 700×525), a transparent photo on a blurred background, a same-size reload, and a 10-stroke undo/redo storm — with the saved files identical too (**PNG 8,50,335 B SHA-1 `9c3b1eef12`, JPG 1,20,264 B `44f2ae0d94`, WEBP 1,39,018 B `a02c74935b`** on both builds), **zero page errors and zero console errors**. The base build was run twice against itself first: **0 diffs**, so the comparison is not measuring harness noise.
 
 ### A full alpha upload that wrote the photo's own alpha back over itself
 
