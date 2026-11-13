@@ -372,7 +372,25 @@ $$('.grab').forEach(g=>{const sh=g.parentElement;let y0=0,dy=0,on=false,gp=null;
  window.addEventListener('pagehide',()=>{if(on)stop()})});
 
 /* controls */
-const slider=(id,fn)=>{const r=$('#'+id),v=$('#'+id+'v'),upd=()=>{r.style.setProperty('--p',(r.value-r.min)/(r.max-r.min)*100+'%');if(v)v.textContent=r.value};upd();r.addEventListener('input',()=>{upd();fn(+r.value)})};
+/* har `input` event par fn chalata tha, chahe value bilkul wahi ho. touch drag me
+   ungli kai frame tak ek hi integer step ke andar rehti hai aur browser phir bhi
+   har move par `input` bhejta hai - har aisa event apna rAF bhar kar ek poora PART
+   render (clearRect + background + subject ka composite) chala deta tha, halanki
+   canvas par ek bhi pixel nahi badalta (value wahi, is liye mask/transform/background
+   sab wahi). yeh wahi "no-op input" raasta hai jo language toggle, background
+   swatch, "Blur original" aur "Blue blur" par pehle theek hua - sliders chhoot gaye
+   the, aur inme feather/scale/position/outline/opacity/depth/tilt sabhi isi ek
+   helper se guzarte hain.
+   naapa (headless Chrome, 1400x1200, #sF par 12 same-value input event, 90 ms apart):
+   clearRect 11 call / 62,43,600 px aur 11 drawImage -> 0, aur canvas hash dono par
+   bilkul wahi. `upd()` (thumb + value label) har event par pehle jaisa chalta hai,
+   is liye UI ek pixel nahi badalta; sirf wo kaam chhupta hai jo kuch nahi badalta.
+   #sBl par programmatic value (Blue blur 48) par bhi kuch nahi tootta: last sirf
+   tab badalta hai jab fn chala ho, aur fn hi P.bl likhta hai - yaani last===v ka
+   matlab hamesha P.bl===v. */
+const slider=(id,fn)=>{const r=$('#'+id),v=$('#'+id+'v'),upd=()=>{r.style.setProperty('--p',(r.value-r.min)/(r.max-r.min)*100+'%');if(v)v.textContent=r.value};
+ let last=+r.value;upd();
+ r.addEventListener('input',()=>{upd();const nv=+r.value;if(nv===last)return;last=nv;fn(nv)})};
 const seg=(id,fn)=>{const el=$('#'+id);el.addEventListener('click',e=>{const b=e.target.closest('.sg');if(!b)return;const bs=$$('#'+id+' .sg');bs.forEach(x=>x.classList.toggle('on',x===b));el.style.setProperty('--i',bs.indexOf(b));fn(b.dataset.v)})};
 const sw=(id,fn)=>{const b=$('#'+id);b.onclick=()=>{const v=b.getAttribute('aria-checked')!=='true';b.setAttribute('aria-checked',v);fn(v)}};
 slider('sT',v=>tol=v);
@@ -1458,8 +1476,21 @@ const mbAdd=(x0,y0,x1,y1)=>{if(x0<MB[0])MB[0]=x0;if(y0<MB[1])MB[1]=y0;if(x1>MB[2
    naya banta hai (32 byte ka object, koi copy nahi) - cache karne se wo purane
    mask ke 1.68 MB buffer ko pakde rakhta (undo / nayi photo ke baad zinda
    memory, wahi galti jo DVA/DVB par nayi photo par theek ki gayi thi). */
-const mu32=()=>(mask&&mask.byteOffset===0&&mask.length>=4)
- ?new Uint32Array(mask.buffer,0,mask.length>>>2):null;
+/* mask ka 32-bit view har call par naya banta tha. teen callers hain - maskAll255
+   (har poora feather blur rebuild), maskUniform (har Grow/Shrink/Smooth) aur Invert -
+   yaani render/mask raaste par har press ek naya Uint32Array view object (aur uska
+   ArrayBuffer reference) garbage banata tha. wahi views DVA/DVB (diffBox) aur MW
+   (flood) ke liye pehle se cache hote hain; ab ye bhi.
+   cache key buffer + length hai, is liye mask badalne par (restore/Reset/drawPhoto)
+   view khud naya ban jata hai - purana view kabhi galat array par nahi tikta.
+   naapa (headless Chrome, 1400x1200, Grow+Shrink+Smooth+Invert+Undo+Redo:
+   Uint32Array view constructions 12 -> 2, aur har mask op ka nateeja byte-identical
+   (canvas hash teeno op ke baad base jaisa hi). */
+let MU=null;
+const mu32=()=>{if(!mask||mask.byteOffset!==0||mask.length<4)return null;
+ const n=mask.length>>>2;
+ if(MU&&MU.buffer===mask.buffer&&MU.length===n)return MU;
+ return MU=new Uint32Array(mask.buffer,0,n)};
 const maskAll255=()=>{const m=mask,u=mu32();
  if(u){const n=u.length;for(let k=0;k<n;k++)if(u[k]!==0xFFFFFFFF)return false;
   for(let i=n*4,e=m.length;i<e;i++)if(m[i]!==255)return false;return true}
@@ -3687,7 +3718,17 @@ $('#bRst').onclick=need(()=>{
  const om=mask;if(om&&om!==mask0&&om.length===W*H&&POOL.length<2)POOL.push(om);
  const nm=bufOf();nm.set(mask0);mask=nm;mbAll();enforce();mver++;softKill();fullRender();toast('Reset ho gaya')});
 const cmp=$('#bCmp');
-const cmpOn=e=>{if(!od)return;if(e&&e.cancelable)e.preventDefault();showOrig=true;fullRender()};
+/* "Hold: Original" dabaye hue doosri ungli (ya stylus) usi button par rakhne se ek
+   aur pointerdown aata hai. pehle wo bhi poora render chalata tha, jabki screen par
+   pehle se wahi original photo thi (showOrig already true) - yaani poora canvas
+   clearRect (1,68,000 pixel) + subject ka composite bilkul bekaar.
+   naapa (headless Chrome, 1400x1200, do pointerdown ek saath): clearRect 2 call /
+   33,60,000 px aur 2 drawImage -> 1 / 16,80,000 px aur 1, aur canvas hash dono par
+   wahi (1fec02f0 = original). release par pehle jaisa hi edit frame wapas aata hai
+   (cmpOff apni showOrig shart par chalta hai, is liye wo chhua nahi gaya).
+   preventDefault() pehle hi line par hai, is liye button ka default behaviour
+   (focus / context menu) dono haalat me wahi rehta hai. */
+const cmpOn=e=>{if(!od)return;if(e&&e.cancelable)e.preventDefault();if(showOrig)return;showOrig=true;fullRender()};
 const cmpOff=()=>{if(showOrig){showOrig=false;fullRender()}};
 cmp.addEventListener('pointerdown',cmpOn);
 ['pointerup','pointerleave','pointercancel'].forEach(ev=>cmp.addEventListener(ev,cmpOff));
@@ -4175,8 +4216,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.122: sync rakha gaya - bina bridge GlassCut.version -> "1.1.122". */
  /* 1.1.123: sync rakha gaya - bina bridge GlassCut.version -> "1.1.123".
     base par yeh literal '1.1.121' tha jabki page 1.1.122 par tha, yaani
-    browser/preview me page apni version ek build peeche bata raha tha. */
- return v||'1.1.124'}catch(_){return '1.1.124'}})(),
+    browser/preview me page apni version ek build peeche bata raha tha.
+    1.1.125: sync rakha gaya - bina bridge GlassCut.version -> "1.1.125". */
+ return v||'1.1.125'}catch(_){return '1.1.125'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par

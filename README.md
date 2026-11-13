@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 290 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.124 (versionCode 124) |
+| **Version** | 1.1.125 (versionCode 125) |
 
 ---
 
@@ -48,6 +48,20 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### A slider step and a second finger on *Hold: Original* still paid for a full render
+
+- **Every `input` event on a slider ran the render, even when the value had not changed.** A touch drag keeps the finger inside one integer step for several frames, and the browser sends `input` on each of those moves. Each one queued its own frame and paid for a PART render — `clearRect`, the background, and the subject composite — while the canvas could not change: same value means same mask, same transform, same background. This is the same no-op-input class already fixed for the language toggle, the background swatch, *Blur original* and *Blue blur*; the sliders — one helper, fifteen inputs — were left out.
+- **Now the value is compared first.** `upd()` (thumb position and the value label) still runs on every event, so the UI is untouched; only `fn` is skipped when `+r.value` has not changed. `last` is only ever set by `fn`, and `fn` is what writes the value, so a skipped event can never leave the page behind — including *Blue blur*'s programmatic `#sBl` value of 48.
+- **A second `pointerdown` on *Hold: Original* redrew the original.** Holding the button and touching it again with another finger or a stylus fires a second `pointerdown`; it ran `fullRender()` while `showOrig` was already true, so the whole canvas was cleared and recomposited to the same pixels.
+- **`cmpOn` now returns early when the original is already showing.** `preventDefault()` still runs first, so focus and context-menu behaviour are unchanged, and `cmpOff` (which is guarded by `showOrig` itself) was not touched.
+- **`mu32()` allocated a fresh 32-bit view on every call.** Its three callers — `maskAll255` on every full feather rebuild, `maskUniform` on every Grow/Shrink/Smooth, and Invert — each built a new `Uint32Array` view object per press. The view is now cached the way `diffBox`'s `DVA`/`DVB` and flood's `MW` already were; the cache key is buffer + length, so `restore()`, Reset and a new photo each get a fresh view.
+- Verified for 1.1.125 (base 1.1.124 vs 1.1.125, headless Chrome, 1400×1200 photo, canvas-call counter on the real `#cv`):
+  - **Duplicate feather slider steps** (12 `input` events on `#sF` at the same value, 90 ms apart, so each lands in its own frame): `clearRect` **11 calls / 62,43,600 px and 11 `drawImage` → 0 / 0**, and the canvas hash is the same on both builds.
+  - **Two `pointerdown`s on `#bCmp`**: `clearRect` **2 calls / 33,60,000 px + 2 `drawImage` → 1 / 16,80,000 px + 1**; the original frame is `1fec02f0` on both and the edit frame after release is `ba301991` on both.
+  - **`Uint32Array` view constructions** across Grow + Shrink + Smooth + Invert + Undo + Redo: **12 → 4**, with `clearRect`/`putImageData`/`drawImage` counts unchanged (10 / 6 / 6, 78,73,416 px) and the same canvas hash after every op.
+  - **Nothing else moved:** a 40-checkpoint flow (load + auto, erase ×2, restore, keep, undo ×2, redo, wand, Grow/Shrink/Smooth/Invert ×2/Reset, *Hold: Original*, feather/scale/outline/opacity/depth/tilt/tolerance sliders, colour + gradient + blur background, PNG/JPG/WEBP save, window close/open, language en/hi, 700×525 reload, 1×1 and 1400×3 photo + stroke + undo) is byte-identical at **every** checkpoint, and the three saved files are the same bytes (**PNG 3,90,376 / JPG 62,038 / WEBP 25,074 B**) — **0 pageerror, 0 console error** on both builds.
+- **`GlassCut.version`'s fallback literal is back in sync** — without the shell bridge the page reports **`1.1.125`**.
 
 ### A hidden window and a backgrounded app still ran the pending render
 
