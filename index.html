@@ -316,7 +316,7 @@ $('#bClose').onclick=()=>{if(win.classList.contains('closing'))return;closeAll()
     wahi end() chalta hai jo pause karta hai (warna aadha stroke apne scratch ke
     saath chala jata), aur Hold: Original dabaya hua ho to cmpOff() pehle - wahi
     kram jo pause() me hai. */
- if(drawing)end();cmpOff();dropScratch()};
+ if(drawing)end();cmpOff();dropScratch();holdRender()};
 $('#launch').onclick=()=>{$('#launch').classList.remove('show');
  /* band hone ki animation (wclose .6s) abhi chal rahi ho to us par 'opening'
     add karna kaam nahi karta: CSS me .closing .opening ke baad aata hai, is liye
@@ -326,7 +326,7 @@ $('#launch').onclick=()=>{$('#launch').classList.remove('show');
     'closing' hata dene se wo animation radd ho jati hai (animationcancel, koi
     animationend nahi) aur wopen shuru se chalti hai. */
  win.classList.remove('hidden','closing');void win.offsetWidth;win.classList.add('opening');
- winClosed=false;idleCheck()};
+ winClosed=false;idleCheck();resumeRender()};
 
 /* sheets */
 let openSh=null;
@@ -4112,6 +4112,22 @@ $('#dock').onclick=e=>{const b=e.target.closest('.ab');if(!b)return;const a=b.da
    karna tha wo khuli reh jati thi aur app band ho jata tha. page par Escape pehle
    se sheet band karta hai; ab back bhi wahi karta hai aur sirf tab app chhodta hai
    jab kuch khula na ho. */
+/* 1.1.123: pending render kaam ko band window / background app par rokna.
+   #bClose aur pause() dono dropScratch() chalate hain, par us waqt rAF me ek
+   frame ya rt me slider ka 160 ms wala poora render pada ho sakta hai - wo
+   dropScratch ke BAAD chalta tha aur wahi sab kuch dobara bana deta tha jo
+   abhi-abhi chhoda gaya (softM ka poora feather blur, blur tables, SUB ka
+   poora fgc alpha upload, cutout/flood scratch). trim() par yeh pehle se
+   theek hai (fast frame cancel hota hai), par #bClose aur pause par nahi -
+   aur wahan rt bhi chhoot jata tha. ab dono jagah holdRender() pending kaam
+   rok deta hai aur owedRender yaad rakhta hai; window khulne / app wapas
+   aane par resumeRender() wahi ek poora render karta hai, is liye canvas par
+   ek pixel nahi badalta (render deterministic hai) - bas wo hidden window ke
+   liye nahi chalta. */
+let owedRender=false;
+const holdRender=()=>{if(raf){cancelAnimationFrame(raf);raf=0;owedRender=true}
+ if(rt){clearTimeout(rt);rt=0;owedRender=true}fastReq=false};
+const resumeRender=()=>{if(!owedRender)return;owedRender=false;fullRender()};
 /* trim: Android onTrimMemory / onLowMemory par bulaya jata hai. yahan jo bhi
    sirf cache hai (feather ka softM, blur tables, morph ka copy, undo pool, JPEG
    flatten canvas, island buffers) chhod diya jata hai aur fgc/outc/bgb/sm
@@ -4176,7 +4192,10 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.120: sync rakha gaya - bina bridge GlassCut.version -> "1.1.120".
    1.1.121: sync rakha gaya - bina bridge GlassCut.version -> "1.1.121".
    1.1.122: sync rakha gaya - bina bridge GlassCut.version -> "1.1.122". */
- return v||'1.1.121'}catch(_){return '1.1.121'}})(),
+ /* 1.1.123: sync rakha gaya - bina bridge GlassCut.version -> "1.1.123".
+    base par yeh literal '1.1.121' tha jabki page 1.1.122 par tha, yaani
+    browser/preview me page apni version ek build peeche bata raha tha. */
+ return v||'1.1.123'}catch(_){return '1.1.123'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
@@ -4226,7 +4245,7 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
     liye wo dropScratch() se PEHLE chalta hai - warna chhode hue caches usi render
     me dobara ban jate. showOrig false ho to cmpOff kuch nahi karta, is liye aam
     pause par ek bhi extra kaam nahi. */
- pause:()=>{if(drawing)end();cmpOff();dropScratch();shellPaused=true;idleCheck()},resume:()=>{shellPaused=false;idleCheck()},
+ pause:()=>{if(drawing)end();cmpOff();dropScratch();holdRender();shellPaused=true;idleCheck()},resume:()=>{shellPaused=false;idleCheck();resumeRender()},
  back:()=>{const ov=$('#ov');if(ov&&ov.classList.contains('show')){closeOv();return true}
   if(openSh){closeAll();return true}return false}};
 })();

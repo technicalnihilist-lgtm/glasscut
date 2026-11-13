@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 290 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.122 (versionCode 122) |
+| **Version** | 1.1.123 (versionCode 123) |
 
 ---
 
@@ -48,6 +48,16 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### A hidden window and a backgrounded app still ran the pending render
+
+- **`dropScratch()` released the caches, then the next frame rebuilt them.** `#bClose` and `GlassCut.pause` both drop every offscreen cache and typed array — but they left pending render work behind: a `requestAnimationFrame` frame queued by a stroke or a slider, and the 160 ms deferred full render `rt` that `qr()` schedules for Scale / Position / White outline. That work ran *after* the drop and immediately rebuilt what had just been released — the feather blur `softM`, the box-blur tables, the full `fgc` alpha upload over the subject box, the cutout/flood scratch — for a window nobody could see.
+- **It is now held and paid once, when it is needed.** A new `holdRender()` cancels the queued frame and the `rt` timer and records that a render is owed; `resumeRender()` runs exactly one `fullRender()` when the window reopens (`#launch`) or the shell resumes (`GlassCut.resume`). The render is deterministic, so the canvas ends on exactly the frame the old code produced — the work is the same, it just no longer happens while the page is invisible.
+- Verified for 1.1.123 (base 1.1.122 vs 1.1.123):
+  - **Window close with a slider step in flight** (headless Chrome, 1400×1050 photo, auto cut, Scale moved then `#bClose` immediately; `clearRect`/`drawImage`/`putImageData` counted on the canvas): **after close — `clearRect` 10 calls / 32,06,004 px, 2 `drawImage`, 2 `putImageData` → 0 / 0 / 0 / 0**; close-time JS task **358 ms → 37 ms** (medians of 3 runs, range 344–460 → 37–136). On reopen the new build does that one render (5 clears, 16,03,380 px) and the canvas hash is **`eba285e7` on both builds**.
+  - **`GlassCut.pause()` with a slider step in flight**: after pause **10 clears / 2 draws / 2 puts → 0 / 0 / 0**; `resume()` does one render (5 / 1 / 1) and the final canvas is **`e91d8825` on both builds**.
+  - **Nothing else moved:** the 12-checkpoint flow (load + auto, wand tap, erase, undo, redo, colour background, Grow, Reset, PNG save, language en/hi, window close/open, photo reload) is byte-identical at every checkpoint, the saved PNG is the same file (**39,098 B, SHA-1 `b45fa22e`**), and the tiny-photo suite (9×7) is unchanged (saved PNG 143 B, SHA-1 `8e3e9e99`) — **0 pageerror, 0 console error**.
+  - **`GlassCut.version`'s fallback literal had drifted again** — `'1.1.121'` while the page and manifest were on 1.1.122, so without the shell bridge (browser, preview, or an empty `versionName()`) the page reported a version one build old. It now matches: `GlassCut.version` without a bridge reads **`1.1.121` → `1.1.123`**.
 
 ### Closing the window kept 26 MB of scratch caches, and a refused rename threw away a finished save
 
