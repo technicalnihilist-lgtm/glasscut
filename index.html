@@ -2177,7 +2177,17 @@ function render(fast){if(!od)return;RFULL=!fast;const fresh=cvFresh;cvFresh=fals
     liye ab sbox sirf tab banta hai jab wo sach me chahiye. nateeja byte-identical
     (PART wale frame par sbox kabhi nahi padha jata, aur baaki frame par shart
     bilkul wahi hai). */
- const sbox=(PART||bg.t!=='none'||pox!==0||poy!==0||P.motion!==0
+ /* 1.1.120: pox/poy/P.motion yahan sirf is liye the ki opaque background par
+    canvas poora bhara hota hai aur tab DLB ko poora maan lena padta hai - par
+    us haalat me `bg.t!=='none'` pehle hi sbox ko null kar deta hai. bg 'none' par
+    background kuch likhta hi nahi: canvas par sirf subject hota hai, aur uski
+    jagah xf() se aati hai jo mx/my (yaani motion) pehle se shamil karti hai -
+    is liye sbox wahan motion ke saath bhi bilkul sahi box hai. pehle 4D Motion
+    on hone par bg 'none' (auto-cut ke baad aam haalat) par bhi har frame poora
+    1.68 M pixel clearRect karta tha, halanki content sirf subject ke box ka tha.
+    naapa (headless Chrome, 1400x1200, motion 100, ek frame): clearRect
+    16,80,000 px -> 4,46,299 px (subject ka box), canvas hash dono par bilkul wahi. */
+ const sbox=(PART||bg.t!=='none'
    ||P.line>0||P.op<100||P.sh||P.depth>0)?null:subjBox();
  if(PART){if(!fresh)cx.clearRect(PART[0],PART[1],PART[2]-PART[0],PART[3]-PART[1]);
   /* PART ke bahar canvas pichhle frame se hi sahi hai - content dono ka jod */
@@ -2189,7 +2199,26 @@ function render(fast){if(!od)return;RFULL=!fast;const fresh=cvFresh;cvFresh=fals
   if(sbox[2]>x1)x1=sbox[2];if(sbox[3]>y1)y1=sbox[3];
   if(!fresh)cx.clearRect(x0,y0,x1-x0,y1-y0);
   dlbSet(sbox[0],sbox[1],sbox[2],sbox[3])}
- else if(!(opaqueBg()&&pox===0&&poy===0)){if(!fresh)cx.clearRect(0,0,CW,CH);
+ /* 1.1.120: rang aur gradient background parallax (4D Motion) ke saath bhi
+    poore canvas ko dhak dete hain. 1.1.118 se ye dono thodi badi rect
+    (-apx,-apy se CW+2*apx, CH+2*apy) par bhare jate hain, aur pox/poy ke dono
+    sign par wo rect canvas ke 0..CW x 0..CH ko poora cover karta hai (dekho
+    neeche padX/padY ki tippani) - yaani clearRect ke baad jo 1.68 M pixel saaf
+    hote the, unme se har ek usi frame me opaque rang se dobara bhar jata tha.
+    "Apni photo" aur blur background par ye nahi kiya ja sakta: unka drawImage
+    0,0,CW,CH par hota hai aur bachi hui patti bgEdge se canvas ki apni purani
+    row/column se bharti hai - wahan clear pehle hona zaroori hai, warna patti
+    transparent reh jati hai. pox=poy=0 par dono raaste bilkul pehle jaise hain.
+    "Apni photo" aur blur/bluetint par clear chhoda nahi ja sakta, aur ye bhi
+    naap kar dekha: unka drawImage fractional pox/poy par hota hai, is liye
+    kinare ka column bilinear sampling se semi-transparent nikalta hai aur
+    clear ke bina wo pichhle frame ke content par blend ho jata hai (naapa:
+    blur background par canvas hash badal gaya, is liye ye raasta wapas hata
+    diya gaya). pox=poy=0 par dono raaste bilkul pehle jaise hain.
+    naapa (headless Chrome, 1400x1200, motion 100, ek frame): rang background par
+    clearRect 16,80,000 px -> 0, gradient par 16,80,000 px -> 0, canvas hash
+    dono par bilkul wahi; blur background par clear pehle jaisa hi chalta hai. */
+ else if(!(opaqueBg()&&(pox===0&&poy===0||bg.t==='color'||bg.t==='grad'))){if(!fresh)cx.clearRect(0,0,CW,CH);
   /* clear poora hua: ab canvas par sirf wahi hoga jo is frame me banta hai */
   if(sbox)dlbSet(sbox[0],sbox[1],sbox[2],sbox[3]);else dlbFull()}
  else dlbFull();
@@ -4081,8 +4110,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.115: sync rakha gaya - bina bridge GlassCut.version -> "1.1.115".
    1.1.116: sync rakha gaya - bina bridge GlassCut.version -> "1.1.116".
    1.1.117: sync rakha gaya - bina bridge GlassCut.version -> "1.1.117".
-   1.1.119: sync rakha gaya - bina bridge GlassCut.version -> "1.1.119". */
- return v||'1.1.119'}catch(_){return '1.1.119'}})(),
+   1.1.119: sync rakha gaya - bina bridge GlassCut.version -> "1.1.119".
+   1.1.120: sync rakha gaya - bina bridge GlassCut.version -> "1.1.120". */
+ return v||'1.1.120'}catch(_){return '1.1.120'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par

@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 290 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.118 (versionCode 118) |
+| **Version** | 1.1.120 (versionCode 120) |
 
 ---
 
@@ -48,6 +48,19 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### 4D Motion cleared the whole canvas every frame, then filled it again
+
+- **With Motion on, every frame started with a full `clearRect`.** `render()` skipped that clear only when the background was opaque *and* there was no parallax (`opaqueBg() && pox === 0 && poy === 0`). Turning Motion up therefore put back a 1,680,000-pixel clear on every frame, at ~16 frames a second, on a 1400×1200 photo — and then the very same frame wrote an opaque background over all of it.
+- **A colour or gradient background covers the canvas on its own.** Since 1.1.118 both are filled on a slightly larger rect (`-apx,-apy` to `CW+2*apx, CH+2*apy`) so that the parallax strip is not left empty, and for either sign of `pox`/`poy` that rect covers `0..CW × 0..CH` completely. Nothing the clear removed was still there when the frame finished.
+- **With a transparent background the subject box is already exact.** `bg 'none'` draws no background at all, so the only content is the subject, and its position comes from `xf()` — which already includes `mx`/`my`, i.e. Motion. The `DLB` clear over the union of the old and new subject boxes was therefore already correct there; the `pox`/`poy`/`P.motion` terms in the `sbox` guard existed only because an opaque background needs `DLB` treated as the full canvas, and in that case `bg.t !== 'none'` already nulls `sbox`.
+- **Image and blur backgrounds keep the clear.** Their `drawImage` lands on a fractional `pox`/`poy`, so the edge column comes out semi-transparent from bilinear sampling and, without the clear, blends onto the previous frame. That route was tried, measured, and dropped: the blur background's canvas hash changed.
+- Verified for 1.1.120 (base 1.1.119 vs 1.1.120, headless Chrome, 1400×1200, Motion 100, clock pinned so exactly one frame renders, canvas-call counter):
+  - **Colour background:** `clearRect` **1,680,000 px → 0**; canvas hash `38add165` on both.
+  - **Gradient background:** `clearRect` **1,680,000 px → 0**; canvas hash `3054c119` on both.
+  - **Transparent background:** `clearRect` **1,680,000 px → 446,299 px** (the subject's box, **−73 %**); canvas hash `1204625` on both.
+  - **Blur background:** unchanged at **1,680,000 px**, hash `d4b6b9fb` on both — the guard is precise, not blanket.
+  - **Nothing else moved.** 3 ratios (9:16, 1:1, original) × 4 backgrounds = **12 combinations, every canvas hash identical** to the base build. The 41-checkpoint flow (load + Auto, erase ×2, Restore, Wand, Keep, colour/gradient/blur/blue/transparent background, Motion on and off across four backgrounds, undo ×2, redo, Grow, Shrink, Smooth, Invert ×2, Reset, Depth, 3D Tilt, Hold: Original, PNG/JPG/WEBP to disk, language en/hi, window close/open, same-size reload, 1×1, 1400×3) is **byte-identical at every checkpoint**, the three saved files are identical (**PNG 135,603 B / JPG 65,794 B / WEBP 21,864 B**), and both builds report **0 pageerror, 0 console error**.
 
 ### A big photo with big metadata fell back to a full-resolution decode
 
