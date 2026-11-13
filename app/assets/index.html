@@ -1440,6 +1440,22 @@ const softTouch=(x0,y0,x1,y1)=>{
    hai aur partial upload par sirf badhta hai (conservative, kabhi chhota nahi),
    is liye purana box kabhi kuch clip nahi karta. */
 let SUB=null,fgFull=false;
+/* 1.1.126: CBX = "fgc ke is box ke bahar har alpha byte pakka 0 hai". poore upload
+   par fgc ka box (ux0..uy1) poora likha jata hai, aur uske bahar chaar patti se 0
+   kiya jata tha - yaani har poore upload par poora complement clear hota tha
+   (1400x1200 par ~6.0 lakh pixel, har feather frame, har stroke release, har
+   wand tap / undo / grow / shrink / smooth). par ek poore upload ke baad wo
+   complement pehle se 0 hai, aur fgc me alpha likhne wala sirf yahi function hai
+   (partial upload sirf apne box me likhta hai). is liye:
+     - naya box pichhle box ko poora dhak leta ho (B ⊇ CBX): pattiyan bekaar hain;
+     - warna sirf CBX ka wo hissa saaf hota hai jo naye box se bahar hai
+       (CBX\B - chaar patti, par CBX ke andar tak hi);
+     - CBX na ho ya fgFull ho (fgc ka content bharosa layak nahi: nayi photo,
+       trim, dropScratch) to poora complement - bilkul purana raasta.
+   B ⊂ CBX par skip karna galat tha (CBX\B me pichhle upload ka 255 alpha bacha
+   reh jata tha - naapa: 16,720 pixel ka farak), is liye shart B ⊇ CBX hai.
+   nateeja byte-identical (dekho naap). */
+let CBX=null;
 /* SUB ko partial upload sirf bada karta hai (conservative). undo/redo ka partial upload
    SUB ko exact chhodta to wo bada reh jata, aur bada box drawSubj ke source-rect
    drawImage ko 1/255 alpha farak de deta hai (1:1 par bhi wo bilinear raaste se jata
@@ -1770,6 +1786,7 @@ const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
      nikaalta. */
   if(!part2&&photoOpaque&&!origStale&&origc.width===W&&origc.height===H&&maskAll255()){
    fgx.setTransform(1,0,0,1,0,0);fgx.globalAlpha=1;fgx.drawImage(origc,0,0);
+   CBX=[0,0,W-1,H-1];
    SUB=[0,0,W-1,H-1];SUBX=false;
   }else{
   let bx0=W,by0=H,bx1=-1,by1=-1;
@@ -1783,13 +1800,23 @@ const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
     if(v){if(f<0)f=x;l=x}}
    if(f>=0){if(f<bx0)bx0=f;if(l>bx1)bx1=l;if(by0===H)by0=y;by1=y}}
   if(part2){
-   /* box ke bahar purana alpha 0 - chaar patti (khaali patti no-op hai) */
-   fgx.clearRect(0,0,W,uy0);
-   fgx.clearRect(0,uy1+1,W,H-uy1-1);
-   fgx.clearRect(0,uy0,ux0,uy1-uy0+1);
-   fgx.clearRect(ux1+1,uy0,W-ux1-1,uy1-uy0+1);
+   /* box ke bahar purana alpha 0 - chaar patti (khaali patti no-op hai). CBX
+      bharosa layak ho aur naya box use poora dhak leta ho to pattiyan bekaar
+      hain; warna sirf CBX ka wo hissa saaf hota hai jo naye box se bahar hai
+      (CBX na ho to poora canvas - bilkul purana raasta, wahi chaar call). */
+   const useC=CBX&&!fgFull;
+   if(!(useC&&ux0<=CBX[0]&&uy0<=CBX[1]&&ux1>=CBX[2]&&uy1>=CBX[3])){
+    const q0=useC?CBX[0]:0,r0=useC?CBX[1]:0,q1=useC?CBX[2]:W-1,r1=useC?CBX[3]:H-1;
+    if(r0<uy0){const e2=Math.min(uy0-1,r1);if(e2>=r0)fgx.clearRect(q0,r0,q1-q0+1,e2-r0+1)}
+    if(r1>uy1){const s2=Math.max(uy1+1,r0);if(s2<=r1)fgx.clearRect(q0,s2,q1-q0+1,r1-s2+1)}
+    const ry0=Math.max(r0,uy0),ry1=Math.min(r1,uy1);
+    if(ry0<=ry1){
+     if(q0<ux0){const e2=Math.min(ux0-1,q1);if(e2>=q0)fgx.clearRect(q0,ry0,e2-q0+1,ry1-ry0+1)}
+     if(q1>ux1){const s2=Math.max(ux1+1,q0);if(s2<=q1)fgx.clearRect(s2,ry0,q1-s2+1,ry1-ry0+1)}}
+   }
+   CBX=[ux0,uy0,ux1,uy1];
    fgx.putImageData(fgi,0,0,ux0,uy0,ux1-ux0+1,uy1-uy0+1)
-  }else fgx.putImageData(fgi,0,0);
+  }else{CBX=[0,0,W-1,H-1];fgx.putImageData(fgi,0,0)}
   SUB=bx1<0?null:[bx0,by0,bx1,by1];SUBX=false;
   }
  }
@@ -4217,8 +4244,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
  /* 1.1.123: sync rakha gaya - bina bridge GlassCut.version -> "1.1.123".
     base par yeh literal '1.1.121' tha jabki page 1.1.122 par tha, yaani
     browser/preview me page apni version ek build peeche bata raha tha.
-    1.1.125: sync rakha gaya - bina bridge GlassCut.version -> "1.1.125". */
- return v||'1.1.125'}catch(_){return '1.1.125'}})(),
+    1.1.125: sync rakha gaya - bina bridge GlassCut.version -> "1.1.125".
+   1.1.126: sync rakha gaya - bina bridge GlassCut.version -> "1.1.126". */
+ return v||'1.1.126'}catch(_){return '1.1.126'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
