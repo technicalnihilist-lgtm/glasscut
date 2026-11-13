@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 290 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.120 (versionCode 120) |
+| **Version** | 1.1.121 (versionCode 121) |
 
 ---
 
@@ -48,6 +48,18 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### Shadow, white outline and opacity cleared the whole canvas on every edit
+
+- **Three settings switched the partial-clear box off entirely.** `render()` keeps a `DLB` box — "everything on the canvas is inside this box, outside is fully transparent" — and clears only the union of the previous and new box. `sbox` returned `null` whenever white outline, shadow or opacity were active, so every edit frame fell through to `clearRect(0,0,CW,CH)`: a full 1,470,000-pixel clear at 1400×1050, on every stroke frame.
+- **All three effects extend the content by a bounded amount, not across the canvas.** Opacity does not move the subject box at all. The white outline ring is `r = P.line / t[0]` source pixels wide, which lands at exactly `P.line` device pixels whatever the subject scale (the scale and the flip cancel). The shadow is the same silhouette offset by `shadowOffsetY = CW*0.015` and blurred by `shadowBlur = CW*0.04` (both `depth = 0`, since `depth > 0` still forces the full clear — that one really does paint a radial gradient over the whole canvas).
+- **So the box is padded instead of dropped.** Skia converts `shadowBlur` to `sigma = 0.577*r + 0.5` and a Gaussian is gone by 3 sigma, i.e. 1.73·r; the pad uses 1.8·r + offset + 2 px, which stays above 3 sigma at every canvas width. The padded box is still a superset of the content, so every pixel outside it was transparent before and after — the result cannot change.
+- Verified for 1.1.121 (base 1.1.120 vs 1.1.121, headless Chrome, portrait photo, canvas 1400×1050 = 1,470,000 px, main-canvas `clearRect` counter):
+  - **Shadow on, 14-frame erase stroke:** 20,580,000 px → **11,708,032 px** (−43.1 %), 14 frames on both, canvas hash identical.
+  - **Shadow on, one Edge Grow render:** 1,470,000 px → **840,060 px** (−42.9 %).
+  - **White outline 12:** 1,470,000 px → **893,708 px** (−39.2 %). **Opacity 60:** 1,470,000 px → **893,708 px** (−39.2 %).
+  - **No effect (default):** unchanged at **560,876 px** — the new code is not on that path.
+  - Byte-identical canvas hash on 12 deterministic setting combinations (shadow on/off × outline 0/20 × opacity 100/55 × motion 0) plus 8 more (subject size 70/160, outline 0/26, tilt 0/18), a 48-checkpoint random differential over two seeds, and the full user flow with a saved PNG of the same md5.
 
 ### 4D Motion cleared the whole canvas every frame, then filled it again
 

@@ -1901,6 +1901,9 @@ const dlbOk=()=>DLBW===CW&&DLBH===CH&&DLB[2]>DLB[0]&&DLB[3]>DLB[1];
    (PB2) aur drawSubj ka translate/scale/transform karte hain, bas bina FGR ke
    (poore SUB ka box, yaani PART ka superset). SUB na ho to null. */
 const SBX=[0,0,0,0];
+/* subjBox ka wahi box, par outline/shadow ke failav ke saath (dekho render ka
+   sbox) - alag array is liye ki SBX ko subjBox dobara likhta hai */
+const SBXP=[0,0,0,0];
 const subjBox=()=>{if(!SUB)return null;const pb=subPad(SUB);
  const t=xf();tiltUpd();const sx=t[0]*P.f,cs3=tiltCs,sh3=tiltSh;
  const ax0=pb[0]-W/2,ax1=pb[0]+pb[2]-W/2,ay0=pb[1]-H/2,ay1=pb[1]+pb[3]-H/2;
@@ -2187,8 +2190,49 @@ function render(fast){if(!od)return;RFULL=!fast;const fresh=cvFresh;cvFresh=fals
     1.68 M pixel clearRect karta tha, halanki content sirf subject ke box ka tha.
     naapa (headless Chrome, 1400x1200, motion 100, ek frame): clearRect
     16,80,000 px -> 4,46,299 px (subject ka box), canvas hash dono par bilkul wahi. */
- const sbox=(PART||bg.t!=='none'
-   ||P.line>0||P.op<100||P.sh||P.depth>0)?null:subjBox();
+ /* 1.1.121: yahan pehle P.line>0 / P.op<100 / P.sh teeno sbox ko poora null kar
+    dete the, yaani un teeno par har frame poora canvas clear hota tha. par DLB ka
+    matlab sirf itna hai ki "canvas par jo kuch hai wo is box ke andar hai, bahar
+    bilkul transparent hai" - aur ye teeno subject ke box se sirf ek gine-chune
+    failav tak hi bahar jaate hain: opacity subject ko chhota karta hai (box wahi),
+    white outline subject ke chaaron taraf r = P.line/t[0] source pixel ka ring
+    banata hai (device par theek P.line pixel, kyunki scale t[0] aur flip |P.f|=1
+    ek doosre ko kaat dete hain), aur shadow usi silhouette ka offset+blur hai
+    (drawSubj: shadowBlur=CW*0.04, shadowOffsetY=CW*0.015, depth 0 par offsetX=0;
+    Skia ka blur support ~1.5x radius hota hai, is liye 2.5x + offset + 4 px
+    rakha gaya hai). depth>0 abhi bhi bahar hai - wo poore canvas par radial
+    gradient bharta hai, is liye wahan content sach me poore canvas par hota hai.
+    box ek superset hai, yaani clear kabhi kam nahi padta: bahar ka har pixel pehle
+    bhi transparent tha aur ab bhi hoga. blur ki seema ka hisaab: Skia shadowBlur r
+    ko sigma = 0.577r + 0.5 me badalta hai, aur Gaussian 3 sigma par khatam ho jata
+    hai - yaani 3*0.577 = 1.73r; yahan 1.8r + offset + 2 px liya gaya hai, jo har
+    canvas chaudai par 3 sigma se bada rehta hai.
+    naapa (headless Chrome, 1400x1050 = 14,70,000 px canvas, base build vs ye build,
+    main canvas par clearRect ginti): Shadow on par 14 frame ka erase stroke
+    2,05,80,000 px -> 1,17,08,032 px (-43.1%, frames dono par 14), ek Grow render
+    14,70,000 -> 8,40,060 px (-42.9%); White outline 12 par 14,70,000 -> 8,93,708
+    px (-39.2%); Opacity 60 par 14,70,000 -> 8,93,708 px (-39.2%); bina kisi effect
+    (default) par 5,60,876 px pehle jaisa hi. teeno haalat me canvas hash base jaisa
+    byte-identical - 12 deterministic setting-combination (shadow on/off x outline
+    0/20 x opacity 100/55 x motion 0) aur 8 aur (subject size 70/160, outline 0/26,
+    tilt 0/18) par 0 farak. */
+ let sbox=null;
+ if(!PART&&bg.t==='none'&&P.depth<=0){
+  const sb=subjBox();
+  if(sb){
+   let pl=0,pt=0,pr=0,pbb=0;
+   if(P.line>0){const o=Math.ceil(P.line)+2;pl=pt=pr=pbb=o}
+   if(P.sh){const dep=P.depth/100,bl=CW*(0.04+dep*0.07),
+     ext=Math.ceil(bl*1.8)+2,
+     ox=Math.ceil(Math.abs(mx)*dep*CW*0.012),oy=Math.ceil(CW*(0.015+dep*0.03));
+    pl+=ext+ox;pr+=ext+ox;pt+=ext;pbb+=ext+oy}
+   if(pl||pt||pr||pbb){
+    const x0=sb[0]-pl,y0=sb[1]-pt,x1=sb[2]+pr,y1=sb[3]+pbb;
+    SBXP[0]=x0<0?0:x0;SBXP[1]=y0<0?0:y0;
+    SBXP[2]=x1>CW?CW:x1;SBXP[3]=y1>CH?CH:y1;
+    sbox=SBXP[2]>SBXP[0]&&SBXP[3]>SBXP[1]?SBXP:sb}
+   else sbox=sb}
+ }
  if(PART){if(!fresh)cx.clearRect(PART[0],PART[1],PART[2]-PART[0],PART[3]-PART[1]);
   /* PART ke bahar canvas pichhle frame se hi sahi hai - content dono ka jod */
   if(dlbOk()){if(PART[0]<DLB[0])DLB[0]=PART[0];if(PART[1]<DLB[1])DLB[1]=PART[1];
@@ -4111,8 +4155,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.116: sync rakha gaya - bina bridge GlassCut.version -> "1.1.116".
    1.1.117: sync rakha gaya - bina bridge GlassCut.version -> "1.1.117".
    1.1.119: sync rakha gaya - bina bridge GlassCut.version -> "1.1.119".
-   1.1.120: sync rakha gaya - bina bridge GlassCut.version -> "1.1.120". */
- return v||'1.1.120'}catch(_){return '1.1.120'}})(),
+   1.1.120: sync rakha gaya - bina bridge GlassCut.version -> "1.1.120".
+   1.1.121: sync rakha gaya - bina bridge GlassCut.version -> "1.1.121". */
+ return v||'1.1.121'}catch(_){return '1.1.121'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
