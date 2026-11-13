@@ -811,6 +811,51 @@ const parseDims=head=>{
    load ka wall-clock isi shor me rehta hai (12MP: median 522 -> 551 ms, min 196 ->
    114 ms) - yahan bacha sirf I/O aur garbage hai: har photo par ek 256 KB
    Uint8Array aur uski copy kam. */
+/* JPEG ke marker segments par seedha chal kar SOFn ki dims (aur APP1 ka EXIF
+   orientation) - poora metadata padhe bina, bina poore file ka buffer banaye.
+   parseDims se value bilkul wahi aati hai (wahi SOF byte offset, wahi big-endian
+   height/width, wahi exifOrient call), bas yahan window ke bajaye chain par chala
+   jata hai. har read 4-5 byte ka hai, is liye 10 MB metadata wali file par bhi
+   kul padha gaya data metadata ke barabar bhi nahi hota (base: 8 MB ka ek
+   Uint8Array, phir bhi null). */
+const jpegWalk=async f=>{
+ const size=f.size;
+ /* ek hi window (256 KB) me kai segments ke header aa jate hain, is liye reads
+    segments ki ginti ke bajaye window ke hisaab se hote hain. per-read overhead
+    yahan bada hai (File.slice + arrayBuffer, ~12 ms), is liye 10 MB metadata par
+    161 chhote read ~1.9 s lete the; 1 MB window par wahi kaam ~10 read aur
+    ~0.25 s me (bytes 10 MB hi padhe jate hain, 80 MB/s par ~0.13 s). */
+ const WIN=1048576;
+ let win=null,ws=0,we=0;
+ const need=async(at,n)=>{
+  if(at>=ws&&at+n<=we)return win.subarray(at-ws,at-ws+n);
+  ws=at;we=Math.min(size,at+WIN);
+  const a=await f.slice(ws,we).arrayBuffer();
+  win=new Uint8Array(a);we=ws+win.length;
+  if(at<ws||at+n>we)return win.subarray(Math.max(0,at-ws),Math.max(0,Math.min(win.length,at-ws+n)));
+  return win.subarray(at-ws,at-ws+n)};
+ let pos=2,o=0,guard=0;
+ while(pos+2<=size&&guard++<400000){
+  const h=await need(pos,4);
+  if(h.length<2)return null;
+  if(h[0]!==0xFF){pos++;continue}
+  const m=h[1];
+  if(m===0xD8||m===0x01||(m>=0xD0&&m<=0xD7)){pos+=2;continue}
+  if(m===0xD9||m===0xDA)return null;      /* EOI / SOS: SOF pehle aana chahiye tha */
+  if(h.length<4)return null;
+  const len=(h[2]<<8)|h[3];
+  if(len<2)return null;
+  if(m>=0xC0&&m<=0xCF&&m!==0xC4&&m!==0xC8&&m!==0xCC){
+   const s=await need(pos+4,5);          /* precision, height(2), width(2) */
+   if(s.length<5)return null;
+   const hh=(s[1]<<8)|s[2],ww=(s[3]<<8)|s[4];
+   return ww>0&&hh>0?[ww,hh,0,o]:null}
+  if(m===0xE1&&!o){                      /* APP1 "Exif\0\0" -> orientation */
+   const e=await need(pos+4,Math.min(len-2,4096));
+   if(e.length>14&&e[0]===0x45&&e[1]===0x78&&e[2]===0x69&&e[3]===0x66&&e[4]===0&&e[5]===0)
+    o=exifOrient(e,6,e.length)}
+  pos+=2+len}
+ return null};
 const imgDims=async f=>{
  const rd=n=>f.slice(0,Math.min(f.size,n)).arrayBuffer().then(a=>new Uint8Array(a));
  let head=await rd(8192),d=null;
@@ -825,10 +870,22 @@ const imgDims=async f=>{
     head=await rd(262144);try{d=parseDims(head)}catch(_){}}}
   if(d)return d}
  if(!(head.length>1&&head[0]===0xFF&&head[1]===0xD8))return null;
- const big=Math.min(f.size,8388608);
- if(big<=head.length)return null;
- head=await rd(big);
- try{d=parseDims(head)}catch(_){}
+ /* JPEG jiska SOF pehle 256 KB me nahi mila (uske aage ICC/XMP/MPF ka bada
+    metadata pada hai): pehle yahan 8 MB tak ek hi baar padha jata tha, aur usme
+    bhi na mile to null. null ka matlab pickPhoto me `plain()` raasta hai - yaani
+    poora size decode: 6000x4000 par 96 MB ka bitmap, 12000x9000 par 432 MB, chahe
+    canvas 1400x1050 hi ho (theek wahi cheez jo 1.1.58 me bade photo ke liye
+    hataayi gayi thi, bas metadata wali file par bachi hui thi). 8 MB metadata
+    aaj koi anokhi baat nahi - MPF wali phone photo usi ke aas-paas hoti hai.
+    ab file ke marker chain par seedha chala jata hai: har segment ka 4-byte
+    header padho, uski length ke hisaab se aage badho, aur SOFn milte hi wahi
+    paanch byte padho. file me kitna bhi metadata ho, padha sirf utna jata hai
+    jitna chain chalane ke liye chahiye - koi 8 MB buffer nahi, koi full decode
+    nahi. jo file sach me SOF ke bina hai (corrupt) uspar chain EOF par khatam
+    hoti hai aur wahi null lautta hai (yaani wahi purana raasta).
+    normal photo (SOF pehle 256 KB me) is code tak aati hi nahi - upar wale
+    teen kadam usi ke liye hain, is liye unka raasta ek byte nahi badalta. */
+ try{d=await jpegWalk(f)}catch(_){d=null}
  return d};
 let MAINTOK=0;
 /* PTOK = "photo ke RGB pixel kab badle" ka counter. sirf drawPhoto ise badhata
@@ -4023,8 +4080,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.114: sync rakha gaya - bina bridge GlassCut.version -> "1.1.114".
    1.1.115: sync rakha gaya - bina bridge GlassCut.version -> "1.1.115".
    1.1.116: sync rakha gaya - bina bridge GlassCut.version -> "1.1.116".
-   1.1.117: sync rakha gaya - bina bridge GlassCut.version -> "1.1.117". */
- return v||'1.1.117'}catch(_){return '1.1.117'}})(),
+   1.1.117: sync rakha gaya - bina bridge GlassCut.version -> "1.1.117".
+   1.1.119: sync rakha gaya - bina bridge GlassCut.version -> "1.1.119". */
+ return v||'1.1.119'}catch(_){return '1.1.119'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
