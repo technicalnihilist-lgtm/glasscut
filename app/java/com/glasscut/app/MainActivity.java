@@ -567,7 +567,56 @@ public class MainActivity extends Activity {
      * body runs on a plain JVM, like isEmptyWrite / permGranted.
      */
     static boolean publishTmp(File tmp, File f) {
-        return tmp.renameTo(f) || tmp.renameTo(f);
+        if (tmp.renameTo(f) || tmp.renameTo(f)) return true;
+        /* A rename can fail even though every byte is already on disk. Pictures/
+           GlassCut on the API 24-28 path may live on a FAT32/exFAT card, where a
+           rename of a file a directory watcher or the media scanner still holds
+           open comes back false (EBUSY), and some volumes refuse a rename onto a
+           name that already exists. Retrying the same call cannot help - nothing
+           changes between the two attempts - so the old body ended here, the
+           caller threw "rename" and its catch deleted the finished temp file:
+           the user's image was thrown away after a complete write, and the page
+           showed its "save nahi hua" fallback for a save that had in fact
+           succeeded on disk.
+           A stream copy is the fallback that can succeed, and it is only reached
+           when the atomic path failed. The bytes are already written, so this is
+           one read+write of a few hundred KB..a few MB, verified by length; the
+           temp file is removed only after the final name is complete (sweepTmp
+           would also catch it, but only ten minutes later). A copy that fails
+           half way deletes the partial final file, so a broken image is never
+           published - exactly the invariant the temp file was introduced for.
+           Kept free of Android types so the same body runs on a plain JVM. */
+        long len = tmp.length();
+        if (len <= 0) return false;
+        java.io.FileInputStream in = null;
+        FileOutputStream out = null;
+        try {
+            in = new java.io.FileInputStream(tmp);
+            out = new FileOutputStream(f);
+            byte[] buf = new byte[65536];
+            long copied = 0;
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+                copied += n;
+            }
+            out.flush();
+            try { out.getFD().sync(); } catch (Exception ignored) { }
+            try { out.close(); } catch (Exception ignored) { }
+            out = null;
+            if (copied != len || f.length() != len) {
+                try { f.delete(); } catch (Exception ignored) { }
+                return false;
+            }
+        } catch (Exception e) {
+            try { f.delete(); } catch (Exception ignored) { }
+            return false;
+        } finally {
+            try { if (in != null) in.close(); } catch (Exception ignored) { }
+            try { if (out != null) out.close(); } catch (Exception ignored) { }
+        }
+        try { tmp.delete(); } catch (Exception ignored) { }
+        return true;
     }
 
     /**

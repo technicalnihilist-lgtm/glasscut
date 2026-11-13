@@ -298,7 +298,25 @@ win.addEventListener('animationend',e=>{if(e.target!==win)return;
  else win.classList.remove('opening')});
 $('#bClose').onclick=()=>{if(win.classList.contains('closing'))return;closeAll();win.classList.add('closing');
  /* band window par 4D Motion ka timer chalte rehna bekaar hai */
- winClosed=true;idleCheck()};
+ winClosed=true;idleCheck();
+ /* 1.1.122: window band hone par page ke saare scratch cache bhi chhod diye jate
+    hain. Android shell ka onPause (GlassCut.pause) aur onTrimMemory (GlassCut.trim)
+    pehle se dropScratch() chalate hain, par in-app "window band karo" (#bClose) par
+    kuch bhi nahi chhutta tha - user window band kar ke app task switcher me chhod
+    deta hai aur poore session ke cache uske saath pade rehte hain, jabki screen
+    dikhti hi nahi. naapa (headless Chrome, 1400x1050 photo, auto cut + ek erase
+    stroke, typed-array/canvas tracker + forced GC): window band hone ke baad bhi
+    41.7 MB zinda (softM, cutout/flood scratch ka Int32Array 5.61 MB, FL.vis,
+    keepMask, STK, CC.st, BCA - 13 bade buffer), ab 12.5 MB - yaani 29.2 MB kam,
+    aur bacha hua hissa wahi hai jo trim ke baad bachta hai (photo ka ImageData +
+    uske do 32-bit view + mask/mask0). screen par ek pixel nahi badalta: dropScratch
+    sirf offscreen caches aur typed arrays chhodta hai, cv ka frame waisa hi rehta
+    hai, aur wapas kholne par pehla asli frame (ungli/slider/button) sab kuch khud
+    dobara bana leta hai - theek pause/trim ke baad jaisa. stroke chalu ho to pehle
+    wahi end() chalta hai jo pause karta hai (warna aadha stroke apne scratch ke
+    saath chala jata), aur Hold: Original dabaya hua ho to cmpOff() pehle - wahi
+    kram jo pause() me hai. */
+ if(drawing)end();cmpOff();dropScratch()};
 $('#launch').onclick=()=>{$('#launch').classList.remove('show');
  /* band hone ki animation (wclose .6s) abhi chal rahi ho to us par 'opening'
     add karna kaam nahi karta: CSS me .closing .opening ke baad aata hai, is liye
@@ -4156,7 +4174,8 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.117: sync rakha gaya - bina bridge GlassCut.version -> "1.1.117".
    1.1.119: sync rakha gaya - bina bridge GlassCut.version -> "1.1.119".
    1.1.120: sync rakha gaya - bina bridge GlassCut.version -> "1.1.120".
-   1.1.121: sync rakha gaya - bina bridge GlassCut.version -> "1.1.121". */
+   1.1.121: sync rakha gaya - bina bridge GlassCut.version -> "1.1.121".
+   1.1.122: sync rakha gaya - bina bridge GlassCut.version -> "1.1.122". */
  return v||'1.1.121'}catch(_){return '1.1.121'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata

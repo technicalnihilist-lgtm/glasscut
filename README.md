@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 290 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.121 (versionCode 121) |
+| **Version** | 1.1.122 (versionCode 122) |
 
 ---
 
@@ -48,6 +48,16 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ## What was broken, and what changed
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
+
+### Closing the window kept 26 MB of scratch caches, and a refused rename threw away a finished save
+
+- **The in-app window close never released the page's caches.** The Android shell frees them on `onPause` (`GlassCut.pause`) and on `onTrimMemory` (`GlassCut.trim`), both of which call `dropScratch()` — but `#bClose`, the button that dismisses the window and leaves the app in the task switcher, only stopped the 4D Motion timer. A user who closes the window and switches away kept the whole session's scratch: the feather blur, the cutout/flood scratch stack (a 5.61 MB `Int32Array` at 1400×1050), the flood visited buffer, the cutout seen/level masks, the composite and silhouette surfaces. Nothing was on screen.
+- **It now runs the same `dropScratch()` the shell's pause path runs**, in the same order: an in-flight stroke is ended first (`end()`, exactly what `pause()` does), a held *Original* compare is released (`cmpOff()`), and only then are the offscreen caches dropped. `dropScratch()` touches no visible pixel — `cv` keeps its frame, so the closed window and the reopened window look exactly as before, and the first real frame afterwards rebuilds whatever it needs.
+- **A refused `rename()` deleted a save that had already been written.** On the API 24–28 path the finished bytes go to `glasscut-<name>.tmp` and are published with `renameTo`. That rename can fail with every byte already on disk — `Pictures/GlassCut` may sit on a FAT32/exFAT card where a rename of a file a directory watcher or the media scanner holds open comes back false (EBUSY), and some volumes refuse a rename onto an existing name. The old body answered with `tmp.renameTo(f) || tmp.renameTo(f)`, i.e. the identical call again, which cannot succeed because nothing changed between the two attempts; the caller then threw `"rename"` and its `catch` deleted the temp file, so the user's finished image was thrown away and the page showed its "save nahi hua" fallback. `publishTmp` now falls back to a stream copy (64 KB buffer, length-verified, temp file removed only after the final name is complete, partial output deleted on failure), which is only reached when the atomic path has already failed.
+- Verified for 1.1.122 (base 1.1.121 vs 1.1.122):
+  - **Window close, live memory** (headless Chrome, 1400×1050 photo, auto cut + one erase stroke, typed-array and canvas tracker with forced GC): **41.7 MB → 15.4 MB live, −26.3 MB**, and the same 15.4 MB after reopening — identical to what `trim()` leaves behind (photo `ImageData`, its two 32-bit views, `mask`/`mask0`). The 13 large buffers held while closed (2 surfaces, 2 × 5.61 MB, one 5.61 MB `Int32Array` scratch stack, seven 1.4 MB masks) become 5.
+  - **`publishTmp` on a plain JVM** (`PublishTest`, same body as the APK): same filesystem — old `true`, new `true`, bytes identical, temp file gone. Cross-filesystem target, where `renameTo` returns false: **old `published=false, imageOnDisk=false, temp deleted` → new `published=true, imageOnDisk=true, 300,000 bytes byte-identical, temp gone`**.
+  - **Nothing else moved:** an 11-checkpoint flow (load + auto, wand tap, erase, undo, redo, colour background, Grow, PNG save, language en/hi, window close/open, Reset) is byte-identical at every checkpoint on both builds, the saved PNG is the same file (**1,18,869 B, SHA-1 `d1027902`**), the format suite is identical (PNG 122,855 B / WEBP 22,736 B / JPG 34,445 B, one file for a double tap), the edge suite is identical (6000×4000 → 1400×933, 48×36 → 48×36, save to disk), a close *mid-stroke* ends on the same final canvas on both builds (`34d48ff8`) with the same undo (`6651d7c8`) and redo, and a rotation round-trip is unchanged (`9c631060` before and after) — **0 pageerror, 0 console error**.
 
 ### Shadow, white outline and opacity cleared the whole canvas on every edit
 
