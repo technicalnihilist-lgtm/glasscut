@@ -2650,14 +2650,32 @@ const stk=n=>{if(!STK||STK.length<n)STK=new Int32Array(n);return STK};
    flood ke shuru ka softKill() bhi hata diya: wo SDIRT ko null kar deta tha, is
    liye partial raasta kabhi chal hi nahi paata. */
 const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;
- if(!FL||FL.n!==M){FL={n:M,vis:new Uint8Array(M),st:stk(M),g:0}}
- /* vis ab 8-bit: 1400x1200 par 6.72 MB ki jagah 1.68 MB, aur har span ka
-    vis.fill(g,...) memset 4x chhota. stamp sirf "is run me dekha gaya" batata
-    hai (koi value nahi), is liye 255 par wrap karne se pehle buffer saaf karna
-    nateeja nahi badalta. naapa: wand tap min 30.9 -> 32.5 ms (shor ke andar,
-    yani speed par asar nahi) aur flood ka nateeja byte-identical. */
- if(++FL.g>255){FL.vis.fill(0);FL.g=1}
- const vis=FL.vis,st=FL.st,g=FL.g,t2=t*t;let sp=0,cnt=0;
+ /* ek flood ka nateeja sirf SET hai (kaunse pixel background hain) - mask unhi par 0
+    hota hai, cnt unhi ki ginti, aur box unhi ka min/max. is liye har pixel ka rang
+    test kitni baar chalta hai, isse nateeja nahi badalta.
+    par pehle wahi rang test har span ke har pixel par 4-6 baar chalta tha: ek baar
+    span ke left/right failaav me, ek baar neeche/upar wali row ke scan me, phir usi
+    row ke run ke andar, aur agle span me dobara (wo failaav jaan-boojh kar already
+    dekhe hue pixel par bhi chalta hai, warna ek row me do spans ke beech ka hissa
+    chhoot jata - dekho neeche). poore background wale tap par (1400x1050 photo,
+    ~12 lakh pixel) ye ~70 lakh rang test ban jata tha.
+    ab rang test har pixel par ek hi baar hota hai: kisi row ki zaroorat pade to
+    us poori row ka predicate (OK) ek baar bhar diya jata hai (ROK[y]=gen) aur
+    uske baad har jagah sirf ek byte lookup chalta hai. row ka predicate sirf tab
+    banta hai jab flood sach me us row ko chhuta hai, is liye chhote tap (jo kuch
+    hatata hi nahi) par pehle jitna hi kaam hota hai - poore canvas ka scan nahi.
+    OK ke teen matlab hain: 0 = pass nahi karta, 1 = pass karta hai (abhi dekha
+    nahi), 2 = pass karta hai aur dekh liya gaya. is liye ek hi byte se "rang
+    test" aur "vis" dono chalta hai - purane vis buffer ki jagah yahi le leta hai
+    (1.68 MB se 1.68 MB, koi naya buffer nahi) aur 255 par wrap hone par sirf ROK
+    saaf karna padta hai.
+    kram, push ka kram aur mask/cnt/box ka hisaab bilkul wahi hai - failaav
+    OK&1 par chalta hai (yaani 1 aur 2 dono par, theek pehle jaisa jahan vis
+    dekha hi nahi jata tha), aur naya span sirf OK===1 par push hota hai (theek
+    pehle ke vis[j]!==g jaisa). nateeja byte-identical (dekho naap). */
+ if(!FL||FL.n!==M)FL={n:M,ok:new Uint8Array(M),rok:new Uint8Array(H),st:stk(M),g:0};
+ if(++FL.g>255){FL.rok.fill(0);FL.g=1}
+ const OK=FL.ok,ROK=FL.rok,g=FL.g,st=FL.st,t2=t*t;let sp=0,cnt=0;
  /* mask ka 32-bit view ek hi baar per flood (dekho neeche mask-clear loop). array
     4-byte aligned na ho to null, aur tab purana byte loop chalta hai. */
  const MW=(LE32&&mask&&mask.byteOffset===0&&mask.length>=4)?new Uint32Array(mask.buffer,0,mask.length>>>2):null;
@@ -2668,53 +2686,31 @@ const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;
  const KM=keepDirty?keepMask:null,CR=cr,CG=cg,CB=cb,T2=t2;
  /* rang ek hi 32-bit load se (little-endian: byte0=R); BE par teen byte raasta */
  const U32=OD32;
- /* WAND AB SCANLINE FLOOD HAI, per-pixel BFS nahi.
-    purana loop queue se ek-ek pixel pop karta tha aur uske chaar padosi check
-    karta tha - 1400x1200 par 1.68 M pop aur 6.7 M vis read/write, jabki flood
-    ka nateeja sirf "kaunse pixel background hain" ka SET hai (mask unhi par 0
-    hota hai, cnt unhi ki ginti) aur set ka kram nateeje me kahin nahi aata.
-    ab ek row ka poora span ek saath bharta hai aur stack par per pixel kee jagah
-    per lagataar run ek entry jata hai. rang test teeno jagah seedha likha hua
-    hai (closure call nahi) - wahi chaar load, wahi compare. mask ka nateeja
-    byte-identical rehta hai (0 likhna idempotent, ginti kram se azaad) - 268
-    random case (1x1, 1x40, 40x1, 2x2 se 60x50 tak, alag tol aur keepMask) par
-    purane flood se 0 pixel diff aur cnt bilkul wahi. */
+ /* is row ka predicate ek baar (dekho upar). keepMask ka pixel pass nahi karta -
+    wahi shart jo pehle har test ke saath chalti thi. */
+ const row=y=>{if(ROK[y]===g)return;ROK[y]=g;
+  const b=y*W,e=b+W;
+  if(U32){const u=U32;for(let i=b;i<e;i++){const v=u[i],a=(v&255)-CR,b2=((v>>>8)&255)-CG,d=((v>>>16)&255)-CB;
+   OK[i]=(a*a+b2*b2+d*d<=T2&&!(KM&&KM[i]))?1:0}}
+  else for(let i=b;i<e;i++){const p=i*4,a=od[p]-CR,b2=od[p+1]-CG,d=od[p+2]-CB;
+   OK[i]=(a*a+b2*b2+d*d<=T2&&!(KM&&KM[i]))?1:0}};
+ /* WAND SCANLINE FLOOD HAI, per-pixel BFS nahi: ek row ka poora span ek saath
+    bharta hai aur stack par per pixel ki jagah per lagataar run ek entry jata hai. */
  for(let k=0;k<seeds.length;k++){const j=seeds[k];
-  if(vis[j]===g)continue;vis[j]=g;
-  let v,a,b,d;
-  if(KM&&KM[j])continue;
-  v=U32?U32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-  a=(v&255)-CR;b=((v>>>8)&255)-CG;d=((v>>>16)&255)-CB;
-  if(a*a+b*b+d*d<=T2)st[sp++]=((j%W)<<21)|j}
+  row((j/W)|0);
+  if(OK[j]!==1)continue;OK[j]=2;st[sp++]=((j%W)<<21)|j}
  while(sp){
   const e=st[--sp],i=e&0x1FFFFF,x=e>>>21,base=i-x;
   /* is row par span ki poori chaudai. jo hissa kisi doosre span ne pehle hi
-     bhara ho wo bhi span me aa jata hai, aur mask par dobara 0 likhna bekaar
-     (idempotent) hai - is liye vis yahan dekhe bina chale jaate hain. */
-  let xl=x,xr=x,j;
-  while(xl>0){j=base+xl-1;let v,a,b,d;
-   if(KM&&KM[j])break;
-   v=U32?U32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-   a=(v&255)-CR;b=((v>>>8)&255)-CG;d=((v>>>16)&255)-CB;
-   if(a*a+b*b+d*d>T2)break;
-   xl--}
-  while(xr<W-1){j=base+xr+1;let v,a,b,d;
-   if(KM&&KM[j])break;
-   v=U32?U32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-   a=(v&255)-CR;b=((v>>>8)&255)-CG;d=((v>>>16)&255)-CB;
-   if(a*a+b*b+d*d>T2)break;
-   xr++}
-  /* box sirf badle hue pixel se banta hai. har pixel par chaar compare karne se
-     bada flood (poora background, ~1 M pixel) dheema ho jata tha, is liye ek span
-     ke andar sirf pehla aur aakhri badla hua pixel pakda jata hai - ek compare
-     per badle hue pixel, aur span ke bahar ka hissa box me nahi jata. */
+     bhara ho wo bhi span me aa jata hai (OK&1 me 2 bhi shaamil hai), aur mask par
+     dobara 0 likhna bekaar (idempotent) hai. */
+  let xl=x,xr=x;
+  while(xl>0&&(OK[base+xl-1]&1))xl--;
+  while(xr<W-1&&(OK[base+xr+1]&1))xr++;
   const ry=base/W|0;
   let ka=-1,kb=-1;
-  /* span ka vis stamp ek memset se. pehle yeh span ke har pixel par ek typed-array
-     store karta tha (poore background par ~1.4 M store ek tap me); vis me span ke
-     sab pixel par bilkul wahi value g likhi jati hai, is liye fill ka nateeja
-     byte-identical hai. */
-  vis.fill(g,base+xl,base+xr+1);
+  /* span ke sab pixel "dekh liye" - ek memset (pehle vis par wahi hota tha) */
+  OK.fill(2,base+xl,base+xr+1);
   /* mask ka content sirf MB ke andar hota hai - MB ke bahar mask ka har byte
      pakka 0 hai, is liye wahan 0 likhna (aur cnt ginna) bekaar hai. ab mask ka
      scan span aur MB ke jod par hi chalta hai, span poora MB se bahar ho to
@@ -2722,52 +2718,37 @@ const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;
      Smooth aur enforce pehle se chalte hain, aur flood mask me sirf 0 likhta hai
      (255 kabhi nahi), is liye box ko chauda karne ki zaroorat bhi nahi. */
   const mx0=xl>MB[0]?xl:MB[0],mx1=xr<MB[2]?xr:MB[2];
-  /* mask ka scan ab 32-bit word par: background ka poora span MB ke andar aata
-     hai, aur usme mask pehle se 0 hi hota hai (auto ke baad sabse aam tap), is
-     liye byte-by-byte `if(mask[j])` 1400x1200 par 1.68 M baar chalta tha. ab ek
-     word me chaar byte ek saath padhe jate hain aur word 0 ho to chaar byte
-     bina kisi kaam ke chhod diye jate hain - wahi 1.68 M byte load 4,20,000
-     word load ban jate hain (chaar guna kam, aur poora row lagataar padha jata
-     hai). jis word me kuch hai usme purana byte loop hi chalta hai, is liye
-     mask, cnt aur ka/kb (badle hue pixel ka box) bilkul wahi rehte hain. mask
-     ka word view ek hi baar per flood banta hai (mu32 har call par naya view
-     banata hai, is liye yahan wo use nahi hota); array 4-byte aligned na ho to
-     purana byte loop chalta hai. */
+  /* mask ka scan 32-bit word par: background ke poore span me mask pehle se 0 hi
+     hota hai (auto ke baad sabse aam tap), is liye word 0 ho to chaar byte bina
+     kisi kaam ke chhod diye jate hain. jis word me kuch hai usme purana byte loop
+     hi chalta hai, is liye mask, cnt aur ka/kb bilkul wahi rehte hain. */
   if(mx0<=mx1&&ry>=MB[1]&&ry<=MB[3]){
    if(MW){
-    let k=mx0;const e=mx1+1;
-    while(k<e&&((base+k)&3)){j=base+k;if(mask[j]){mask[j]=0;cnt++;if(ka<0)ka=k;kb=k}k++}
-    const n4=(e-k)>>2;let w=(base+k)>>>2;
-    for(let t=0;t<n4;t++,w++){if(MW[w]){const wb=w<<2;
+    let k=mx0;const e2=mx1+1;
+    while(k<e2&&((base+k)&3)){const j=base+k;if(mask[j]){mask[j]=0;cnt++;if(ka<0)ka=k;kb=k}k++}
+    const n4=(e2-k)>>2;let w=(base+k)>>>2;
+    for(let t2i=0;t2i<n4;t2i++,w++){if(MW[w]){const wb=w<<2;
      for(let q=0;q<4;q++){const xk=(wb+q)-base;if(mask[wb+q]){mask[wb+q]=0;cnt++;if(ka<0)ka=xk;kb=xk}}}}
     k+=n4<<2;
-    while(k<e){j=base+k;if(mask[j]){mask[j]=0;cnt++;if(ka<0)ka=k;kb=k}k++}
+    while(k<e2){const j=base+k;if(mask[j]){mask[j]=0;cnt++;if(ka<0)ka=k;kb=k}k++}
    }else
-   for(let k=mx0;k<=mx1;k++){j=base+k;if(mask[j]){mask[j]=0;cnt++;if(ka<0)ka=k;kb=k}}
+   for(let k=mx0;k<=mx1;k++){const j=base+k;if(mask[j]){mask[j]=0;cnt++;if(ka<0)ka=k;kb=k}}
   }
   if(ka>=0){if(ka<cx0)cx0=ka;if(kb>cx1)cx1=kb;if(ry<cy0)cy0=ry;if(ry>cy1)cy1=ry}
   /* upar aur neeche wali row me span ke neeche har lagataar background run ka
-     pehla pixel stack par. vis push ke waqt hi lagta hai, is liye ek pixel
+     pehla pixel stack par. OK push ke waqt hi 2 ho jata hai, is liye ek pixel
      kabhi do baar push nahi hota (seed bhi) - stack M se bada nahi hota. */
   for(let r=0;r<2;r++){
-   const bb=r?base+W:base-W;
-   if(bb<0||bb>=M)continue;
+   const ny=r?ry+1:ry-1;
+   if(ny<0||ny>=H)continue;
+   row(ny);
+   const bb=ny*W;
    let k=xl;
-   while(k<=xr){j=bb+k;
-    if(vis[j]===g){k++;continue}
-    let v,a,b,d;
-    if(KM&&KM[j]){k++;continue}
-    v=U32?U32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-    a=(v&255)-CR;b=((v>>>8)&255)-CG;d=((v>>>16)&255)-CB;
-    if(a*a+b*b+d*d>T2){k++;continue}
+   while(k<=xr){const j=bb+k;
+    if(OK[j]!==1){k++;continue}
     let k2=k;
-    while(k2<xr){const j2=bb+k2+1;let v2,a2,b2,d2;
-     if(KM&&KM[j2])break;
-     v2=U32?U32[j2]:(od[j2*4]|od[j2*4+1]<<8|od[j2*4+2]<<16);
-     a2=(v2&255)-CR;b2=((v2>>>8)&255)-CG;d2=((v2>>>16)&255)-CB;
-     if(a2*a2+b2*b2+d2*d2>T2)break;
-     k2++}
-    if(vis[j]!==g){vis[j]=g;st[sp++]=(k<<21)|j}
+    while(k2<xr&&(OK[bb+k2+1]&1))k2++;
+    OK[j]=2;st[sp++]=(k<<21)|j;
     k=k2+1}}}
  /* kuch nahi hata: mask waisa hi hai, to softM abhi bhi sahi hai - use phenkna
     bekaar (aur mver badhana bhi, kyunki upload ke liye kuch naya nahi hai) */
@@ -4195,7 +4176,7 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
  /* 1.1.123: sync rakha gaya - bina bridge GlassCut.version -> "1.1.123".
     base par yeh literal '1.1.121' tha jabki page 1.1.122 par tha, yaani
     browser/preview me page apni version ek build peeche bata raha tha. */
- return v||'1.1.123'}catch(_){return '1.1.123'}})(),
+ return v||'1.1.124'}catch(_){return '1.1.124'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
