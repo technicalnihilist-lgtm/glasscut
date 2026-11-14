@@ -1438,6 +1438,27 @@ const blurRect=(src,r,rx0,ry0,rx1,ry1,out)=>{
     aur is box me rows kam hone par bhi chain tooti rehti hai. jod, tab lookup
     aur kram bilkul wahi, is liye out byte-identical. */
  let yy=ty0;
+ for(;yy+8<=ty1+1;yy+=8){
+  const q0=yy*W,q1=q0+W,q2=q1+W,q3=q2+W,q4=q3+W,q5=q4+W,q6=q5+W,q7=q6+W;
+  let s0=0,s1=0,s2=0,s3=0,s4=0,s5=0,s6=0,s7=0;
+  for(k=-r;k<=r;k++){const c=rx0+k,cc=c<0?0:c>W-1?W-1:c;
+   s0+=src[q0+cc];s1+=src[q1+cc];s2+=src[q2+cc];s3+=src[q3+cc];
+   s4+=src[q4+cc];s5+=src[q5+cc];s6+=src[q6+cc];s7+=src[q7+cc]}
+  for(x=rx0;x<=ea;x++){const a=ca[x],c=cs[x];
+   t[q0+x]=tab[s0];t[q1+x]=tab[s1];t[q2+x]=tab[s2];t[q3+x]=tab[s3];
+   t[q4+x]=tab[s4];t[q5+x]=tab[s5];t[q6+x]=tab[s6];t[q7+x]=tab[s7];
+   s0+=src[q0+a]-src[q0+c];s1+=src[q1+a]-src[q1+c];s2+=src[q2+a]-src[q2+c];s3+=src[q3+a]-src[q3+c];
+   s4+=src[q4+a]-src[q4+c];s5+=src[q5+a]-src[q5+c];s6+=src[q6+a]-src[q6+c];s7+=src[q7+a]-src[q7+c]}
+  for(x=ma;x<=mb;x++){const a=x+r+1,c=x-r;
+   t[q0+x]=tab[s0];t[q1+x]=tab[s1];t[q2+x]=tab[s2];t[q3+x]=tab[s3];
+   t[q4+x]=tab[s4];t[q5+x]=tab[s5];t[q6+x]=tab[s6];t[q7+x]=tab[s7];
+   s0+=src[q0+a]-src[q0+c];s1+=src[q1+a]-src[q1+c];s2+=src[q2+a]-src[q2+c];s3+=src[q3+a]-src[q3+c];
+   s4+=src[q4+a]-src[q4+c];s5+=src[q5+a]-src[q5+c];s6+=src[q6+a]-src[q6+c];s7+=src[q7+a]-src[q7+c]}
+  for(x=rb;x<=rx1;x++){const a=ca[x],c=cs[x];
+   t[q0+x]=tab[s0];t[q1+x]=tab[s1];t[q2+x]=tab[s2];t[q3+x]=tab[s3];
+   t[q4+x]=tab[s4];t[q5+x]=tab[s5];t[q6+x]=tab[s6];t[q7+x]=tab[s7];
+   s0+=src[q0+a]-src[q0+c];s1+=src[q1+a]-src[q1+c];s2+=src[q2+a]-src[q2+c];s3+=src[q3+a]-src[q3+c];
+   s4+=src[q4+a]-src[q4+c];s5+=src[q5+a]-src[q5+c];s6+=src[q6+a]-src[q6+c];s7+=src[q7+a]-src[q7+c]}}
  for(;yy+4<=ty1+1;yy+=4){
   const q0=yy*W,q1=q0+W,q2=q1+W,q3=q2+W;let s0=0,s1=0,s2=0,s3=0;
   for(k=-r;k<=r;k++){const c=rx0+k,cc=c<0?0:c>W-1?W-1:c;
@@ -1463,7 +1484,28 @@ const blurRect=(src,r,rx0,ry0,rx1,ry1,out)=>{
     chalne par har read ek alag cache line par jata tha, aur jab blur ka box poore
     canvas jitna bada ho to column-wise loop poore blur se dheema pad jata tha.
     jod, table aur likhne ka kram bilkul wahi hai, is liye out byte-identical. */
+ /* 1.1.133: dono pass ab pehle 8 ka strip lete hain, phir 4, phir 1 (horizontal
+    pass me 8 row, vertical pass me 8 column). Chaar ke saath har row/column par
+    sirf 4 byte padhe-likhe jate the, jabki ek cache line 64 byte ki hoti hai -
+    yaani ek row ka cache line 16 me se 4 byte ke liye load hota tha aur agle
+    strip usi line ko dobara laate the. aath ke saath ek line ka aadha hissa ek
+    hi baar aata hai (aur aath running sum scalar rahenge, is liye V8 unhe
+    register me rakhta hai - array wala 16-column raasta naapa gaya tha aur dheema
+    nikla, is liye wo chhod diya gaya). Ganit bilkul wahi hai: har row/column ka
+    apna running sum (s0..s7), wahi tab lookup, wahi kram - is liye out
+    byte-identical rehta hai. baaki (4 aur 1) raaste pehle jaise hi hain, is liye
+    har width/height par poora box dhak jata hai. */
  let xx=rx0;
+ for(;xx+8<=rx1+1;xx+=8){
+  let s0=0,s1=0,s2=0,s3=0,s4=0,s5=0,s6=0,s7=0;
+  for(k=-r;k<=r;k++){const c=ry0+k,row=(c<0?0:c>H-1?H-1:c)*W;
+   s0+=t[row+xx];s1+=t[row+xx+1];s2+=t[row+xx+2];s3+=t[row+xx+3];
+   s4+=t[row+xx+4];s5+=t[row+xx+5];s6+=t[row+xx+6];s7+=t[row+xx+7]}
+  for(y=ry0;y<=ry1;y++){const o2=y*W+xx,a=ra[y],c=rs[y];
+   out[o2]=tab[s0];out[o2+1]=tab[s1];out[o2+2]=tab[s2];out[o2+3]=tab[s3];
+   out[o2+4]=tab[s4];out[o2+5]=tab[s5];out[o2+6]=tab[s6];out[o2+7]=tab[s7];
+   s0+=t[a+xx]-t[c+xx];s1+=t[a+xx+1]-t[c+xx+1];s2+=t[a+xx+2]-t[c+xx+2];s3+=t[a+xx+3]-t[c+xx+3];
+   s4+=t[a+xx+4]-t[c+xx+4];s5+=t[a+xx+5]-t[c+xx+5];s6+=t[a+xx+6]-t[c+xx+6];s7+=t[a+xx+7]-t[c+xx+7]}}
  for(;xx+4<=rx1+1;xx+=4){
   let s0=0,s1=0,s2=0,s3=0;
   for(k=-r;k<=r;k++){const c=ry0+k,row=(c<0?0:c>H-1?H-1:c)*W;
@@ -4468,8 +4510,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
     GlassCut.version -> "1.1.129".
    1.1.130: sync rakha gaya - bina bridge GlassCut.version -> "1.1.130".
    1.1.131: sync rakha gaya - bina bridge GlassCut.version -> "1.1.131".
-   1.1.132: sync rakha gaya - bina bridge GlassCut.version -> "1.1.132". */
- return v||'1.1.132'}catch(_){return '1.1.132'}})(),
+   1.1.132: sync rakha gaya - bina bridge GlassCut.version -> "1.1.132".
+   1.1.133: sync rakha gaya - bina bridge GlassCut.version -> "1.1.133". */
+ return v||'1.1.133'}catch(_){return '1.1.133'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
