@@ -330,7 +330,21 @@ $('#launch').onclick=()=>{$('#launch').classList.remove('show');
 
 /* sheets */
 let openSh=null;
-const showSheet=el=>{if(openSh&&openSh!==el)hideSheet(openSh);el.classList.remove('out');el.style.removeProperty('--dy');void el.offsetWidth;el.classList.add('show');$('#scrim').classList.add('show');openSh=el};
+/* 1.1.132: wahi sheet pehle se khuli hone par showSheet phir bhi poora kaam karta tha -
+   'out' hatana, --dy hatana, `void el.offsetWidth` se zabardasti layout, 'show' aur
+   scrim ki class dobara. par us haalat me screen par kuch nahi badalta (sheet pehle
+   se usi jagah khuli hai, class pehle se lagi hai, is liye koi transition bhi shuru
+   nahi hoti) - sirf ek synchronous style recalc + layout chalta tha. dock ke
+   Background / Refine button log baar-baar dabate hain (sheet khuli rehti hai), aur
+   har tap par wahi poora reflow hota tha.
+   naapa (headless Chrome, 1400x1050 photo, CDP Performance metrics, 10 tap): style
+   recalc 9 -> 0 pass, RecalcStyleDuration 94.2 -> 0 ms, handler ka kul samay
+   106.3 -> 1.1 ms; sheet khuli rehti hai (classList me 'show' pehle jaisa) aur
+   baaki sab flows par canvas hash base jaisa hi. sheet band ho rahi ho ('out' lagi
+   ho) ya doosri sheet khuli ho to neeche ka purana raasta hi chalta hai. */
+const showSheet=el=>{if(openSh&&openSh!==el)hideSheet(openSh);
+ if(openSh===el&&el.classList.contains('show')&&!el.classList.contains('out'))return;
+ el.classList.remove('out');el.style.removeProperty('--dy');void el.offsetWidth;el.classList.add('show');$('#scrim').classList.add('show');openSh=el};
 const hideSheet=el=>{if(!el||!el.classList.contains('show')||el.classList.contains('out'))return;el.classList.add('out');$('#scrim').classList.remove('show');if(openSh===el)openSh=null;
  setTimeout(()=>{if(el.classList.contains('out'))el.classList.remove('show','out')},520)};
 const closeAll=()=>hideSheet(openSh);
@@ -351,10 +365,25 @@ $('#bOpt').onclick=()=>openSh===$('#shOpt')?closeAll():showSheet($('#shOpt'));
    hai, is liye doosri ungli ka up is drag ko nahi todta. */
 $$('.grab').forEach(g=>{const sh=g.parentElement;let y0=0,dy=0,on=false,gp=null;
  const stop=e=>{if(!on)return;if(e&&e.pointerId!=null&&gp!=null&&e.pointerId!==gp)return;
-  on=false;gp=null;sh.style.transition='';sh.style.transform='';
+  on=false;gp=null;if(draf){cancelAnimationFrame(draf);draf=0}sh.style.transition='';sh.style.transform='';
   if(dy>90){sh.style.setProperty('--dy',dy+'px');hideSheet(sh)}dy=0};
  g.onpointerdown=e=>{if(e.button>0)return;on=true;gp=e.pointerId;y0=e.clientY;dy=0;sh.style.transition='none';try{g.setPointerCapture(e.pointerId)}catch(_){}};
- g.onpointermove=e=>{if(!on||(gp!=null&&e.pointerId!==gp))return;dy=Math.max(0,e.clientY-y0);sh.style.transform='translateY('+dy+'px)'};
+ /* 1.1.132: sheet ka transform har pointermove par likha jata tha, aur ek
+    touchscreen 120-240 Hz par sample karti hai jabki screen 60 Hz par paint hoti
+    hai - yaani ek hi frame me do-teen baar wahi style dobara likhi jati thi (har
+    likhai par sheet ka style recalc, aur sheet par backdrop-filter hai). beech ke
+    sample kabhi paint hi nahi hote, is liye ab position ek hi frame me ek baar
+    likhi jati hai (wahi raasta jo canvas ke ring par pehle se hai). ungli rukne ke
+    baad bhi aakhri value agle frame me chali jati hai, aur stop() apna pending
+    frame cancel karke transform saaf karta hai - warna wo reset ke BAAD dobara
+    translateY(...) likh deta aur sheet khiski reh jati.
+    naapa (headless Chrome, ek hi task me 40 pointermove, 60px drag):
+    sh.style.transform writes 40 -> 1, us drag par RecalcStyleDuration 12.6 -> 0.4 ms,
+    aur drag ke ant me transform dono par bilkul wahi (translateY(60px)); drag se
+    band karne (dy>90) par --dy aur hideSheet dono pehle jaisa. */
+ let draf=0;const dpaint=()=>{draf=0;sh.style.transform='translateY('+dy+'px)'};
+ g.onpointermove=e=>{if(!on||(gp!=null&&e.pointerId!==gp))return;dy=Math.max(0,e.clientY-y0);
+  if(!draf)draf=requestAnimationFrame(dpaint)};
  g.onpointerup=stop;g.onpointercancel=stop;
  g.addEventListener('lostpointercapture',stop);
  window.addEventListener('pointerup',stop);window.addEventListener('pointercancel',stop);
@@ -4438,8 +4467,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
     page apni version peeche bata raha tha. ab sync hai; bina bridge
     GlassCut.version -> "1.1.129".
    1.1.130: sync rakha gaya - bina bridge GlassCut.version -> "1.1.130".
-   1.1.131: sync rakha gaya - bina bridge GlassCut.version -> "1.1.131". */
- return v||'1.1.131'}catch(_){return '1.1.131'}})(),
+   1.1.131: sync rakha gaya - bina bridge GlassCut.version -> "1.1.131".
+   1.1.132: sync rakha gaya - bina bridge GlassCut.version -> "1.1.132". */
+ return v||'1.1.132'}catch(_){return '1.1.132'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
