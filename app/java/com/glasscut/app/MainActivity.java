@@ -476,18 +476,38 @@ public class MainActivity extends Activity {
         final byte[] win = new byte[B64_CHUNK];
         while (i < n) {
             int end = Math.min(n, i + B64_CHUNK);
-            if (end < n) {
+            int len = end - i;
+            /* 1.1.130: the group-boundary pre-scan walked the chunk a second time
+               (one charAt + one ws() per character) purely to learn `data & 3`,
+               and on a FileReader data URL - the only thing the page ever passes
+               here - there is no whitespace, so it walked the whole multi-MB
+               payload to compute a number that was always `len & 3` = 0. The copy
+               now counts whitespace as it copies, so the common case walks the
+               chunk once instead of twice: on a 6 MB payload that is 6.29 M
+               charAt calls fewer (12.58 M -> 6.29 M) and 6.29 M ws() calls fewer.
+               A chunk that really does carry line breaks (wsCount != 0) falls back
+               to the old, exact group-alignment below - the trim rule is unchanged,
+               so every slice still holds a whole number of 4-char groups and the
+               decoded bytes are identical (JVM: 0 byte diff on 6 payload shapes). */
+            int wsCount = 0;
+            for (int k = 0; k < len; k++) {
+                char c = b64.charAt(i + k);
+                win[k] = (byte) c;
+                if (c == '\n' || c == '\r' || c == ' ' || c == '\t') wsCount++;
+            }
+            if (wsCount != 0 && end < n) {
                 // A slice must hold a whole number of 4-char groups. Counting the
                 // real characters (not the bytes) keeps that true even if the
                 // payload ever carries line breaks, which would otherwise put a
                 // group boundary in the wrong place and make the slice undecodable.
-                int data = 0;
-                for (int k = i; k < end; k++) if (!ws(b64.charAt(k))) data++;
+                int data = len - wsCount;
                 int rem = data & 3;
                 while (rem != 0 && end > i) {
                     if (!ws(b64.charAt(--end))) rem = (rem + 3) & 3;
                 }
                 if (end <= i) end = Math.min(n, i + B64_CHUNK);
+                len = end - i;
+                for (int k = 0; k < len; k++) win[k] = (byte) b64.charAt(i + k);
             }
             /* The decoded length is the count of bytes this call hands to the
                stream, so the caller can tell a write that reported no error from
@@ -495,8 +515,6 @@ public class MainActivity extends Activity {
                and then drops the bytes returns normally here - the API<29 path
                already checks its .tmp for exactly that (length() <= 0), and this
                counter is the same test for the MediaStore path. */
-            final int len = end - i;
-            for (int k = 0; k < len; k++) win[k] = (byte) b64.charAt(i + k);
             final byte[] buf = Base64.decode(win, 0, len, Base64.DEFAULT);
             os.write(buf);
             wrote += buf.length;
