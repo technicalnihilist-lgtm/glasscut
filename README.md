@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 302 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.133 (versionCode 133) |
+| **Version** | 1.1.134 (versionCode 134) |
 
 ---
 
@@ -46,6 +46,18 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ---
 
 ## What was broken, and what changed
+
+### The photo-load path had one await with no bound, and one callback with no guard
+
+- **Reading a photo's header could hang the whole load, silently.** `imgDims` — the 8 KB/64 KB/256 KB header reads plus the JPEG marker walk that decide whether a big photo needs a decode-time resize — was a bare `async` chain of `File.slice().arrayBuffer()` and `Blob` reads with no timer anywhere, and both `#fMain` and `#fBg` sit on it. A content-URI or blob read that never settles (provider died, SAF document revoked, WebView dropping a read under memory pressure) meant the decode never started: empty canvas, no message, and the only way out was to pick the same file again. It is the same bug class that `toBlob` (4 s), `FileReader` (6 s), `navigator.share` (20 s), `raceBitmap` (15 s) and `loadImg` (20 s) already had watchdogs for; this one await was missed.
+- **It now has a 3 s bound that returns `null`.** `null` is exactly what "format not recognised" already returns, so the code takes the plain `<img>` / `loadImg` path it always took for unknown formats — which has its own 20 s watchdog and its own "Photo load nahi hui" message. The timer is cleared on resolve and on reject, so the `File` is never pinned by a live timer.
+- **The "Apni photo" background chain was the only load path with no exception guard.** `pickPhoto` wraps its decode and `drawPhoto` in `try/catch` (since 1.1.96); `#fBg`'s `bgDone` did not, and neither did its async IIFE. Any throw from `createImageBitmap`, `cover()`, `getImageData` (an `InvalidStateError` is normal on a low-RAM WebView) or the first `fullRender` became an uncaught promise rejection — a page error, no background, and no message at all.
+- **Both are guarded now** — the callback and the IIFE — and report the message this path already uses for every other failure ("Photo load nahi hui"). The background only becomes `bg.t === 'img'` inside the guarded body, so a failure leaves the previous background untouched.
+- Verified for 1.1.134 (base 1.1.133 vs 1.1.134, headless Chrome, 1400×1200 photo, `file://` page, `pageerror` + `console` listeners on):
+  - **Stalled header read** (`Blob.prototype.arrayBuffer` forced to never settle): base **photo never appears in 10 s** — canvas still the default 300×150, no toast, no message; now **photo loads at 4.0 s** (3 s bound + decode) and the canvas hash is **`67f49861`**, exactly the hash a normal load produces.
+  - **Exception inside `bgDone`** (forced throw): base **1 pageerror** and an empty toast; now **0 pageerror** and the toast reads "Photo load nahi hui".
+  - **Nothing else moved:** the same 15-checkpoint flow (load, dims, wand tap, 4-move erase stroke, undo, redo, Reset, colour background, PNG save, language en, window close/open, second photo, WEBP save) is identical on both builds at **every** checkpoint (canvas hashes `67f49861 → 68284193 → 147bf084 → 68284193 → 147bf084 → c5e48668 → 893df6f4 → 13b0d4f7`, only the save filename's timestamp differs), both saved files land on disk, and both background-photo routes (`<img>` for 1400×1050 and `createImageBitmap` resize for 4000×3000) produce the same hashes as base (`2b697517`, `ec795054`) — **0 pageerror, 0 console error** on both builds.
+- **`GlassCut.version`'s fallback literal is back in sync** — without the shell bridge the page reports **`1.1.134`**.
 
 The starting point was a single HTML file that looked finished but didn't work end to end. The design is untouched — same layout, same glass, same springs. Everything below is logic.
 
