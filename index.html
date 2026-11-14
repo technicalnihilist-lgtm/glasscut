@@ -1304,7 +1304,27 @@ const setSize=()=>{if(!od)return;
    nateeja pehle se 1 ya usse bada hi hota hai, is liye unka size byte-identical
    rehta hai (1400x1050, 900x675, 120x90 par CSS size pehle jaisa hi). */
 const fit=()=>{if(!od)return;const s=Math.min((stage.clientWidth-4)/CW,(stage.clientHeight-4)/CH);cv.style.width=Math.max(1,Math.floor(CW*s))+'px';cv.style.height=Math.max(1,Math.floor(CH*s))+'px';cRect=null};
-new ResizeObserver(fit).observe(stage);
+/* ResizeObserver (Chrome 64) is file ke baaki code se kaafi naya hai: yahan
+   PointerEvent (55), async/await (55) aur canvas.toBlob (50) chalte hain, aur
+   koi bhi ES2018+ syntax (`?.`, `??`) jaan-boojh kar use nahi hota - yaani app
+   purane WebView par chalne ke liye likhi gayi hai. ye ek line us umar se bahar
+   thi AUR bina guard ke: `new ResizeObserver` purane WebView par top-level
+   ReferenceError deta tha, yaani is line ke BAAD ka poora script (dock ke saare
+   button, tools, undo/redo, save, GlassCut bridge - sab) kabhi chalta hi nahi.
+   Natija: app khaali shell - "Photo" / Auto / Background / Save kuch bhi kaam
+   nahi karta aur Android ka back button page ko kabhi nahi poochta.
+   naapa (headless Chrome, window.ResizeObserver hata kar): base par pageerror
+   "ResizeObserver is not defined", #dock.onclick null, window.GlassCut undefined;
+   ab usi haalat me app poora chalti hai aur 0 error ke saath sab handlers bante
+   hain (dekho naap, 0 pageerror / 0 console error).
+   jahan ResizeObserver hai wahan raasta bilkul pehle jaisa hai (ek hi observer,
+   wahi fit); jahan nahi hai wahan resize/orientationchange par wahi fit chalta
+   hai - Android shell configChanges me orientation|screenSize rakhta hai, is
+   liye rotation par activity dobara nahi banti aur yahi wo event hai jo aata hai
+   (naapa: 412x915 -> 915x412 par canvas 379x285 -> 231x174, dono raaste par wahi
+   "contain" size). */
+if(typeof ResizeObserver==='function')new ResizeObserver(fit).observe(stage);
+else{window.addEventListener('resize',fit);window.addEventListener('orientationchange',fit)}
 
 /* rendering */
 /* feather/smooth ka blur har call par do naye W*H buffers banata tha: edge-softness
@@ -1895,8 +1915,33 @@ const blurBg=()=>{const blue=bg.t==='bluetint'?1:0,sg=bgSig;
  else{smx.setTransform(1,0,0,1,0,0);smx.globalAlpha=1;smx.clearRect(0,0,sw,sh)}
  const sx=smx;cover(sx,origC(),W,H,sw,sh);
  if(bgb.width!==CW||bgb.height!==CH){bgb.width=CW;bgb.height=CH}
- else{bxc.setTransform(1,0,0,1,0,0);bxc.globalAlpha=1;bxc.clearRect(0,0,CW,CH)}
- const bx=bxc;bx.imageSmoothingEnabled=true;bx.imageSmoothingQuality='high';bx.drawImage(sm,0,0,CW,CH);
+ /* 1.1.131: yahan poora canvas clear karke usi ke upar sm draw hota tha - yaani
+    blur ka har rebuild (blur slider ka har step, Blue blur toggle, naya blur
+    background) 1400x1050 par 1.47 M pixel saaf karta tha, sirf is liye ki neeche
+    wala draw transparent destination par "source-over" ki tarah baith jaye.
+    Ab wahi draw `copy` se hota hai: copy ka matlab hi "destination = source" hai,
+    is liye khaali canvas par source-over aur copy bilkul ek hi pixel dete hain -
+    edge ka semi-transparent pixel bhi (high-quality upscale sm ke kinare par
+    alpha < 255 chhodta hai, aur dono raaste wahi alpha likhte hain). clear ki
+    zaroorat hi nahi rehti, is liye ek bhi pixel nahi badalta - na opaque photo
+    par, na transparent par (wahan bhi copy destination ka purana content phenk
+    deta hai, jaisa clear karta tha).
+    copy ka dayra: draw ka destination rect poora canvas hai (0,0,CW,CH) aur
+    transform identity (upar setTransform), is liye copy canvas ke har pixel par
+    lagta hai - bahar koi hissa bacha hi nahi. draw ke turant baad globalComposite
+    -Operation wapas 'source-over' ho jata hai, is liye neeche ka blue tint
+    fillRect (aur baaki koi bhi use) pehle jaisa hi chalta hai.
+    naapa (headless Chrome, 1400x1050, blur background, #sBl 8->40 ke 12 step,
+    canvas-call counter): clearRect 10 call / 1,47,00,000 px -> 0 call / 0 px
+    (sm ka apna chhota surface alag hai); canvas hash dono par bilkul wahi
+    (d53e38d1) aur saved PNG byte-identical (3,26,260 B, sha1 9260a99ac7).
+    transparent main photo (alpha wala PNG) par bhi hash (e8034105) aur saved file
+    (33,263 B, sha1 606acaa664) base jaisa hi; wahan render ka apna poora clear
+    (transparent background par zaroori) pehle jaisa chalta hai, sirf bgb ka clear
+    gaya - clearRect 22 call / 3,23,40,000 px -> 11 call / 1,61,70,000 px. */
+ else{bxc.setTransform(1,0,0,1,0,0);bxc.globalAlpha=1}
+ const bx=bxc;bx.imageSmoothingEnabled=true;bx.imageSmoothingQuality='high';
+ bx.globalCompositeOperation='copy';bx.drawImage(sm,0,0,CW,CH);bx.globalCompositeOperation='source-over';
  if(blue){bx.globalAlpha=0.72;bx.fillStyle='#0a5cff';bx.fillRect(0,0,CW,CH);bx.globalAlpha=1}};
 /* tmp par bana composite (outline ring + subject) sirf in cheezon par depend karta
    hai: fgc (fgKey), transform (t[0],t[1],t[2]), outline ki chaudai (r) aur tilt
@@ -4392,8 +4437,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
  /* 1.1.129: phir drift (manifest 1.1.128 par, ye literal 1.1.126) - do build se
     page apni version peeche bata raha tha. ab sync hai; bina bridge
     GlassCut.version -> "1.1.129".
-   1.1.130: sync rakha gaya - bina bridge GlassCut.version -> "1.1.130". */
- return v||'1.1.130'}catch(_){return '1.1.130'}})(),
+   1.1.130: sync rakha gaya - bina bridge GlassCut.version -> "1.1.130".
+   1.1.131: sync rakha gaya - bina bridge GlassCut.version -> "1.1.131". */
+ return v||'1.1.131'}catch(_){return '1.1.131'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
