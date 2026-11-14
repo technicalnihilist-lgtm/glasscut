@@ -2735,8 +2735,16 @@ const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;
  if(++FL.g>255){FL.rok.fill(0);FL.g=1}
  const OK=FL.ok,ROK=FL.rok,g=FL.g,st=FL.st,t2=t*t;let sp=0,cnt=0;
  /* mask ka 32-bit view ek hi baar per flood (dekho neeche mask-clear loop). array
-    4-byte aligned na ho to null, aur tab purana byte loop chalta hai. */
- const MW=(LE32&&mask&&mask.byteOffset===0&&mask.length>=4)?new Uint32Array(mask.buffer,0,mask.length>>>2):null;
+    4-byte aligned na ho to null, aur tab purana byte loop chalta hai.
+    1.1.127: yahan pehle `new Uint32Array(mask.buffer,0,mask.length>>>2)` tha - yaani
+    har wand tap par ek naya view object, halanki mu32() wahi view pehle se cache
+    karta hai (buffer + length key par) aur usi cache ko maskAll255 / maskUniform /
+    Invert pehle se use karte hain - upar wali tippani bhi yahi kehti hai ("MW
+    (flood) ke liye pehle se cache hote hain"). mu32() ki shartein bilkul wahi hain
+    (byteOffset 0, length>=4), is liye nateeja byte-identical rehta hai. naapa
+    (headless Chrome, 1400x1200, ek wand tap, Uint32Array constructor par counter):
+    view constructions 1 -> 0, canvas hash dono par wahi. */
+ const MW=LE32?mu32():null;
  /* sach me badle hue pixel ka box (mask 255 -> 0) */
  let cx0=W,cy0=H,cx1=-1,cy1=-1;
  /* keepMask sirf tab dekha jata hai jab sach me kuch protect kiya gaya ho
@@ -3694,7 +3702,49 @@ $('#bInv').onclick=need(()=>{push();
  if(u){const n=u.length;for(let k=0;k<n;k++)u[k]=(0xFFFFFFFF-u[k])>>>0;
   for(let i=n*4,e=m.length;i<e;i++)m[i]=255-m[i]}
  else for(let i=0;i<m.length;i++)m[i]=255-m[i];
- mbAll();enforce();mver++;softKill();fullRender()});
+ /* 1.1.127: yahan pehle hamesha mbAll() chalta tha, yaani MB poora canvas. MB sirf
+    bada hota hai, chhota kabhi nahi - is liye ek baar poora canvas ho gaya to uske
+    baad har Grow / Shrink / Smooth ka scan, feather ka poora blur, alpha ka poora
+    upload (1400x1200 par 16,80,000 byte loop + utna hi putImageData) aur SUBX ka
+    scan poore canvas par chalte rehte the, chahe mask ka content wapas subject ke
+    box me hi ho. Invert do baar dabane par mask bilkul pehle jaisa ho jata hai, par
+    MB poora canvas hi reh jata tha. naapa (headless Chrome, 1400x1200, auto cut ke
+    baad Invert x2, phir Grow): putImageData 16,80,000 px, jabki usi Grow par Invert
+    se pehle 4,15,584 px - yaani 4x.
+    Invert pehle se hi poore mask par chalta hai, is liye uska asli bbox wahin nikal
+    liya jata hai aur MB wahi ho jata hai. bbox poore canvas ka hai (Invert poore
+    mask ko badalta hai), is liye ye exact hai - MB ke bahar mask 0 hota hai aur
+    andar ka bbox poore canvas ka bbox hi hai. nateeja byte-identical: chhota MB
+    sirf wo hissa chhodta hai jahan mask pehle se 0 hai, aur wahan har op ka nateeja
+    bhi 0 hi hota hai (yeh wahi tark hai jispar Grow/Shrink/Smooth aur feather ka
+    blur pehle se khade hain). keepDirty par purana mbAll hi chalta hai: keepMask
+    MB ke bahar 255 likh sakta hai (enforce), wahi guard jo cutout lagata hai.
+    MB narrow hone par softKill() ka poora blur naye (chhote) box par banta hai, is
+    liye SBOX bhi apne aap chhota ho jata hai. naapa (headless Chrome, 1400x1200,
+    auto cut ke baad Invert x2, phir Grow): 16,80,000 -> 4,18,300 px; canvas hash
+    dono par wahi, aur poore 28-checkpoint flow (invert, grow, smooth, undo/redo,
+    wand, stroke, keep, auto, feather 6, outline 12, shadow, depth 40, 9:16, rang
+    background, reset) ke har checkpoint par bhi wahi. exact bbox scan khud 1400x1200
+    par 3.2-4.2 ms leta hai (alag se naapa), is liye upar wala kinara-check usse
+    aam haalat me poora bacha leta hai. */
+ if(keepDirty)mbAll();
+ else{
+  /* sasta pehla check: Invert aam taur par background ko 255 kar deta hai, yaani
+     naya mask canvas ke chaaron kinaron tak pahunchta hai aur bbox poora canvas hi
+     hota hai - us haalat me neeche ka poora scan bekaar hai. chaar kinare padhne
+     par ye 2W+2H = 5200 byte me pata chal jata hai. */
+  let edge=0;
+  for(let x=0;x<W;x++){if(m[x])edge|=1;if(m[(H-1)*W+x])edge|=2}
+  for(let y=0;y<H;y++){if(m[y*W])edge|=4;if(m[y*W+W-1])edge|=8}
+  if(edge===15)mbAll();
+  else{
+   let bx0=W,by0=H,bx1=-1,by1=-1;
+   for(let y=0;y<H;y++){const b=y*W;let f=-1,l=-1;
+    for(let x=0;x<W;x++){if(m[b+x]){if(f<0)f=x;l=x}}
+    if(f>=0){if(f<bx0)bx0=f;if(l>bx1)bx1=l;if(by0===H)by0=y;by1=y}}
+   if(bx1<0){MB[0]=0;MB[1]=0;MB[2]=-1;MB[3]=-1}
+   else{MB[0]=bx0;MB[1]=by0;MB[2]=bx1;MB[3]=by1}}}
+ enforce();mver++;softKill();fullRender()});
 /* Smooth ka box blur bhi sirf MB+2 tak: radius 2 ka blur MB se do pixel door ke
    bahar har jagah 0 deta hai, aur 0 par (0-128)*3+128 clamp hokar 0 hi banta hai -
    yaani wahan mask pehle se 0 hai, likhne ki zaroorat nahi. */
