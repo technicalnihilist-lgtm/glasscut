@@ -2775,9 +2775,19 @@ const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;
     OK&1 par chalta hai (yaani 1 aur 2 dono par, theek pehle jaisa jahan vis
     dekha hi nahi jata tha), aur naya span sirf OK===1 par push hota hai (theek
     pehle ke vis[j]!==g jaisa). nateeja byte-identical (dekho naap). */
- if(!FL||FL.n!==M)FL={n:M,ok:new Uint8Array(M),rok:new Uint8Array(H),st:stk(M),g:0};
+ if(!FL||FL.n!==M)FL={n:M,ok:new Uint8Array(M),rok:new Uint8Array(H),st:stk(M),g:0,u:null};
  if(++FL.g>255){FL.rok.fill(0);FL.g=1}
  const OK=FL.ok,ROK=FL.rok,g=FL.g,st=FL.st,t2=t*t;let sp=0,cnt=0;
+ /* 1.1.129: OK ka 32-bit view (buffer 4-byte aligned hai, is liye byteOffset 0).
+    flood ke teen sabse garam loops byte par byte chal rahe the aur teeno ka faisla
+    sirf OK ke bit0 (pass/fail) aur "byte barabar 1 hai ya nahi" par hota hai - dono
+    ek 32-bit word par ek hi jhatke me ho sakte hain. view ek hi baar banta hai aur
+    FL ke saath rehta hai (photo badalne par FL khud naya banta hai), is liye per tap
+    koi allocation nahi. endianness se matlab nahi - pattern 0x01010101 byte order par
+    nahi, har byte ke bit0 par chalta hai. */
+ const WN=M>>>2;
+ if(!FL.u&&WN>0&&FL.ok.byteOffset===0)FL.u=new Uint32Array(FL.ok.buffer,0,WN);
+ const UOK=FL.u;
  /* mask ka 32-bit view ek hi baar per flood (dekho neeche mask-clear loop). array
     4-byte aligned na ho to null, aur tab purana byte loop chalta hai.
     1.1.127: yahan pehle `new Uint32Array(mask.buffer,0,mask.length>>>2)` tha - yaani
@@ -2814,9 +2824,25 @@ const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;
   /* is row par span ki poori chaudai. jo hissa kisi doosre span ne pehle hi
      bhara ho wo bhi span me aa jata hai (OK&1 me 2 bhi shaamil hai), aur mask par
      dobara 0 likhna bekaar (idempotent) hai. */
-  let xl=x,xr=x;
+  /* span ke dono kinare poore W par ek-ek byte badhte the: poore background ke tap
+     par har row ka span poora row hota hai, yaani 1400x1050 par ~14.7 lakh byte
+     iteration sirf isi failaav me. word ka test exact hai - word ke chaar byte
+     sab pass hain to chaar pixel ek saath, warna purana byte step (is liye nateeja
+     ek byte ka bhi nahi badalta). */
+ let xl=x,xr=x;
+ if(UOK){
+  const rowEnd=base+W-1;
+  while(xr<W-1){const j=base+xr+1;
+   if((j&3)===0&&j+3<=rowEnd){const w=UOK[j>>>2];
+    if((w&0x01010101)===0x01010101){xr+=4;continue}}
+   if(!(OK[j]&1))break;xr++}
+  while(xl>0){const j=base+xl-1;
+   if((j&3)===3&&j-3>=base){const w=UOK[(j-3)>>>2];
+    if((w&0x01010101)===0x01010101){xl-=4;continue}}
+   if(!(OK[j]&1))break;xl--}
+ }else{
   while(xl>0&&(OK[base+xl-1]&1))xl--;
-  while(xr<W-1&&(OK[base+xr+1]&1))xr++;
+  while(xr<W-1&&(OK[base+xr+1]&1))xr++}
   const ry=base/W|0;
   let ka=-1,kb=-1;
   /* span ke sab pixel "dekh liye" - ek memset (pehle vis par wahi hota tha) */
@@ -2855,9 +2881,21 @@ const flood=(seeds,cr,cg,cb,t)=>{const M=W*H;
    const bb=ny*W;
    let k=xl;
    while(k<=xr){const j=bb+k;
-    if(OK[j]!==1){k++;continue}
+    if(OK[j]!==1){
+     /* wo hissa jo pehle hi dekh liya gaya hai (OK=2) ek-ek byte chhoda jata tha -
+        poore background ke tap par padosi row ka poora span aisa hi hota hai, yaani
+        har row par 2 x W byte iteration bekaar. "is word me koi byte 1 hai kya" ka
+        exact test: byte 1 hai to uske bit0 aur bit1 alag honge (byte 0/2 par barabar),
+        is liye (u^v)&u per byte bit0 = 1 sirf byte 1 ke liye. */
+     if(UOK&&(j&3)===0&&k+3<=xr){const w=UOK[j>>>2];
+      const u=w&0x01010101,v=(w>>>1)&0x01010101;
+      if((((u^v)&u)&0x01010101)===0){k+=4;continue}}
+     k++;continue}
     let k2=k;
-    while(k2<xr&&(OK[bb+k2+1]&1))k2++;
+    while(k2<xr){const j2=bb+k2+1;
+     if(UOK&&(j2&3)===0&&k2+4<=xr){const w=UOK[j2>>>2];
+      if((w&0x01010101)===0x01010101){k2+=4;continue}}
+     if(!(OK[j2]&1))break;k2++}
     OK[j]=2;st[sp++]=(k<<21)|j;
     k=k2+1}}}
  /* kuch nahi hata: mask waisa hi hai, to softM abhi bhi sahi hai - use phenkna
@@ -4342,7 +4380,10 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
     browser/preview me page apni version ek build peeche bata raha tha.
     1.1.125: sync rakha gaya - bina bridge GlassCut.version -> "1.1.125".
    1.1.126: sync rakha gaya - bina bridge GlassCut.version -> "1.1.126". */
- return v||'1.1.126'}catch(_){return '1.1.126'}})(),
+ /* 1.1.129: phir drift (manifest 1.1.128 par, ye literal 1.1.126) - do build se
+    page apni version peeche bata raha tha. ab sync hai; bina bridge
+    GlassCut.version -> "1.1.129". */
+ return v||'1.1.129'}catch(_){return '1.1.129'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
