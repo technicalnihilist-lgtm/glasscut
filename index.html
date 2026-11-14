@@ -1082,7 +1082,7 @@ const drawPhoto=(im,nw,nh)=>{
      guard yahin hai: size badla to use chhod do (nayi photo ke liye purani
      keepMask ka koi matlab nahi), warna wahi buffer rakho - usme sirf 255 hote
      hain jo Keep tool ne likhe, aur wo nayi photo par galat hote. */
-  if(keepMask&&keepMask.length!==NP)keepMask=null;SUB=null;fgFull=true;
+  if(keepMask&&keepMask.length!==NP)keepMask=null;SUB=null;fgFull=true;KV=null;
   /* size badalne par ye saare scratch buffer nayi photo ke liye bekaar hain - har
      ek apne guard (FL.n, BLS.n, CC.n/m, BD.w/h/nw/nh, SD.length, XR.W/nw,
      MBUF.length, SEEDS capacity) se pehle hi naya banata hai, is liye inhe rakhna
@@ -1367,6 +1367,23 @@ const blurRect=(src,r,rx0,ry0,rx1,ry1,out)=>{
  if(rx1<rx0||ry1<ry0)return out;
  const ty0=Math.max(0,ry0-r),ty1=Math.min(H-1,ry1+r);
  let x,y,s,b,k;
+ /* 1.1.128: horizontal pass ke beech ke hisse me ca/cs table ki zaroorat hi nahi
+    thi. ca[x]=min(W-1,x+r+1) aur cs[x]=max(0,x-r) sirf kinare ke r pixel par
+    clamp karte hain - beech me wo bilkul x+r+1 aur x-r hi hain. pehle har pixel
+    par do Int32Array load chalti thin (1400x1200 ke poore-canvas blur par
+    2 x 16,80,000 = 33,60,000 load, dono passes me 67,20,000). ab row ka scan teen
+    lagataar hisson me hai - baayen kinara (table), beech (seedha x+r+1 / x-r),
+    daayen kinara (table) - aur loop ke andar koi branch nahi, is liye jod ka kram,
+    tab lookup aur likhne ka kram bilkul wahi rehta hai. hisson ki hadd:
+    left x<r, middle r<=x<=W-2-r, right x>W-2-r - teeno milkar rx0..rx1 ko bina
+    overlap aur bina gap dhakte hain (koi hissa khaali ho to uska loop chalta hi
+    nahi, aur running sum s hisse se hisse tak wahi chalta hai).
+    naapa (headless Chrome, dono build, 10 shape/radius case - 1400x1200 r=1,2,4,6,8,
+    1400x1200 ka 600x800 box r=2, 700x525 r=3, 1x1, 1400x3, r=0): har case me
+    out ka byte diff 0, aur full-canvas r=6 par 18.95 -> 17.49 ms, box r=2 par
+    7.70 -> 6.93 ms, r=1 par 20.83 -> 19.34 ms (r=2/4 par farak noise ke andar). */
+ const ea=rx1<r-1?rx1:r-1, ma=rx0>r?rx0:r,
+       mb=rx1<W-2-r?rx1:W-2-r, rb=rx0>W-1-r?rx0:W-1-r;
  /* chaar-row wala horizontal pass - stroke
     release, Grow/Shrink, Smooth aur undo/redo ka feather blur isi se banta hai,
     aur is box me rows kam hone par bhi chain tooti rehti hai. jod, tab lookup
@@ -1376,13 +1393,23 @@ const blurRect=(src,r,rx0,ry0,rx1,ry1,out)=>{
   const q0=yy*W,q1=q0+W,q2=q1+W,q3=q2+W;let s0=0,s1=0,s2=0,s3=0;
   for(k=-r;k<=r;k++){const c=rx0+k,cc=c<0?0:c>W-1?W-1:c;
    s0+=src[q0+cc];s1+=src[q1+cc];s2+=src[q2+cc];s3+=src[q3+cc]}
-  for(x=rx0;x<=rx1;x++){const a=ca[x],c=cs[x];
+  for(x=rx0;x<=ea;x++){const a=ca[x],c=cs[x];
+   t[q0+x]=tab[s0];t[q1+x]=tab[s1];t[q2+x]=tab[s2];t[q3+x]=tab[s3];
+   s0+=src[q0+a]-src[q0+c];s1+=src[q1+a]-src[q1+c];
+   s2+=src[q2+a]-src[q2+c];s3+=src[q3+a]-src[q3+c]}
+  for(x=ma;x<=mb;x++){const a=x+r+1,c=x-r;
+   t[q0+x]=tab[s0];t[q1+x]=tab[s1];t[q2+x]=tab[s2];t[q3+x]=tab[s3];
+   s0+=src[q0+a]-src[q0+c];s1+=src[q1+a]-src[q1+c];
+   s2+=src[q2+a]-src[q2+c];s3+=src[q3+a]-src[q3+c]}
+  for(x=rb;x<=rx1;x++){const a=ca[x],c=cs[x];
    t[q0+x]=tab[s0];t[q1+x]=tab[s1];t[q2+x]=tab[s2];t[q3+x]=tab[s3];
    s0+=src[q0+a]-src[q0+c];s1+=src[q1+a]-src[q1+c];
    s2+=src[q2+a]-src[q2+c];s3+=src[q3+a]-src[q3+c]}}
  for(y=yy;y<=ty1;y++){b=y*W;s=0;
   for(k=-r;k<=r;k++){const c=rx0+k;s+=src[b+(c<0?0:c>W-1?W-1:c)]}
-  for(x=rx0;x<=rx1;x++){t[b+x]=tab[s];s+=src[b+ca[x]]-src[b+cs[x]]}}
+  for(x=rx0;x<=ea;x++){t[b+x]=tab[s];s+=src[b+ca[x]]-src[b+cs[x]]}
+  for(x=ma;x<=mb;x++){t[b+x]=tab[s];s+=src[b+x+r+1]-src[b+x-r]}
+  for(x=rb;x<=rx1;x++){t[b+x]=tab[s];s+=src[b+ca[x]]-src[b+cs[x]]}}
  /* vertical pass chaar column ek saath: column-wise
     chalne par har read ek alag cache line par jata tha, aur jab blur ka box poore
     canvas jitna bada ho to column-wise loop poore blur se dheema pad jata tha.
@@ -1503,6 +1530,8 @@ const mbAdd=(x0,y0,x1,y1)=>{if(x0<MB[0])MB[0]=x0;if(y0<MB[1])MB[1]=y0;if(x1>MB[2
    Uint32Array view constructions 12 -> 2, aur har mask op ka nateeja byte-identical
    (canvas hash teeno op ke baad base jaisa hi). */
 let MU=null;
+/* keepMask ka 32-bit view (enforce) - wahi ek-entry cache, key buffer + length */
+let KV=null;
 const mu32=()=>{if(!mask||mask.byteOffset!==0||mask.length<4)return null;
  const n=mask.length>>>2;
  if(MU&&MU.buffer===mask.buffer&&MU.length===n)return MU;
@@ -2654,9 +2683,24 @@ const enforce=(bx)=>{if(!keepMask||!keepDirty)return;let ch=false;
     255 likhne wale pixel dono par bilkul wahi 10,446, aur usi flow ke 11
     checkpoint par canvas hash base jaisa byte-identical. */
  const k=keepMask,m=mask;
- const KU=(k.byteOffset===0&&m.byteOffset===0&&m.length===k.length&&k.length>=4)
-   ?new Uint32Array(k.buffer,0,k.length>>>2):null;
- const MU=KU?new Uint32Array(m.buffer,0,m.length>>>2):null;
+ /* 1.1.128: yahan dono 32-bit views har call par naye bante the - `new Uint32Array`
+    do baar, har enforce par (Grow/Shrink/Smooth/Invert/Auto/Undo ka keep-flow
+    har press). yahi per-call view allocation hai jise mu32() (mask), MW (flood),
+    DVA/DVB (diffBox) aur MU ke liye pehle theek kiya ja chuka hai - mask ka view
+    ab wahi cached mu32() hai (byteOffset/length ki shartein bilkul wahi hain), aur
+    keepMask ka view ek hi entry ke cache me (KV) rakha jata hai, key = buffer +
+    length. keepMask badalne par (nayi photo, dropScratch, Keep ke baad naya
+    buffer) key khud mismatch hoti hai, is liye purana view kabhi galat array par
+    nahi tikta; KV ko keepMask chhodne wali jagahon par saaf bhi kar diya jata hai
+    taaki purana 1.68 MB buffer pinned na rahe. nateeja byte-identical (dekho
+    naap). */
+ let KU=null,MU2=null;
+ if(k.byteOffset===0&&m.byteOffset===0&&m.length===k.length&&k.length>=4){
+  const n=k.length>>>2;
+  if(!KV||KV.buffer!==k.buffer||KV.length!==n)KV=new Uint32Array(k.buffer,0,n);
+  KU=KV;MU2=m===mask?mu32():null;
+  if(!MU2)MU2=new Uint32Array(m.buffer,0,n)}
+ const MU=MU2;
  for(let y=ky0;y<=ky1;y++){const b=y*W;let i=b+kx0;const e=b+kx1;
   if(KU){
    while(i<=e&&(i&3)){if(k[i]&&m[i]!==255){m[i]=255;ch=true}i++}
@@ -4235,6 +4279,8 @@ const resumeRender=()=>{if(!owedRender)return;owedRender=false;fullRender()};
 const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;jcv=null;jcvx=null;STK=null;POOL.length=0;PSHIFT=null;
  /* diff compare ke 32-bit views (diffBox) bhi apne mask buffer ko pin karte hain */
  DVA=null;DVB=null;
+ /* enforce ka keepMask view bhi wahi - trim par wahi buffer chhod do */
+ KV=null;
  /* opacity probe canvas bhi ek cache hai (CW x CH surface) - trim par chhod do,
     agla check ise dobara bana leta hai */
  opc=null;opx=null;if(!savePending)lastSaveBlob=null;
