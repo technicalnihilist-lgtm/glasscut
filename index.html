@@ -593,7 +593,7 @@ $('#cBlue').onclick=need(()=>{
  bg={t:'bluetint'};
  /* portrait mode: sirf insaan, background ka koi tukda nahi */
  keepObj=0;const kk=$('#tKeep');if(kk)kk.setAttribute('aria-checked','false');
- push();
+ if(!push())return;
  /* purana mask array pool me wapas (bufOf use turant utha leta hai, is liye ye
     Reset/Blue-blur ab naya 1.3 MB buffer banane ke bajaye wahi reuse karte hain) */
  const om=mask;if(om&&om!==mask0&&om.length===W*H&&POOL.length<2)POOL.push(om);
@@ -2468,7 +2468,28 @@ const bgEdge=(c,px,py,pox,poy)=>{c.save();c.translate(-pox,-poy);
  if(py>0)c.drawImage(cv,0,py,CW,1,0,0,CW,py);
  else if(py<0)c.drawImage(cv,0,CH+py-1,CW,1,0,CH+py,CW,-py);
  c.restore()};
-function render(fast){if(!od)return;RFULL=!fast;const fresh=cvFresh;cvFresh=false;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1;
+/* 1.1.138: render ke andar canvas ka koi bhi call throw kar sakta hai. Android ke
+   low-RAM WebView par bade canvas (1400x2489 tak) ke saath putImageData / drawImage
+   InvalidStateError ya OOM dete hain - theek wahi cheez jise getImageData ke liye
+   is file me pehle se guard kiya gaya hai (dekho drawPhoto aur imgOpaqueCheck).
+   yahan wo guard nahi tha, is liye exception rAF callback / button handler se seedha
+   bahar jati thi: ek pageerror per frame (stroke ke dauraan per pointermove), aur
+   render beech me ruk jata tha - layer() ka alpha upload ya composite adhoora, par
+   PART aur PRV ke cache aur THas wahi purane, yaani agle frame ka hisaab bhi galat.
+   ab poora render ek guard me hai: failure par frame ke saare caches "kuch bhi sahi
+   nahi" par set ho jate hain (fgVer/THas/SOK/PART/PRVcw) aur RFULL false, taaki
+   agla render poora dobara bane - save() aur wand ka skip guard bhi us par nahi
+   rukta. screen par kuch nahi badalta jab canvas theek chalta hai (normal raasta
+   bilkul wahi hai). naapa (headless Chrome, putImageData aur drawImage ko 50%
+   calls par throw karaya, 1400x1050): base par 2 (putImageData) / 4 (drawImage)
+   pageerror; ab dono par 0, app jawab deta rehta hai, aur fault hataane ke baad
+   agla operation bilkul wahi canvas hash deta hai jo bina fault wale run me aata hai. */
+function render(fast){
+ try{renderBody(fast)}
+ catch(_){
+  RFULL=false;THas=false;SOK=false;PART=null;PRVcw=-1;PRVbgN=-1;
+  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;SUBX=false;NORESTR=false}}
+function renderBody(fast){if(!od)return;RFULL=!fast;const fresh=cvFresh;cvFresh=false;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1;
  /* "Hold: Original" (compare) me background, uska clearRect aur depth ka gradient
     sab bekaar the: pehle yahan poora background banta tha aur neeche wala showOrig
     branch turant poora canvas clear kar deta tha, is liye un teeno ka ek bhi pixel
@@ -2856,12 +2877,25 @@ const diffBox=(a,b,bx)=>{
  return x1<0?null:[x0,y0,x1,y1]};
 let PSHIFT=null;
 const push=()=>{stopDraw();
+ /* 1.1.138: snapshot ka buffer (W*H) memory pressure par throw kar sakta hai -
+   aur yeh theek us waqt hota hai jab device ki memory pehle se tang hai. pehle
+   yahan PEND/redo pehle chhute the aur snap() uske BAAD chalta tha, is liye
+   allocation fail hone par operation abort hota tha par redo stack khaali ho
+   chuka hota tha - user ka redo hamesha ke liye gaya, bina kuch badle, aur
+   exception UI thread par bahar chali jati thi. ab snapshot pehle banta hai:
+   fail ho to kuch bhi nahi chhua jata (redo jaisa tha waisa, undo stack waisa,
+   PSIFT/PEND waisa) aur false laut jata hai - caller apna operation chhod deta
+   hai. naapa (Uint8Array allocation ko fail karaya, 1400x1050): base par Grow ke
+   baad Redo hamesha ke liye gaya (canvas hash 4dd33060 -> fe94988 hi raha);
+   ab usi haalat me Grow chhut jata hai aur Redo wapas wahi 4dd33060 deta hai. */
+ let s;try{s=snap()}catch(_){return false}
  /* pichhla push ab pakka commit ho chuka hai (har naya operation uske baad hi
     shuru hota hai), is liye uski rakhi hui entry ab bekaar hai */
  if(PSHIFT){recycle(PSHIFT);PSHIFT=null}
  if(PEND){for(let i=0;i<PEND.length;i++)recycle(PEND[i]);PEND=null}
  PEND=redo.length?redo:null;redo=[];
- undo.push(snap());if(undo.length>10)PSHIFT=undo.shift()};
+ undo.push(s);if(undo.length>10)PSHIFT=undo.shift();
+ return true};
 /* operation kuch nahi badla: redo stack wapas, aur uske buffers chhue bhi nahi.
    saath hi stack se nikli 11vi entry wapas apni jagah (sabse purani) par - warna
    no-op operation history ki gehrai ek kam kar deta tha. */
@@ -3674,7 +3708,7 @@ const auto=(silent)=>{if(!od)return;
      stack aur mver chhue nahi jate - baseline me bhi push+recycle+abortPush ka
      net asar zero tha, aur mask na badalne par mver badhana sirf bekaar upload tha. */
   if(!silent)toast('Kuch nahi hata. Tolerance badhao ya Wand use karo');return}
- push();const c=cutout();
+ if(!push())return;const c=cutout();
  /* mver yahan badhaya nahi jata: cutout khud tabhi badhata hai jab usne mask me
     sach me kuch likha ho (cnt||kc). khaali cutout par mask byte-identical hai, is liye
     mver badhana sirf agle frame par bekaar full alpha upload + poora feather blur
@@ -3831,7 +3865,7 @@ cv.addEventListener('pointerdown',e=>{if(!od||drawing)return;
     button bhi erase stroke shuru kar deta tha (aur undo history me jagah leta tha) */
  if(e.button>0)return;e.preventDefault();refreshRect();const p=pt(e);
  if(mode==='wand'){if(p[0]<0||p[1]<0||p[0]>=W||p[1]>=H)return;
-  push();let skipR=false;
+  if(!push())return;let skipR=false;
   if(!wand(p[0],p[1])){recycle(undo.pop());abortPush();
    /* kuch nahi hata (tap aise hisse par jo pehle se mitaya hua hai): mask ek byte
       bhi nahi badla, is liye mver badhane ka matlab tha layer() ka poora W*H upload
@@ -3857,7 +3891,7 @@ cv.addEventListener('pointerdown',e=>{if(!od||drawing)return;
      use karta hai). jis tap ne kuch nahi badla aur jiske liye koi preview pending
      bhi nahi hai, uske liye koi render hi nahi (upar skipR). */
   if(!skipR)fullRender();return}
- push();strokeCh=0;stR=-1;drawing=true;pid=e.pointerId;lastX=p[0];lastY=p[1];try{cv.setPointerCapture(e.pointerId)}catch(_){}
+ if(!push())return;strokeCh=0;stR=-1;drawing=true;pid=e.pointerId;lastX=p[0];lastY=p[1];try{cv.setPointerCapture(e.pointerId)}catch(_){}
  const rs=ringSize()+'px';ring.style.width=ring.style.height=rs;ring.style.display='block';ringAt(e.clientX,e.clientY);strokeCh+=stroke(p[0],p[1],p[0],p[1],p[2])});
 /* coalesced pointer samples: touchscreen 120-240 Hz par sample karti hai, par
    pointermove ek frame me ek hi baar aata hai. beech ke saare sample WebView
@@ -3950,7 +3984,7 @@ let MBUF=null;
    nahi jata (purana poora kaam hi chalta hai). */
 const morph=g=>{
  if(!keepDirty&&!raf&&!rt&&RFULL&&!showOrig&&maskUniform()>=0)return;
- push();
+ if(!push())return;
  if(!MBUF||MBUF.length!==mask.length)MBUF=new Uint8Array(mask.length);
  const o=MBUF,m=g?Math.max:Math.min;
  /* 1.1.110: pehle yahan poori mask ka copy hota tha (o.set(mask), 1400x1200 par
@@ -4023,7 +4057,7 @@ const morph=g=>{
     poora raasta hi leta hai. */
  enforce();mver++;softTouch(MB[0],MB[1],MB[2],MB[3]);fullRender()};
 $('#bGrow').onclick=need(()=>morph(1));$('#bShr').onclick=need(()=>morph(0));
-$('#bInv').onclick=need(()=>{push();
+$('#bInv').onclick=need(()=>{if(!push())return;
  /* Invert poore mask par ek byte loop tha (1.68 M iteration, 1400x1200). ab wahi
     kaam 32-bit word par: 0xFFFFFFFF - w koi borrow nahi banata, wo poora word ka
     bitwise NOT hai, is liye har byte alag-alag 255-b banta hai - bilkul wahi
@@ -4090,7 +4124,7 @@ $('#bSmo').onclick=need(()=>{
  /* uniform mask (255 ya 0) par Smooth ka nateeja bilkul wahi mask hai - dekho
     maskUniform. pehle yahan poora blur + render + ek khaali undo step chalta tha. */
  if(!keepDirty&&!raf&&!rt&&RFULL&&!showOrig&&maskUniform()>=0)return;
- push();
+ if(!push())return;
  const bxa=Math.max(0,MB[0]-2),bxb=Math.min(W-1,MB[2]+2),bya=Math.max(0,MB[1]-2),byb=Math.min(H-1,MB[3]+2);
  if(bxb>=bxa&&byb>=bya){
   /* 1.1.89: Smooth ka blur nateeja pehle BLS.o me jata tha - ek poora W*H scratch
@@ -4121,7 +4155,7 @@ $('#bRst').onclick=need(()=>{
     jata tha, halanki mask ek byte nahi badalta. diffBox yahi predicate hai jo
     undo/redo use karta hai; barabar hone par null lauta deta hai. */
  if(!keepDirty&&!raf&&!rt&&RFULL&&!showOrig&&diffBox(mask,mask0)===null){toast('Reset ho gaya');return}
- push();
+ if(!push())return;
  const om=mask;if(om&&om!==mask0&&om.length===W*H&&POOL.length<2)POOL.push(om);
  const nm=bufOf();nm.set(mask0);mask=nm;mbAll();enforce();mver++;softKill();fullRender();toast('Reset ho gaya')});
 const cmp=$('#bCmp');
@@ -4638,8 +4672,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.134: sync rakha gaya - bina bridge GlassCut.version -> "1.1.134".
    1.1.135: sync rakha gaya - bina bridge GlassCut.version -> "1.1.135".
    1.1.136: sync rakha gaya - bina bridge GlassCut.version -> "1.1.136".
-   1.1.137: sync rakha gaya - bina bridge GlassCut.version -> "1.1.137". */
- return v||'1.1.137'}catch(_){return '1.1.137'}})(),
+   1.1.137: sync rakha gaya - bina bridge GlassCut.version -> "1.1.137".
+   1.1.138: sync rakha gaya - bina bridge GlassCut.version -> "1.1.138". */
+ return v||'1.1.138'}catch(_){return '1.1.138'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
