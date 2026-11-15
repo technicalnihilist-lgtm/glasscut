@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 302 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.134 (versionCode 134) |
+| **Version** | 1.1.135 (versionCode 135) |
 
 ---
 
@@ -46,6 +46,18 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ---
 
 ## What was broken, and what changed
+
+### Switching between "Blur original" and "Blue blur" re-blurred the photo for nothing
+
+- **The blurred background was cached under a key that included the tint.** `blurBg` built `bgb` in two steps — a downsample of the original into `sm`, then a high-quality upscale of `sm` back to the canvas — and, for `bg.t === 'bluetint'`, one full-canvas `#0a5cff` fill at alpha 0.72 on top. The cache signature was `[bgVer, CW, CH, P.bl, blue]`, so a change of *tint alone* invalidated the whole thing: the cover, the downscale and the 1.4 M-pixel high-quality upscale all ran again, even though only the last `fillRect` differs. `#cBlur` and `#cBlue` also bumped `bgVer` on every press, which invalidated the same cache a second way — while `partBox` already compares `bg.t` and `bg.v` itself, so that bump was doing nothing for the render.
+- **The two steps are now separate.** `up()` (the upscale) is cached on `[bgVer, CW, CH, P.bl]` and `bgBlue` remembers whether the tint is currently baked into `bgb`, so `blur → blue` is one `fillRect` and `blue → blur` is the same copy-upscale a rebuild would have done anyway. `bgVer` now only moves when the blur content really changes (new photo, canvas size, `P.bl`, `dropScratch`, a background image). Pixels are written in exactly the same order with the same colour, alpha and smoothing, so every frame is byte-identical.
+- **`#cBlue` no longer re-runs the whole cutout when the mask cannot have changed.** Its no-op guard required `bg.t === 'bluetint'`, so "Blue blur → Blur original → Blue blur" with nothing edited in between re-did the portrait cutout (~700 ms) even though the mask was still that cutout's result. `BTK` already pins the photo (`PTOK`), the tolerance and `mver` — and `mver` moves on every mask change — so the guard now only checks those, sets the background and renders.
+- Verified for 1.1.135 (base 1.1.134 vs 1.1.135, headless Chrome, 1400×1200 photo, `pageerror` + `console` listeners on):
+  - **Blue blur toggle, nothing else edited:** 612 / 899 / 504 ms → **1.5 / 1.9 / 3.2 ms**; the first Blue press (which still runs the cutout) 1176 → 792 ms. Blur-original toggles unchanged within noise (299–394 → 300–483 ms).
+  - **Nothing moved on screen:** a 21-checkpoint differential (blur, blue, blur, blue, blue, blur-slider 20/48/30/48/12, blur, blue, 9:16, blue, blur, Original, Grow, Undo, Redo, colour, blur, blue) is byte-identical at **every** checkpoint, and the same 17-checkpoint flow (load, auto, wand, 10-move erase, undo, redo, Reset, colour, Blur original, Blue blur, PNG save, language en/hi, window close/open, second photo) is identical too — 0 pageerror, 0 console error on both.
+  - **Saved files byte-identical:** PNG auto `8ade7d9e1ee2` (64,897 B), JPG auto `9255f4db5de9` (34,244 B), PNG over Blue blur `be0994264f74` (169,736 B) on both builds.
+  - **The cache still drops when it must:** `GlassCut.trim()`, `pause()` and `resume()` on a blur/blue background leave the canvas hash unchanged (9a2a380c / 83cac7bc) — the blur is rebuilt on the next render, as before.
+- **`GlassCut.version`'s fallback literal is in sync** — without the shell bridge the page reports **`1.1.135`**.
 
 ### The photo-load path had one await with no bound, and one callback with no guard
 

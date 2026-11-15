@@ -557,7 +557,13 @@ $('#cCol').oninput=function(){noSw();this.parentElement.classList.add('on');bg={
    is liye uske bad bhi koi frame chhoota nahi. naapa: doosre tap par 4 drawImage /
    3.89 M pixel -> 0, canvas hash wahi. */
 $('#cBlur').onclick=need(()=>{if(bg.t==='blur'){toast('Blur lag gaya');return}
- noSw();bg={t:'blur'};bgVer++;fullRender();toast('Blur lag gaya')});
+ /* 1.1.135: yahan bgVer++ tha, yaani sirf background ka *type* badalne par blurBg
+    ka poora cache (cover + downscale + high-quality upscale, 1400x1200 par ~390 ms)
+    bekaar ho jata tha - jabki wo hissa photo, canvas size aur P.bl par depend karta
+    hai, bg.t par nahi. partBox bg.t/bg.v khud compare karta hai (PRVbgT/PRVbgV),
+    is liye render ka faisla bilkul wahi rehta hai; bgVer ab sirf photo/size/cache
+    chhodne par badhta hai (drawPhoto, setSize, dropBgImg, dropScratch). */
+ noSw();bg={t:'blur'};fullRender();toast('Blur lag gaya')});
 /* "Blue blur" dobara dabane par pehle wahi sab kuch hota tha jo pehla tap karta hai:
    mask ko mask0 par lauta kar poora cutout (1400x1200 par ~700 ms ka long task),
    phir poora render, aur undo history me ek step. par jab tak mask me kuch nahi
@@ -569,10 +575,22 @@ $('#cBlur').onclick=need(()=>{if(bg.t==='blur'){toast('Blur lag gaya');return}
    (nayi photo, tolerance, undo, erase, slider) to poora purana raasta chalta hai. */
 let BTK=null;
 $('#cBlue').onclick=need(()=>{
- if(bg.t==='bluetint'&&keepObj===0&&P.bl===48&&BTK&&BTK.ptok===PTOK&&BTK.tol===tol&&BTK.mv===mver){
+ /* 1.1.135: yahan shart me `bg.t==='bluetint'` bhi thi, yaani "Blue blur -> Blur
+    original -> Blue blur" (beech me kuch nahi badla) par doosra Blue press poora
+    cutout dobara chalata tha - ~700 ms ka long task, jabki mask us pehle Blue press
+    ka hi nateeja tha. BTK.ptok/tol/mv teeno milkar yeh pakka karte hain ki mask
+    wahi hai (mver har mask-badlav par badhta hai, aur koi bhi mask operation mver
+    badhata hai), is liye bg.t par rukna zaroori nahi tha - background to wo hi hai
+    jo abhi set hone wala hai. skip par wahi swatch state + wahi render + wahi
+    message milta hai jo pehle mile the; push() bhi nahi hota (mask badla nahi, to
+    undo history me khaali step nahi jata - wahi jo purana skip raasta karta tha). */
+ if(keepObj===0&&P.bl===48&&BTK&&BTK.ptok===PTOK&&BTK.tol===tol&&BTK.mv===mver){
+  noSw();bg={t:'bluetint'};fullRender();
   toast('Blue blur lag gaya - sirf insaan dikhega');return}
  noSw();const r=$('#sBl');r.value=48;r.dispatchEvent(new Event('input',{bubbles:true}));
- bg={t:'bluetint'};bgVer++;
+ /* bgVer++ yahan nahi (dekho #cBlur): blur ka cache photo/size/P.bl par hai, bg.t
+    par nahi, aur partBox bg.t khud compare karta hai. */
+ bg={t:'bluetint'};
  /* portrait mode: sirf insaan, background ka koi tukda nahi */
  keepObj=0;const kk=$('#tKeep');if(kk)kk.setAttribute('aria-checked','false');
  push();
@@ -1087,7 +1105,7 @@ const drawPhoto=(im,nw,nh)=>{
      ab photo load par ise chhua hi nahi jata; outline on hote hi drawSubj ise
      poora bana deta hai (fgVer load par -1 hota hai, is liye pehla outline frame
      hamesha full rebuild hai). nateeja: canvas par ek pixel nahi badalta. */
-  bgb.width=bgb.height=1;sm.width=sm.height=1;bgVer++;
+  bgb.width=bgb.height=1;sm.width=sm.height=1;bgVer++;bgBlue=-1;
   /* nayi photo par teen W*H buffer (mask0, mask ki copy, keepMask) hamesha naye
      bante the - 1400x1050 par teen 1.47 MB allocation + zero-fill, chahe photo
      ka size bilkul wahi ho (aam haal: ek hi camera se li gayi doosri photo).
@@ -1999,9 +2017,37 @@ const xf=()=>{const s=Math.min(CW/W,CH/H)*P.s/100*(1+P.depth/100*0.07);
    isliye ek baar bana kar cache kar liye jate hain (pehle har render par naye bante the) */
 let bgGrad=null,depGrad=null,bgGK=[-1,-1,-1],depGK=[-1,-1],shColK=-1,shColS='';
 const cover=(c,im,iw,ih,w,h)=>{const k=Math.max(w/iw,h/ih),dw=iw*k,dh=ih*k;c.drawImage(im,(w-dw)/2,(h-dh)/2,dw,dh)};
+/* 1.1.135: "Blue blur" aur "Blur original" ke beech switch karna poora blur dobara
+   banata tha. bgb par do cheezein likhi jati hain - pehle sm (origC ka downscale)
+   ka high-quality upscale, phir (sirf blue par) ek poora-canvas tint fillRect - aur
+   cache ki chaabi me `blue` tha, is liye sirf tint badalne par bhi cover+downscale+
+   upscale (1400x1200 par ~390 ms) dobara chalte the, halanki wo hissa blue par depend
+   hi nahi karta. ab wo do hisse alag hain: upscale (bgb = sm ka untinted blur) ka
+   cache bgVer/CW/CH/P.bl par hai, aur tint ek alag step hai. bgb me tint lagi hai ya
+   nahi, wo bgBlue yaad rakhta hai, is liye:
+     - blur -> blue : bgb par wahi tint fillRect (pehle wala hi colour/alpha/kram), ~2 ms
+     - blue -> blur : sm se wahi copy-upscale jo rebuild karta tha (bgb untinted)
+     - P.bl / size / photo badla : poora rebuild, bilkul pehle jaisa
+   teeno raaste bgb par wahi pixels likhte hain jo pehle wala rebuild likhta tha
+   (wahi upscale, wahi tint, wahi kram), is liye screen, save aur undo par ek byte
+   nahi badalta (dekho naap). */
+let bgBlue=-1;
 const blurBg=()=>{const blue=bg.t==='bluetint'?1:0,sg=bgSig;
- if(sg[0]===bgVer&&sg[1]===CW&&sg[2]===CH&&sg[3]===P.bl&&sg[4]===blue)return;
- sg[0]=bgVer;sg[1]=CW;sg[2]=CH;sg[3]=P.bl;sg[4]=blue;
+ /* bgb = sm ka untinted blur - wahi ek drawImage jo rebuild ka aakhri step hai */
+ const up=()=>{
+  if(bgb.width!==CW||bgb.height!==CH){bgb.width=CW;bgb.height=CH}
+  else{bxc.setTransform(1,0,0,1,0,0);bxc.globalAlpha=1}
+  const bx=bxc;bx.imageSmoothingEnabled=true;bx.imageSmoothingQuality='high';
+  bx.globalCompositeOperation='copy';bx.drawImage(sm,0,0,CW,CH);bx.globalCompositeOperation='source-over';
+  bgBlue=0};
+ /* wahi tint jo pehle rebuild ke aakhir me lagta tha (wahi rang, wahi alpha) */
+ const tint=()=>{const bx=bxc;bx.globalAlpha=0.72;bx.fillStyle='#0a5cff';bx.fillRect(0,0,CW,CH);bx.globalAlpha=1;
+  bgBlue=1};
+ if(sg[0]===bgVer&&sg[1]===CW&&sg[2]===CH&&sg[3]===P.bl&&bgBlue>=0){
+  if(bgBlue===blue)return;
+  if(blue)tint();else up();
+  return}
+ sg[0]=bgVer;sg[1]=CW;sg[2]=CH;sg[3]=P.bl;
  /* sm/bgb ko width/height dene se canvas khud hi poora saaf ho jata hai (spec: size
     set karne par bitmap reset hoti hai), is liye uske baad ka clearRect bekaar tha -
     blur slider ke har step par 1400x1200 ka ek poora clear (1.68 M pixel). */
@@ -2043,10 +2089,9 @@ const blurBg=()=>{const blue=bg.t==='bluetint'?1:0,sg=bgSig;
     (33,263 B, sha1 606acaa664) base jaisa hi; wahan render ka apna poora clear
     (transparent background par zaroori) pehle jaisa chalta hai, sirf bgb ka clear
     gaya - clearRect 22 call / 3,23,40,000 px -> 11 call / 1,61,70,000 px. */
- else{bxc.setTransform(1,0,0,1,0,0);bxc.globalAlpha=1}
- const bx=bxc;bx.imageSmoothingEnabled=true;bx.imageSmoothingQuality='high';
- bx.globalCompositeOperation='copy';bx.drawImage(sm,0,0,CW,CH);bx.globalCompositeOperation='source-over';
- if(blue){bx.globalAlpha=0.72;bx.fillStyle='#0a5cff';bx.fillRect(0,0,CW,CH);bx.globalAlpha=1}};
+ /* 1.1.135: ye do step ab `up()` aur `tint()` hain (dekho upar) - rebuild ka
+    nateeja bilkul wahi: pehle wahi copy-upscale, phir blue par wahi tint. */
+ up();if(blue)tint()};
 /* tmp par bana composite (outline ring + subject) sirf in cheezon par depend karta
    hai: fgc (fgKey), transform (t[0],t[1],t[2]), outline ki chaudai (r) aur tilt
    shear. opacity aur shadow composite ke waqt lagte hain, is liye wo tmp ko
@@ -2654,7 +2699,7 @@ const dropBgImg=()=>{if(bg.t==='img')return;if(bgImg){const o=bgImg;bgImg=null;i
     tab chalta hai jab bg.t sach me blur nahi hai, is liye screen par ek pixel nahi
     badalta; bgSig[0]=-1 se blurBg apna cache dobara banata hai jab blur wapas
     chuna jaye (warna 1x1 canvas cache-hit par draw ho jata). */
- if(bg.t!=='blur'&&bg.t!=='bluetint'&&(bgb.width!==1||sm.width!==1)){bgb.width=bgb.height=1;sm.width=sm.height=1;bgSig[0]=-1}};
+ if(bg.t!=='blur'&&bg.t!=='bluetint'&&(bgb.width!==1||sm.width!==1)){bgb.width=bgb.height=1;sm.width=sm.height=1;bgSig[0]=-1;bgBlue=-1}};
 const fullRender=()=>{if(raf){cancelAnimationFrame(raf);raf=0}fastReq=false;clearTimeout(rt);rt=0;dropBgImg();render(false)};
 
 /* mask tools */
@@ -4480,7 +4525,7 @@ const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=nul
  /* opacity probe canvas bhi ek cache hai (CW x CH surface) - trim par chhod do,
     agla check ise dobara bana leta hai */
  opc=null;opx=null;if(!savePending)lastSaveBlob=null;
- fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;SUB=null;fgFull=true;
+ fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;bgBlue=-1;SUB=null;fgFull=true;
  fgc.width=fgc.height=1;outc.width=outc.height=1;bgb.width=bgb.height=1;sm.width=sm.height=1;
  /* tmp (composite surface, CW x CH) bhi pure cache hai - outline/shadow/depth/
     opacity wale raaste ise bharte hain aur drawSubj apna size guard khud rakhta
@@ -4545,8 +4590,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.131: sync rakha gaya - bina bridge GlassCut.version -> "1.1.131".
    1.1.132: sync rakha gaya - bina bridge GlassCut.version -> "1.1.132".
    1.1.133: sync rakha gaya - bina bridge GlassCut.version -> "1.1.133".
-   1.1.134: sync rakha gaya - bina bridge GlassCut.version -> "1.1.134". */
- return v||'1.1.134'}catch(_){return '1.1.134'}})(),
+   1.1.134: sync rakha gaya - bina bridge GlassCut.version -> "1.1.134".
+   1.1.135: sync rakha gaya - bina bridge GlassCut.version -> "1.1.135". */
+ return v||'1.1.135'}catch(_){return '1.1.135'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
