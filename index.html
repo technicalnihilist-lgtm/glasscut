@@ -2284,8 +2284,24 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
     khaali hai, is liye har shift sirf SUB ka box bhejta hai. */
  const pb=SUB?subPad(SUB):null;
  const r=P.line>0?P.line/t[0]:0,n=fast?8:16;
- /* tmp ka content tabhi dobara banta hai jab usme kuch sach me badla ho */
- const need=!THas||TfgV!==fgVer||TfgS!==fgSoft||Ts0!==t[0]||Ts1!==t[1]||Ts2!==t[2]||Tr!==r
+ /* 1.1.139: tmp ka cache key me sirf t[0] (scale) tha, par composite `sx` se
+    draw hota hai - aur sx = t[0]*P.f hai. "Flip subject" (P.f 1 -> -1) par
+    t[0] wahi rehta hai, is liye `need` false ho jata tha aur tmp purana
+    (bina flip ka) composite hi rakh leta tha: screen par flip ka koi asar
+    nahi dikhta tha. sabse kharab baat - save() RFULL par bharosa karke apna
+    render chhod deta hai, is liye save ki file bhi bina flip wali photo jati
+    thi. bug sirf composite raaste par tha (outline>0, opacity<100, shadow,
+    depth>0) - default par drawSubj ka seedha raasta har frame par sx khud
+    lagata hai, is liye wahan flip pehle se sahi tha. ab key me sx hai (t[0]
+    positive hai, is liye sx se scale aur flip dono tay ho jate hain).
+    naapa (headless Chrome, 1400x1050, product.jpg, opacity 60): pehle flip ke
+    baad canvas hash fda69830 par hi atka rehta tha aur saved PNG bhi wahi
+    (fda69830), jabki from-scratch rebuild 26c4b560 deta hai; ab flip par canvas
+    aur file dono 26c4b560, outline 10 + shadow par bhi 2b4ab280 -> cfdaa248.
+    baaki 15 checkpoint (load, auto, erase, feather, wand, grow, shrink,
+    smooth, undo, redo, bg color, bg blur, depth, opacity, reset) par canvas
+    hash aur saved PNG ka pixel hash base jaisa byte-identical. */
+ const need=!THas||TfgV!==fgVer||TfgS!==fgSoft||Ts0!==sx||Ts1!==t[1]||Ts2!==t[2]||Tr!==r
   ||Tcs!==cs3||Tsh!==sh3||Tn!==n
   ||(pb?(TPB[0]!==pb[0]||TPB[1]!==pb[1]||TPB[2]!==pb[2]||TPB[3]!==pb[3]):false);
  if(need){
@@ -2312,7 +2328,7 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
     source, wahi transform, wahi blend). */
  let restr=false;
  if(!full&&THas&&FGR&&!NORESTR&&TfgS===fgSoft&&Tr===r&&Tn===n&&Tcs===cs3&&Tsh===sh3
-    &&Ts0===t[0]&&Ts1===t[1]&&Ts2===t[2]){
+    &&Ts0===sx&&Ts1===t[1]&&Ts2===t[2]){
   const pd=r+2,px1=pb[0]+pb[2]-1,py1=pb[1]+pb[3]-1;
   /* C = SUB ke andar wo hissa jahan silhouette sach me badla, K = C + r + 2
      (ring itni door tak asar dalta hai, 2 px bilinear ke liye) */
@@ -2416,7 +2432,7 @@ const drawSubj=(src,fast)=>{const t=xf(),sx=t[0]*P.f;
   TDB[0]=ux0;TDB[1]=uy0;TDB[2]=ux1-ux0;TDB[3]=uy1-uy0;TFULL=false}
  else{TDB[0]=qx0;TDB[1]=qy0;TDB[2]=qx1-qx0;TDB[3]=qy1-qy0;TFULL=full}
  THas=true;FGR=null;
-  TfgV=fgVer;TfgS=fgSoft;Ts0=t[0];Ts1=t[1];Ts2=t[2];Tr=r;Tcs=cs3;Tsh=sh3;Tn=n;
+  TfgV=fgVer;TfgS=fgSoft;Ts0=sx;Ts1=t[1];Ts2=t[2];Tr=r;Tcs=cs3;Tsh=sh3;Tn=n;
   if(pb){TPB[0]=pb[0];TPB[1]=pb[1];TPB[2]=pb[2];TPB[3]=pb[3]}
  }
  cx.save();cx.globalAlpha=P.op/100;
