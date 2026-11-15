@@ -113,6 +113,23 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 
 ## What was broken, and what changed
 
+### A save pinned its blob for four seconds after the file was already written
+
+- **The download path kept the anchor and its blob URL alive on a 4 s timer.** When the shell has no native writer and the browser cannot share, `save()` hands the file to the browser with `<a download>` + an object URL. The anchor was removed and the URL revoked by `setTimeout(..., 4000)`, so after every save a multi-MB blob (245 KB for a 1400×1050 PNG, several MB for a flattened JPEG) stayed pinned for four seconds — the exact window in which the next action allocates — and a live `<a download>` sat in `document.body`, one more for every extra tap.
+- **The anchor is removed as soon as the click returns** (the download starts on that click) and the URL is released at 1 s. If anything in the click path throws, the new `catch` removes the anchor and revokes the URL, and the old failure route (message + long-press overlay) runs exactly as before.
+- Verified for 1.1.141 (base 1.1.140 vs 1.1.141, headless Chrome, 1400×1050 photo, `createObjectURL`/`revokeObjectURL` patched to count live URLs):
+  - **1.2 s after Save:** live `<a>` elements in `document.body` **1 → 0**, live blob URLs **1 → 0** (both still 1 on the base build, until 4 s).
+  - **The file is untouched:** 245,314 B on both builds, same sha1 `4495c38e9e4b`; a double tap still produces one file on both.
+
+### A failed `createObjectURL` turned the save fallback into an uncaught page error
+
+- **`fallback()` built its blob URL without a guard**, and it is called from exactly the paths that have already failed: share → download both failing, a native write failing, a `FileReader`/watchdog failure. On a WebView `createObjectURL` throws when many blob URLs are alive or memory is tight — the moment the overlay matters most. The throw escaped `save()` (async) as an unhandled rejection, so the user saw "Save nahi hua" with no overlay and no way to keep the image, plus a page error.
+- **One `try/catch`**: if the URL cannot be made there is nothing to show, so the overlay stays closed and `ovUrl` stays `null` (the `closeOv`/`failed` paths already handle that), but no exception escapes and the message is unchanged.
+- Verified for 1.1.141 (headless Chrome, `URL.createObjectURL` made to throw at save time, 1400×1050 PNG):
+  - **Page errors: 1 → 0** (`pageerror: inject: createObjectURL` on the base build), same "Save nahi hua" message on both, no file written on either.
+  - **Save is not left stuck:** with the fault removed, the next Save writes the same file as before (245,314 B), so `saveBusy` is released either way.
+- **`GlassCut.version`'s fallback literal is in sync** — without the shell bridge the page reports **`1.1.141`**.
+
 ### The motion sensor stayed on for the whole session, for nothing
 
 - **The `deviceorientation` listener was attached at page load and never removed.** It is what feeds `gx`/`gy`, and those two numbers are only read by `motionTick`, only while 4D Motion (`P.motion`) is above 0 — the default is 0. On Android a registered `deviceorientation` listener keeps the motion sensor running for the page: the sensor itself stays awake (battery + CPU) and every event (60–200 Hz on a phone) runs the JS handler, which did nothing but write two numbers nobody read. Closing the window (`#bClose`) or sending the app to the background (`GlassCut.pause`) already stopped the render timer; the sensor was never released.

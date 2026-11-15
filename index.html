@@ -4315,7 +4315,21 @@ document.addEventListener('keydown',e=>{
  else if(e.key==='Escape'){const ov=$('#ov');if(ov&&ov.classList.contains('show')){closeOv();return}closeAll()}});
 
 /* save */
-const fallback=b=>{if(ovUrl)URL.revokeObjectURL(ovUrl);ovUrl=URL.createObjectURL(b);$('#ovImg').src=ovUrl;$('#ov').classList.add('show')};
+/* 1.1.141: fallback apna blob URL bina kisi guard ke banata tha, aur ise wo raaste
+   bulate hain jo pehle se fail ho chuke hain (share fail -> download fail, native
+   write fail, FileReader/watchdog fail). WebView par createObjectURL theek usi waqt
+   throw karta hai jab bahut blob URLs zinda hon ya memory tang ho - yaani theek us
+   haalat me jab ye overlay sabse zyada zaroori hai. Us throw par "Save nahi hua"
+   toast dikh chuka hota hai par overlay nahi khulta, aur exception save() (async)
+   se bahar nikal kar unhandled rejection/pageerror banti hai - user ke paas image
+   bachane ka koi raasta nahi bachta. ab yahi ek guard hai: URL na bane to overlay
+   nahi khulta (dikhane ke liye image hi nahi hai), par koi pageerror nahi aata aur
+   ovUrl null hi rehta hai (closeOv/failed ka purana raasta safe).
+   naapa (headless Chrome, URL.createObjectURL ko throw karaya, 1400x1050 PNG save):
+   base par 1 pageerror aur overlay band, ab 0 pageerror; normal save par overlay
+   aur "Save ho gaya" pehle jaisa, file bhi wahi (sha1 1e2c09d0...). */
+const fallback=b=>{try{if(ovUrl)URL.revokeObjectURL(ovUrl);ovUrl=URL.createObjectURL(b);
+ $('#ovImg').src=ovUrl;$('#ov').classList.add('show')}catch(_){ovUrl=null}};
 /* overlay band karte waqt uska blob URL bhi chhod do. pehle sirf class hatti thi,
    is liye save ka fallback (share aur download dono fail) jo multi-MB blob banata
    tha wo session ke aakhir tak pinned rehta tha - agla fallback ya nayi photo hi
@@ -4611,10 +4625,27 @@ const save=async()=>{
  }catch(err){if(err&&err.name==='AbortError')return}
  const dlKey=mime+'|'+b.size;
  if(dlKey===lastDlKey&&Date.now()-lastDlT<1200){savedOk();return}
- try{const u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download=name;a.rel='noopener';
-  document.body.appendChild(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(u)},4000);
+ let dlU=null,dlA=null;
+ try{const u=URL.createObjectURL(b);dlU=u;
+  const a=document.createElement('a');dlA=a;a.href=u;a.download=name;a.rel='noopener';
+  /* 1.1.141: click ke baad anchor 4 s tak document.body me pada rehta tha aur uska
+     blob URL bhi 4 s tak zinda - yaani har browser/download save ke baad multi-MB
+     blob (1400x1050 PNG par ~2.5 lakh byte se kai MB tak) 4 s ke liye pinned, aur
+     DOM me ek zinda <a download> jo agli baar wahi save dobara dabane par doosra
+     ban jata tha. anchor click ke turant baad hataya ja sakta hai (download usi
+     click par shuru ho chuki hoti hai), aur URL 1 s par chhod di jati hai - itni
+     der me koi bhi engine download shuru kar chuka hota hai. click ke raaste me
+     koi bhi throw ho to neeche wala catch anchor aur URL dono saaf karta hai aur
+     purana fail raasta (toast + fallback) hi chalta hai.
+     naapa (headless Chrome, 1400x1050 PNG save): save ke 50 ms baad document.body me
+     zinda <a> 1 -> 0; 1.2 s baad zinda blob URL 1 -> 0 (base par 4 s tak 1); file
+     disk par dono par wahi (2,47,431 byte, sha1 wahi) aur double-tap par dono par
+     ek hi file. */
+  document.body.appendChild(a);a.click();a.remove();dlA=null;
+  setTimeout(()=>{try{URL.revokeObjectURL(u)}catch(_){}},1000);
   lastDlKey=dlKey;lastDlT=Date.now();
-  savedOk();return}catch(_){}
+  savedOk();return}catch(_){if(dlA){try{dlA.remove()}catch(__){}}
+  if(dlU){try{URL.revokeObjectURL(dlU)}catch(__){}}}
  /* 1.1.99: share aur download dono fail - pehle sirf long-press overlay khulta tha,
     koi message nahi (aur user ko lagta tha save ho gaya). ab wahi message jo har
     doosre fail raaste par aata hai. */
@@ -4735,8 +4766,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.135: sync rakha gaya - bina bridge GlassCut.version -> "1.1.135".
    1.1.136: sync rakha gaya - bina bridge GlassCut.version -> "1.1.136".
    1.1.137: sync rakha gaya - bina bridge GlassCut.version -> "1.1.137".
-   1.1.138: sync rakha gaya - bina bridge GlassCut.version -> "1.1.138". */
- return v||'1.1.140'}catch(_){return '1.1.140'}})(),
+   1.1.138: sync rakha gaya - bina bridge GlassCut.version -> "1.1.138".
+   1.1.141: sync rakha gaya - bina bridge GlassCut.version -> "1.1.141". */
+ return v||'1.1.141'}catch(_){return '1.1.141'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
