@@ -9,7 +9,7 @@ Everything runs on the device. No uploads, no accounts, no ads, and the APK asks
 | **APK** | [`GlassCut.apk`](GlassCut.apk) — signed, 302 KB, Android 7.0+ |
 | **Web app** | [`index.html`](index.html) — open it in any browser, no build step |
 | **Package** | `com.glasscut.app` |
-| **Version** | 1.1.135 (versionCode 135) |
+| **Version** | 1.1.136 (versionCode 136) |
 
 ---
 
@@ -46,6 +46,17 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 ---
 
 ## What was broken, and what changed
+
+### Pressing Auto a second time re-ran the whole coarse cut-out for nothing
+
+- **The coarse half of the cut-out is a pure function of three things, and nothing remembered that.** `cutout()` works in two stages: a half-resolution grid (border seed colours → 512-bucket colour clustering → up to four reference colours → a 420,000-cell `MATCH` scan → two flood passes → island labelling with the row-run table), then the full-resolution snap that writes the mask. Every input of the first stage comes from the photo's RGB (`PTOK`), the tolerance slider and the *Objects bachao* switch — yet a second Auto (after Grow, after an erase stroke, or the Auto button right after the cut-out that runs on photo load) rebuilt all of it: 2,600 border seeds, the bucket counts and their insertion sort, four reference colours, the 420,000-cell scan and both floods.
+- **The stage's result is now cached.** `KCC` holds the finished `bg` grid (islands already dropped) in one `N`-byte buffer, keyed on `PTOK` / `tol` / `keepObj`; any key change (new photo, tolerance slider, the keep-object switch) rebuilds it, and `dropScratch()` (so `GlassCut.trim`, close and pause) drops it. The full-resolution snap, the `inner` 3×3 AND and the mask clear still run on every Auto, and they read exactly the same `bg` as before, so the mask is byte-identical.
+- Verified for 1.1.136 (base 1.1.135 vs 1.1.136, headless Chrome, 1400×1200 photo, identical instrumentation on both builds — a timer around the `cutout()` call and a cell counter inside `matchScan`):
+  - **Repeat Auto with the same settings:** cutout **27.4 ms → 12.9 ms** (median of the seven samples after JIT warm-up), and `MATCH` cells scanned **4,200,000 → 420,000** — only the first Auto scans.
+  - **The cache does not go stale:** with the tolerance alternating between 40 and 41 on every press, the same run scans **3,780,000 cells (9 × 420,000)** and cutout stays at 28.4 ms, i.e. every tolerance change still rebuilds the stage.
+  - **Nothing moved on screen:** a 40-checkpoint flow (load + auto, wand tap, 10-move erase stroke, undo, redo, Grow, Shrink, Smooth, Invert ×2, Reset, colour background, gradient background, PNG/JPG/WEBP save, language toggle, window close/open, 1×1, 1400×3, 333×17, 4000×3000 plus Grow/Smooth/Reset on each) is byte-identical at every checkpoint, and the three saved files are the same bytes (140,960 B `6fd7f1c823`, 31,335 B `a1a829dcc7`, 17,858 B `566071f04f`) — 0 pageerror, 0 console error.
+  - **Edge suite unchanged:** keep-tool paint then Auto, a 1×1 photo with feather 8 + outline 30 and a save, a new photo picked mid-stroke, a double save, language persistence across close/open, and a resize with a save — all clean on both builds.
+- **`GlassCut.version`'s fallback literal is in sync** — without the shell bridge the page reports **`1.1.136`**.
 
 ### Switching between "Blur original" and "Blue blur" re-blurred the photo for nothing
 
