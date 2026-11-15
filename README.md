@@ -113,6 +113,25 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 
 ## What was broken, and what changed
 
+### The motion sensor stayed on for the whole session, for nothing
+
+- **The `deviceorientation` listener was attached at page load and never removed.** It is what feeds `gx`/`gy`, and those two numbers are only read by `motionTick`, only while 4D Motion (`P.motion`) is above 0 — the default is 0. On Android a registered `deviceorientation` listener keeps the motion sensor running for the page: the sensor itself stays awake (battery + CPU) and every event (60–200 Hz on a phone) runs the JS handler, which did nothing but write two numbers nobody read. Closing the window (`#bClose`) or sending the app to the background (`GlassCut.pause`) already stopped the render timer; the sensor was never released.
+- **The listener now lives only while it can matter** — `P.motion > 0` and the page not idle — and is removed otherwise. `setIdle` (window closed, app paused, page hidden) releases it, and reopening/resuming attaches it again.
+- Verified for 1.1.140 (base 1.1.139 vs 1.1.140, headless Chrome, 1400×1050 photo, `window.addEventListener`/`removeEventListener` patched to count `deviceorientation` registrations, synthetic events dispatched):
+  - **Registrations:** page load **1 → 0**, after the photo loads **1 → 0**, 4D Motion 0 → 40 **0 → 1**, back to 0 **1 → 0**, `#bClose` **1 → 0**, `#launch` again with Motion on **1**, `GlassCut.pause()` **1 → 0**, `GlassCut.resume()` **0 → 1**.
+  - **Work per event:** 2,000 synthetic `deviceorientation` events with Motion off run **2,000 handler calls → 0** (only the dispatch itself is left, ~2.4 ms); with Motion on the same 2,000 events cost 7.0/7.1 ms on both builds.
+  - **Nothing moved on screen:** the four gyro parallax frames are identical on both builds (`3924d14473 d8dc617d90 cdc971097b 55dff57b75`), and so is the frame after pause → resume (`133e0cdd32`).
+
+### The "Apni photo" background read back the whole canvas in one 5.9 MB ImageData
+
+- **`imgOpaqueCheck` is one `getImageData(0, 0, CW, CH)`.** It decides whether the chosen background image really covers the canvas (so the frame can skip its `clearRect`), and on a 1400×1050 canvas that single read is 1.47 M pixels = **5,880,000 bytes**, taken while the decoded background bitmap and its upscale are both alive — the moment a low-RAM WebView throws `InvalidStateError`/OOM, which is exactly the failure the "Apni photo" path already has a guard and a message for.
+- **The same scan now runs in 47-row strips** (~263 KB each), top to bottom, and the first non-opaque pixel still returns `false` immediately — so a transparent background image no longer reads the whole canvas at all. Same canvas, same order, same predicate: the answer cannot change.
+- Verified for 1.1.140 (`getImageData` call/byte counters, 1400×1050):
+  - **Opaque JPEG background:** calls **1 → 23**, largest single read **5,880,000 → 263,200 bytes** (total bytes identical, 5,880,000), 70.3 → 82.8 ms.
+  - **Transparent PNG background:** total bytes read **5,880,000 → 263,200** (first strip is enough), 62.7 → **3.2 ms**.
+  - **Same result:** the flag is the same on both builds, and the canvas hash is unchanged (`5a34383de2` opaque, `44b84848da` transparent).
+- **`GlassCut.version`'s fallback literal is in sync** — without the shell bridge the page reports **`1.1.140`** (it said `1.1.138` on 1.1.139).
+
 ### Pressing Auto a second time re-ran the whole coarse cut-out for nothing
 
 - **The coarse half of the cut-out is a pure function of three things, and nothing remembered that.** `cutout()` works in two stages: a half-resolution grid (border seed colours → 512-bucket colour clustering → up to four reference colours → a 420,000-cell `MATCH` scan → two flood passes → island labelling with the row-run table), then the full-resolution snap that writes the mask. Every input of the first stage comes from the photo's RGB (`PTOK`), the tolerance slider and the *Objects bachao* switch — yet a second Auto (after Grow, after an erase stroke, or the Auto button right after the cut-out that runs on photo load) rebuilt all of it: 2,600 border seeds, the bucket counts and their insertion sort, four reference colours, the 420,000-cell scan and both floods.

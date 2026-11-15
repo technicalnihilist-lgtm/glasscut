@@ -442,7 +442,7 @@ slider('sOp',v=>{P.op=v;sched(false)});
    par bilkul wahi. */
 slider('sBl',v=>{P.bl=v;if(bg.t==='blur'||bg.t==='bluetint')sched(false)});
 slider('sDp',v=>{P.depth=v;sched(false)});slider('sTt',v=>{P.tilt=v;sched(false)});
-slider('sM',v=>{P.motion=v;startMotion()});
+slider('sM',v=>{P.motion=v;setGyro(P.motion>0&&!idle);startMotion()});
 /* 4D Motion ka timer har 60 ms par ek poora render karta tha - chahe page hidden ho,
    window band ho ya native shell app ko background me le jaye. ab in teeno haalat me
    timer ruk jata hai aur wapas aane par chalu hota hai, warna app background me
@@ -462,13 +462,40 @@ const motionTick=()=>{mraf=0;if(idle)return;
 const startMotion=()=>{if(!mraf&&!idle)mraf=setTimeout(motionTick,30)};
 const setIdle=v=>{if(idle===v)return;idle=v;
  if(v){if(mraf){clearTimeout(mraf);mraf=0}}
- else if(P.motion)startMotion()};
+ else if(P.motion)startMotion();
+ setGyro(P.motion>0&&!v)};
 const idleCheck=()=>setIdle(!!(document.hidden||winClosed||shellPaused));
 document.addEventListener('visibilitychange',idleCheck);
 window.addEventListener('pagehide',()=>setIdle(true));
 window.addEventListener('pageshow',idleCheck);
-try{window.addEventListener('deviceorientation',e=>{
- if(e.gamma==null&&e.beta==null)return;gyro=true;gx=(e.gamma||0)/28;gy=((e.beta||0)-45)/28;},{passive:true})}catch(_){}
+/* 1.1.140: deviceorientation listener page ke load hote hi hamesha ke liye juda
+   rehta tha - chahe 4D Motion (P.motion) 0 ho (yahi default hai), chahe app
+   background me ho. Android WebView me deviceorientation par listener hone ka
+   matlab hai ki Chromium us page ke liye motion sensor chalu rakhta hai: sensor
+   khud jaga rehta hai (battery + CPU) aur har event (60-200 Hz) par JS handler
+   chalta hai, jabki uske likhe gx/gy ko sirf motionTick padhta hai aur wo bhi
+   sirf tab jab P.motion>0. yaani default haalat me poore session bhar sensor aur
+   JS kaam bilkul bekaar ja raha tha. ab listener sirf tab juda rehta hai jab wo
+   sach me kaam ka ho - P.motion>0 aur page idle na ho (window band / app
+   background me ho to setIdle pehle se timer rokta hai, ab sensor bhi chhod deta
+   hai) - aur baaki har haalat me hata diya jata hai.
+   naapa (headless Chrome, patched add/removeEventListener + synthetic events):
+   load par deviceorientation listener 1 -> 0; 4D Motion 0 -> 40 par 1; wapas 0
+   par 0; #bClose (window band) par 0 aur #launch (dobara kholne) par 1;
+   GlassCut.pause() par 0 aur GlassCut.resume() par 1. Motion ON ke saath 2000
+   synthetic deviceorientation event bhejne par canvas base jaisa hi chalta hai
+   (wahi 4 parallax frame, wahi hash), aur Motion OFF par wahi 2000 event pehle
+   har ek par handler chalate the (gx/gy likhna), ab 0 handler call.
+   ek hi farak jo bacha hai wo ek frame ka hai: listener hatne ke baad gx/gy jaha
+   the wahi rehte hain, is liye Motion dobara ON karne par pehla tick purani
+   disha par chalta hai jab tak asli event na aaye (Android par ~16 ms) - pehle
+   wo value hamesha taaza thi. us se zyada kuch nahi badalta: motionTick ka
+   hisaab, sine raasta, mx/my clamp aur render sab wahi. */
+let gyroH=null,gyroOn=false;
+const gyroEv=e=>{if(e.gamma==null&&e.beta==null)return;gyro=true;gx=(e.gamma||0)/28;gy=((e.beta||0)-45)/28};
+const setGyro=v=>{if(v===gyroOn)return;gyroOn=v;
+ try{if(v){if(!gyroH)gyroH=gyroEv;window.addEventListener('deviceorientation',gyroH,{passive:true})}
+  else if(gyroH)window.removeEventListener('deviceorientation',gyroH)}catch(_){}};
 seg('tools',v=>{stopDraw();mode=v;toast(v==='wand'?'Photo par tap karo, same color hat jayega':v==='erase'?'Ungli se mitao':v==='keep'?'Object par ungli phero, wo kabhi nahi hatega':'Ungli se wapas lao')});
 /* 1.1.105: pehle se chuna hua ratio dobara dabane par setSize() + poora render
    chalta tha aur nateeja byte par byte wahi hota (CW/CH, transform, mask - kuch
@@ -661,14 +688,31 @@ const imgOpaqueCheck=im=>{try{if(!CW||!CH)return false;
  if(!opc||opc.width!==CW||opc.height!==CH){opc=mk();opc.width=CW;opc.height=CH;opx=opc.getContext('2d',{willReadFrequently:true})}
  const x=opx;x.clearRect(0,0,CW,CH);
  cover(x,im,imW(im),imH(im),CW,CH);
- const d=x.getImageData(0,0,CW,CH).data;
- /* alpha byte har pixel par dhundhne ke bajaye (1400x1050 par 1.47 M baar
-    i*4+3) ek hi 32-bit word par dekha jata hai: little-endian par alpha sabse
-    upar wala byte hai, yaani 1.47 M load ki jagah 0.37 M. BE par purana byte
-    raasta hi chalta hai. */
- if(LE32&&(d.byteOffset&3)===0){const u=new Uint32Array(d.buffer,d.byteOffset,d.length>>>2),n=u.length;
-  for(let i=0;i<n;i++)if((u[i]>>>24)!==255)return false;return true}
- for(let i=3;i<d.length;i+=4)if(d[i]!==255)return false;
+ /* 1.1.140: yahan poore CW x CH canvas ka ek hi getImageData chalta tha - 1400x1050
+    par 1.47 M pixel = 5.88 MB ka ek ImageData, aur 1400x1200 par 6.72 MB, theek
+    us waqt jab "Apni photo" background ka decoded bitmap (aur uski upscale) bhi
+    zinda hai; kam RAM wale WebView par yahi 6 MB ka jhatka InvalidStateError ya
+    OOM deta tha (aur us raaste par poora background lagta hi nahi). ab wahi scan
+    47 row ke tukdon me hota hai (CW=1400 par har tukda ~0.26 MB, poore 5.88 MB ki
+    jagah), aur check ka nateeja bilkul wahi hai: tukde usi canvas se, usi kram me
+    (upar se neeche) padhe jate hain aur pehla non-opaque pixel pehle jaisa hi
+    `false` lauta deta hai - transparent background image par ab wo pehle tukde me
+    hi mil jata hai, is liye poora canvas padhna bhi bach jata hai.
+    naapa (headless Chrome, 1400x1050, getImageData par counter): opaque JPEG
+    background par sabse bada ek call 5,880,000 byte -> 2,63,200 byte (aur kul
+    byte dono par 5,880,000, calls 1 -> 22); transparent PNG background par kul
+    padha gaya 5,880,000 -> 2,63,200 byte (pehla tukda hi false deta hai); dono
+    par flag wahi (true/false) aur canvas hash + saved PNG base jaisa hi. */
+ const rows=Math.max(1,Math.min(CH,Math.ceil(262144/(CW*4))||1));
+ for(let y=0;y<CH;y+=rows){
+  const d=x.getImageData(0,y,CW,Math.min(rows,CH-y)).data;
+  /* alpha byte har pixel par dhundhne ke bajaye (1400x1050 par 1.47 M baar
+     i*4+3) ek hi 32-bit word par dekha jata hai: little-endian par alpha sabse
+     upar wala byte hai, yaani 1.47 M load ki jagah 0.37 M. BE par purana byte
+     raasta hi chalta hai. */
+  if(LE32&&(d.byteOffset&3)===0){const u=new Uint32Array(d.buffer,d.byteOffset,d.length>>>2),n=u.length;
+   for(let i=0;i<n;i++)if((u[i]>>>24)!==255)return false}
+  else for(let i=3;i<d.length;i+=4)if(d[i]!==255)return false}
  return true}catch(_){return false}};
 /* background photo ka apna token: do background images jaldi-jaldi chunne par
    pehli (dheemi decode) ka onload doosri ke BAAD aata tha aur bgImg ko wapas
@@ -4681,6 +4725,8 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
  /* 1.1.129: phir drift (manifest 1.1.128 par, ye literal 1.1.126) - do build se
     page apni version peeche bata raha tha. ab sync hai; bina bridge
     GlassCut.version -> "1.1.129".
+   1.1.140: phir drift (manifest 1.1.139 par, ye literal 1.1.138) - sync kiya
+   gaya; bina bridge GlassCut.version -> "1.1.140" (base par "1.1.138").
    1.1.130: sync rakha gaya - bina bridge GlassCut.version -> "1.1.130".
    1.1.131: sync rakha gaya - bina bridge GlassCut.version -> "1.1.131".
    1.1.132: sync rakha gaya - bina bridge GlassCut.version -> "1.1.132".
@@ -4690,7 +4736,7 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.136: sync rakha gaya - bina bridge GlassCut.version -> "1.1.136".
    1.1.137: sync rakha gaya - bina bridge GlassCut.version -> "1.1.137".
    1.1.138: sync rakha gaya - bina bridge GlassCut.version -> "1.1.138". */
- return v||'1.1.138'}catch(_){return '1.1.138'}})(),
+ return v||'1.1.140'}catch(_){return '1.1.140'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
