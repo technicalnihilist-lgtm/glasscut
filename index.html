@@ -2031,19 +2031,37 @@ const cover=(c,im,iw,ih,w,h)=>{const k=Math.max(w/iw,h/ih),dw=iw*k,dh=ih*k;c.dra
    teeno raaste bgb par wahi pixels likhte hain jo pehle wala rebuild likhta tha
    (wahi upscale, wahi tint, wahi kram), is liye screen, save aur undo par ek byte
    nahi badalta (dekho naap). */
-let bgBlue=-1;
-const blurBg=()=>{const blue=bg.t==='bluetint'?1:0,sg=bgSig;
+let bgBlue=-1,bgQ='';
+/* 1.1.137: blur background ka rebuild (sm par cover downscale + us high-quality
+   upscale jo bgb banata hai) har us frame par chalta tha jisme P.bl badla ho -
+   aur Blur Amount ek slider hai, is liye ungli ghumate waqt har step par. wahi
+   upscale 1400x1200 par naapa gaya: imageSmoothingQuality 'high' 70.1 ms,
+   'medium' 37.4 ms, 'low' 17.6 ms (headless Chrome, ek hi sm se 5 run ka
+   median). yaani slider ke drag ke dauraan har step me sirf isi ek draw par
+   ~52 ms ja raha tha, halanki wahan screen par sirf ek *preview* frame chahiye
+   hota hai - poora (high) frame 160 ms baad wala deferred render bana deta hai.
+   ab quality frame ke kism par hai: fast preview frame 'low', aur har poora
+   render (stroke ka release, button, slider ka deferred render, save) pehle
+   jaisa 'high'. bgb par likha hua quality bgQ me yaad rehta hai, is liye cache
+   sirf tab hit hota hai jab pixels sach me wahi hain - warna poora rebuild
+   (warna blue->blur switch purane low frame ko high maan leta).
+   nateeja: har poora render, save ki file aur canvas ka settled frame base jaisa
+   byte-identical; sirf drag ke beech ke transient preview frames softer hain.
+   qr() ki early-return shart me bhi isi liye blur background joda gaya hai -
+   warna wo shortcut ek low preview ko hi screen par chhod deta (dekho qr). */
+const blurBg=fast=>{const q=fast?'low':'high';
+ const blue=bg.t==='bluetint'?1:0,sg=bgSig;
  /* bgb = sm ka untinted blur - wahi ek drawImage jo rebuild ka aakhri step hai */
  const up=()=>{
   if(bgb.width!==CW||bgb.height!==CH){bgb.width=CW;bgb.height=CH}
   else{bxc.setTransform(1,0,0,1,0,0);bxc.globalAlpha=1}
-  const bx=bxc;bx.imageSmoothingEnabled=true;bx.imageSmoothingQuality='high';
+  const bx=bxc;bx.imageSmoothingEnabled=true;bx.imageSmoothingQuality=q;
   bx.globalCompositeOperation='copy';bx.drawImage(sm,0,0,CW,CH);bx.globalCompositeOperation='source-over';
-  bgBlue=0};
+  bgBlue=0;bgQ=q};
  /* wahi tint jo pehle rebuild ke aakhir me lagta tha (wahi rang, wahi alpha) */
  const tint=()=>{const bx=bxc;bx.globalAlpha=0.72;bx.fillStyle='#0a5cff';bx.fillRect(0,0,CW,CH);bx.globalAlpha=1;
   bgBlue=1};
- if(sg[0]===bgVer&&sg[1]===CW&&sg[2]===CH&&sg[3]===P.bl&&bgBlue>=0){
+ if(sg[0]===bgVer&&sg[1]===CW&&sg[2]===CH&&sg[3]===P.bl&&bgBlue>=0&&bgQ===q){
   if(bgBlue===blue)return;
   if(blue)tint();else up();
   return}
@@ -2613,7 +2631,7 @@ function render(fast){if(!od)return;RFULL=!fast;const fresh=cvFresh;cvFresh=fals
   cx.fillStyle=bgGrad;cx.fillRect(gx,gy,gw,gh)}
  else if(bg.t==='img'&&bgImg){cover(cx,bgImg,imW(bgImg),imH(bgImg),CW,CH);
   if(apx||apy)bgEdge(cx,padX,padY,pox,poy)}
- else if(bg.t==='blur'||bg.t==='bluetint'){blurBg();cx.drawImage(bgb,0,0);
+ else if(bg.t==='blur'||bg.t==='bluetint'){blurBg(fast);cx.drawImage(bgb,0,0);
   if(apx||apy)bgEdge(cx,padX,padY,pox,poy)}
  cx.restore();
  /* depth: background ko halka gehra karo taaki subject aage ubhre */
@@ -2663,7 +2681,12 @@ const sched=fast=>{if(fast)fastReq=true;if(!raf)raf=requestAnimationFrame(onRaf)
    guard apna poora render tab hi chhodte hain jab RFULL sach me true ho, is
    liye ek extra render to hota hai par galat frame kabhi save nahi hota. */
 const qr=()=>{sched(true);clearTimeout(rt);rt=setTimeout(()=>{rt=0;
- if(feather<=0&&P.line<=0&&mver===fgVer&&fgSoft===-1&&!raf&&!fastReq)return;
+ /* 1.1.137: blur background par fast preview frame ab low-quality upscale se
+    banta hai, is liye wo poore render se byte-identical nahi hai - deferred
+    poora render yahan ruk nahi sakta, warna screen par low preview hi reh
+    jata. (baaki teeno shart par fast frame sach me poora frame hi hota hai.) */
+ if(feather<=0&&P.line<=0&&mver===fgVer&&fgSoft===-1&&!raf&&!fastReq
+    &&bg.t!=='blur'&&bg.t!=='bluetint')return;
  if(raf){cancelAnimationFrame(raf);raf=0;fastReq=false}render(false)},160)};
 /* fullRender = "poora render, aur uske baad koi purana fast frame na aaye".
    slider ka fast preview rAF me pending reh jata hai; agar usi frame me koi
@@ -4614,8 +4637,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.133: sync rakha gaya - bina bridge GlassCut.version -> "1.1.133".
    1.1.134: sync rakha gaya - bina bridge GlassCut.version -> "1.1.134".
    1.1.135: sync rakha gaya - bina bridge GlassCut.version -> "1.1.135".
-   1.1.136: sync rakha gaya - bina bridge GlassCut.version -> "1.1.136". */
- return v||'1.1.136'}catch(_){return '1.1.136'}})(),
+   1.1.136: sync rakha gaya - bina bridge GlassCut.version -> "1.1.136".
+   1.1.137: sync rakha gaya - bina bridge GlassCut.version -> "1.1.137". */
+ return v||'1.1.137'}catch(_){return '1.1.137'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
