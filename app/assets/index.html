@@ -273,7 +273,7 @@ let mx=0,my=0,mraf=0,mt=0,gx=0,gy=0,gyro=false;
 const COLORS=['#ffffff','#f2f2f7','#000000','#ff453a','#ff9f0a','#ffd60a','#32d74b','#64d2ff','#0a84ff','#5e5ce6','#bf5af2','#ff375f'];
 const GRADS=[['#ff9a9e','#fad0c4'],['#a18cd1','#fbc2eb'],['#43e97b','#38f9d7'],['#4facfe','#00f2fe'],['#fa709a','#fee140'],['#0f2027','#2c5364'],['#f093fb','#f5576c'],['#667eea','#764ba2']];
 let lang='hi';
-const EN={'Photo choose karo':'Choose a photo','Background hatao ya naya background lagao. Sab kuch aapke phone me hi hota hai.':'Remove a background or add a new one. Everything happens on your device.','Photo chuno':'Pick photo','Apni photo':'My photo','Photo ko long-press karke save karo':'Long-press the photo to save it','Band karo':'Close','Bacha hua background Wand se hatao, kinare Erase aur Restore se theek karo. Kinare kharab dikhein to Shrink ya Smooth try karo. Objects bachao ON rehne se background ke andar pade objects bhi bache rehte hain.':'Remove leftover background with Wand, then clean the edges with Erase and Restore. If edges look rough, try Shrink or Smooth.','Pehle photo choose karo':'Choose a photo first','Auto dabao ya Wand / Erase use karo':'Tap Auto, or use Wand / Erase','Photo par tap karo, same color hat jayega':'Tap the photo to remove similar color','Ungli se mitao':'Erase with your finger','Ungli se wapas lao':'Restore with your finger','Background lag gaya':'Background applied','Photo load nahi hui':'Could not load the photo','Background clear nahi hai, Wand try karo':'Background is not clear, try Wand','Kuch nahi hata. Tolerance badhao ya Wand use karo':'Nothing removed. Increase tolerance or use Wand','Ho gaya! Erase / Restore se saaf karo':'Done! Clean up with Erase / Restore','Reset ho gaya':'Reset done','Undo ke liye kuch nahi':'Nothing to undo','Redo ke liye kuch nahi':'Nothing to redo','Save nahi hua':'Save failed','Save ho gaya':'Saved','Objects bachao':'Keep objects','Blur lag gaya':'Blur applied','Blue blur lag gaya - sirf insaan dikhega':'Blue blur applied - only the person shows','Object par ungli phero, wo kabhi nahi hatega':'Paint over the object, it will never be removed','Objects bachaye jayenge':'Objects will be kept','Sirf main object rahega':'Main object only'};
+const EN={'Photo choose karo':'Choose a photo','Background hatao ya naya background lagao. Sab kuch aapke phone me hi hota hai.':'Remove a background or add a new one. Everything happens on your device.','Photo chuno':'Pick photo','Apni photo':'My photo','Photo ko long-press karke save karo':'Long-press the photo to save it','Band karo':'Close','Bacha hua background Wand se hatao, kinare Erase aur Restore se theek karo. Kinare kharab dikhein to Shrink ya Smooth try karo. Objects bachao ON rehne se background ke andar pade objects bhi bache rehte hain.':'Remove leftover background with Wand, then clean the edges with Erase and Restore. If edges look rough, try Shrink or Smooth.','Pehle photo choose karo':'Choose a photo first','Auto dabao ya Wand / Erase use karo':'Tap Auto, or use Wand / Erase','Auto nahi chala. Wand ya Erase use karo':'Auto did not run. Use Wand or Erase','Photo par tap karo, same color hat jayega':'Tap the photo to remove similar color','Ungli se mitao':'Erase with your finger','Ungli se wapas lao':'Restore with your finger','Background lag gaya':'Background applied','Photo load nahi hui':'Could not load the photo','Background clear nahi hai, Wand try karo':'Background is not clear, try Wand','Kuch nahi hata. Tolerance badhao ya Wand use karo':'Nothing removed. Increase tolerance or use Wand','Ho gaya! Erase / Restore se saaf karo':'Done! Clean up with Erase / Restore','Reset ho gaya':'Reset done','Undo ke liye kuch nahi':'Nothing to undo','Redo ke liye kuch nahi':'Nothing to redo','Save nahi hua':'Save failed','Save ho gaya':'Saved','Objects bachao':'Keep objects','Blur lag gaya':'Blur applied','Blue blur lag gaya - sirf insaan dikhega':'Blue blur applied - only the person shows','Object par ungli phero, wo kabhi nahi hatega':'Paint over the object, it will never be removed','Objects bachaye jayenge':'Objects will be kept','Sirf main object rahega':'Main object only'};
 const tr=s=>lang==='en'&&EN[s]?EN[s]:s;
 const toast=m=>{const t=$('#toast');t.textContent=tr(m);t.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('show'),2300)};
 const need=f=>(...a)=>{if(!od){toast('Pehle photo choose karo');return}f(...a)};
@@ -3768,7 +3768,36 @@ const auto=(silent)=>{if(!od)return;
      stack aur mver chhue nahi jate - baseline me bhi push+recycle+abortPush ka
      net asar zero tha, aur mask na badalne par mver badhana sirf bekaar upload tha. */
   if(!silent)toast('Kuch nahi hata. Tolerance badhao ya Wand use karo');return}
- if(!push())return;const c=cutout();
+ if(!push())return;let c;
+ /* 1.1.142: cutout apne saare bade typed arrays (CC ka seen/lev/inner/match/bg,
+    1400x1050 par ~5.9 MB) yahin allocate karta hai, aur kam RAM wale WebView par
+    ye RangeError deta hai. Wo exception Auto ke button se seedha bahar jati thi:
+    pageerror, user ko koi message nahi, aur push() wala snapshot undo stack me
+    pada reh jata hai - yaani agla Undo ek aisa step kha jata hai jo screen par
+    kuch nahi badalta (mask ko cutout ne chhua hi nahi tha: uske saare bade buffer
+    uske shuru me hi allocate hote hain).
+    ab push() wala snapshot mask ka content (aur uska box) wapas likh deta hai,
+    history se hat jata hai (abortPush - redo bhi wapas) aur poora render chalta
+    hai: Auto se pehle wali haalat bilkul wahi, bina pageerror, history me koi
+    khaali step nahi. safal raasta (c>0 aur c<=0 dono) pehle jaisa hi hai.
+    naapa (headless Chrome, 1400x1050, GlassCut.trim() se cutout ke scratch buffer
+    chhode, coarse grid ka Uint8Array allocate fail karaya, phir Auto): base par
+    1 pageerror ("Uncaught RangeError"), toast khali, aur Undo 3bb93e62 (stroke
+    wali state) par hi chhoda - ek dead step; ab 0 pageerror, toast "Auto nahi
+    chala. Wand ya Erase use karo", Undo wapas 67afd60a (stroke se pehle wali
+    photo) par aata hai, aur canvas hash dono par 3bb93e62 hi rehta hai (mask ko
+    cutout ne chhua hi nahi). fault hataane ke baad agla Auto dono par 8929b34a. */
+ try{c=cutout()}
+ catch(_){
+  const s=undo.pop();
+  if(s){try{mask.set(s[0])}catch(__){}
+   const sb=s[2];
+   if(sb){MB[0]=sb[0];MB[1]=sb[1];MB[2]=sb[2];MB[3]=sb[3]}else mbAll();
+   recycle(s)}
+  abortPush();mver++;
+  try{fullRender()}catch(__){}
+  toast('Auto nahi chala. Wand ya Erase use karo');
+  return}
  /* mver yahan badhaya nahi jata: cutout khud tabhi badhata hai jab usne mask me
     sach me kuch likha ho (cnt||kc). khaali cutout par mask byte-identical hai, is liye
     mver badhana sirf agle frame par bekaar full alpha upload + poora feather blur
@@ -4457,7 +4486,7 @@ const save=async()=>{
  /* ek waqt me ek save: do tap ek saath do file gallery me daal dete the.
     bridge wale raste par guard FileReader callback tak bandha rehta hai. */
  if(saveBusy)return;
- saveBusy=true;let hold=false;
+ saveBusy=true;let hold=false,enc=null;
  try{
  /* slider ghumane ke baad ek fast (hard-edge) preview frame rAF me pending reh
     jata hai. wo save ke full render ke baad chalta tha aur screen par hard edge
@@ -4504,7 +4533,16 @@ const save=async()=>{
     (neeche ka `if(!jcv)`), is liye file me ek byte nahi badalta. */
  if(!(fmt==='jpeg'&&!opaqueBg())&&jcv){jcv.width=jcv.height=1;jcvx=null;jcv=null}
  if(fmt==='jpeg'&&!opaqueBg()){
-  if(!jcv){jcv=mk();jcvx=jcv.getContext('2d');jcv.width=CW;jcv.height=CH}
+  /* 1.1.142: jcv aur jcvx ek saath bante hain, par yahan sirf jcv check hota tha.
+     getContext null lauta de (kam RAM wale WebView par bade surface ke liye aam
+     haalat) to jcv bana reh jata tha aur jcvx null - aur phir HAR agla JPEG save
+     usi cache par neeche jx.setTransform se throw karta tha, yaani Save us session
+     me hamesha ke liye toota (bina kisi message ke, kyunki save ka apna guard nahi
+     tha). ab jodi ek hi sharat hai, aur context na bane to surface bhi chhod di
+     jati hai (agla save naya banata hai) - wahi raasta jo `fmt` badalne par pehle
+     se chalta hai. */
+  if(!jcv||!jcvx){jcv=mk();jcvx=jcv.getContext('2d');jcv.width=CW;jcv.height=CH;
+   if(!jcvx){jcv.width=jcv.height=1;jcv=null;throw new Error('jcv')}}
   else if(jcv.width!==CW||jcv.height!==CH){jcv.width=CW;jcv.height=CH}
   const j=jcv,jx=jcvx;
   jx.setTransform(1,0,0,1,0,0);jx.globalAlpha=1;jx.globalCompositeOperation='source-over';
@@ -4523,6 +4561,7 @@ const save=async()=>{
     poora PNG/JPG/WEBP save pehle jaisa hi chalta hai. */
  if((!b||!b.size)&&fmt!=='png'){mime='image/png';b=await toBlob(src,mime)}
  if(!b||!b.size){toast('Save nahi hua');return}
+ enc=b;
  /* kuch browsers maanga hua type nahi de paate aur chupchaap PNG lauta dete hain
     (purana WebView / iOS). Tab naam aur bridge ka mime bhi PNG hona chahiye, warna
     gallery me .webp naam ki PNG file jati hai aur wahan thumbnail nahi banta. */
@@ -4650,6 +4689,27 @@ const save=async()=>{
     koi message nahi (aur user ko lagta tha save ho gaya). ab wahi message jo har
     doosre fail raaste par aata hai. */
  toast('Save nahi hua');fallback(b)
+ /* 1.1.142: save() ke andar har fail raaste ka apna message/overlay tha, par koi
+    bhi *exception* (toBlob ke bahar ka throw, flatten surface ka getContext null,
+    FileReader ka constructor, canvas width setter ka OOM, share/download ke bahar
+    kuch bhi) seedha async function se bahar chali jati thi: page par unhandled
+    rejection (Android WebView me pageerror), user ko na message na overlay - file
+    nahi bani aur Save ne kuch bataya bhi nahi. Aur hold=true ke baad ka throw
+    saveBusy ko hamesha ke liye true chhod deta tha (agla Save chup-chaap return).
+    ab ek hi catch: wahi message jo har doosre fail raaste par aata hai, aur jo blob
+    ban chuka ho to wahi long-press overlay (image user ke paas rehti hai), aur
+    saveBusy hamesha chhut jata hai. safal raaste (native/share/download/pending)
+    is line tak aate hi nahi, is liye un par ek byte ka asar nahi.
+    naapa (headless Chrome, fault injection): JPEG+transparent save me jcv ka
+    getContext null -> base par 2 pageerror, toast khali, overlay band, koi file
+    nahi (aur agla Save bhi wahi throw - jcv jodi cache), ab 0 pageerror, toast
+    "Save nahi hua", overlay khula, aur fault hataane ke baad agla Save file likh
+    deta hai; FileReader ka constructor throw -> base par 1 pageerror + koi
+    message nahi, ab 0 pageerror + wahi message. */
+ }catch(_){
+  try{toast('Save nahi hua')}catch(__){}
+  if(enc&&enc.size){try{fallback(enc)}catch(__){}}
+  hold=false
  }finally{if(!hold)saveBusy=false}};
 
 /* dock */
@@ -4767,8 +4827,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.136: sync rakha gaya - bina bridge GlassCut.version -> "1.1.136".
    1.1.137: sync rakha gaya - bina bridge GlassCut.version -> "1.1.137".
    1.1.138: sync rakha gaya - bina bridge GlassCut.version -> "1.1.138".
-   1.1.141: sync rakha gaya - bina bridge GlassCut.version -> "1.1.141". */
- return v||'1.1.141'}catch(_){return '1.1.141'}})(),
+   1.1.141: sync rakha gaya - bina bridge GlassCut.version -> "1.1.141".
+   1.1.142: sync rakha gaya - bina bridge GlassCut.version -> "1.1.142". */
+ return v||'1.1.142'}catch(_){return '1.1.142'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par

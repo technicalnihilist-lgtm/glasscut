@@ -113,6 +113,22 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 
 ## What was broken, and what changed
 
+### A save that threw left the user with nothing, and could break Save for the session
+
+- **`save()` had a `try/finally` but no `catch`.** Every *failure it knew about* had its own message and its own long-press overlay, but any exception — a `getContext` that returns `null` for the flatten surface, `new FileReader()` under memory pressure, a canvas `width` setter that fails to get a backing store, anything outside the share/download guards — escaped the async function as an unhandled rejection (a page error in the WebView). The user got no message, no overlay, no file, and after `hold` was set the `finally` left `saveBusy` true, so every later Save returned silently. One `catch` now shows the same "Save nahi hua" message every other failure shows, opens the same long-press overlay when a blob was already encoded, and always releases `saveBusy`.
+- **The JPEG flatten surface was cached as a pair only half-checked.** `jcv` (the white canvas a transparent background is flattened onto for JPEG) and its context were cached separately: `if (!jcv)` recreated the canvas but never noticed a `null` context, so once `getContext` returned `null` the cached canvas stayed and *every* later JPEG save threw on it — Save was dead for the rest of the session, silently. The pair is now checked together, and a surface without a context is dropped so the next save builds a fresh one.
+- Verified for 1.1.142 (fault injection, headless Chrome, 1400×1050):
+  - **Flatten surface's `getContext` returns `null`:** page errors **2 → 0**, message **none → "Save nahi hua"**, and the *next* Save (fault removed) writes a file — **0 files → 1 file, 30,311 B**.
+  - **`new FileReader()` throws:** page errors **1 → 0**, message **none → "Save nahi hua"**, long-press overlay **closed → open** (the encoded blob is shown, so the image is not lost).
+  - Normal saves are untouched: the same flow writes the same PNG on both builds (159,392 / 151,030 / 41,095 / 1,056,834 B on four photos, same sha1).
+
+### An Auto that ran out of memory left a dead Undo step behind
+
+- **`cutout()` allocates its own big typed arrays** (~5.9 MB of coarse-grid buffers on a 1400×1050 photo) and a low-RAM WebView can refuse that with a `RangeError`. The exception went straight out of the Auto button: a page error, no message, and the snapshot `push()` had just taken stayed on the undo stack as a step that changes nothing — the next Undo appeared to do nothing at all, because `cutout` had never touched the mask (its buffers are allocated before it writes a pixel).
+- **Auto now restores the snapshot it took** (mask content and box), drops the step (`abortPush`, so Redo is restored too), re-renders and says so. The successful paths (`c > 0` and `c <= 0`) are unchanged.
+- Verified for 1.1.142 (headless Chrome, 1400×1050, `GlassCut.trim()` used to drop cutout's scratch buffers, then the coarse-grid `Uint8Array` allocation made to fail, then Auto): page errors **1 → 0**, message **none → "Auto nahi chala. Wand ya Erase use karo"**, and Undo returns to the state before the stroke (**3bb93e62 → 67afd60a**) instead of staying put; the canvas is identical on both (3bb93e62), and with the fault removed the next Auto gives the same result on both (8929b34a).
+- **`GlassCut.version`'s fallback literal is in sync** — without the shell bridge the page reports **`1.1.142`**.
+
 ### A save pinned its blob for four seconds after the file was already written
 
 - **The download path kept the anchor and its blob URL alive on a 4 s timer.** When the shell has no native writer and the browser cannot share, `save()` hands the file to the browser with `<a download>` + an object URL. The anchor was removed and the URL revoked by `setTimeout(..., 4000)`, so after every save a multi-MB blob (245 KB for a 1400×1050 PNG, several MB for a flattened JPEG) stayed pinned for four seconds — the exact window in which the next action allocates — and a live `<a download>` sat in `document.body`, one more for every extra tap.
