@@ -1095,10 +1095,28 @@ const drawPhoto=(im,nw,nh)=>{
      safal raasta bilkul wahi hai: pehla try wahi origc, wahi drawImage, wahi
      getImageData, wahi W/H - is liye canvas, save aur mask par ek byte ka farak
      nahi (dekho naap). */
-  let cap=1400,nW,nH,fg=null,retry=false;
+  /* 1.1.145: neeche wali ek hi try/catch do bilkul alag galtiyon ko ek hi ilaaj
+     deti thi - working size ko aadha karna. par us ladder ka matlab sirf ek hi
+     galti par hai: getImageData ka readback fail hona (kam RAM wale WebView par
+     InvalidStateError/OOM), jahan chhota surface sach me madad karta hai.
+     drawImage ka throw us se bilkul alag cheez hai (source bitmap 0-size, decode
+     fail, tainted surface) - usme size aadha karne se kuch theek nahi hota, bas
+     photo chup-chaap chhoti hoti jati hai: 1400 -> 700 -> 350 -> 175 ... -> 16.
+     naapa (headless Chrome, 1400x1050 photo, drawImage ko pehli 3 calls par
+     throw karaya): base par canvas 175x131 ban jata tha, koi message nahi, aur
+     Save usi 175x131 ki 5,112-byte file ko "Save ho gaya" ke saath likh deta tha
+     - yaani user ki 1400px photo 8x chhoti export hui, bina kisi ishaare ke.
+     ab dono alag hain: drawImage ka throw seedha fail hai (wahi "Photo load nahi
+     hui" jo is raaste ki har doosri galti par pehle se hai, aur purani photo
+     bilkul waisi hi rehti hai), aur sirf getImageData ka throw ladder chalata
+     hai. safal raasta (pehla drawImage + pehla getImageData) bilkul wahi hai -
+     is liye canvas, mask aur save par ek byte ka farak nahi (dekho naap). */
+  let cap=1400,nW,nH,fg=null,retry=false,again=false;
   for(;;){
     const s2=Math.min(1,cap/Math.max(nw,nh));
     nW=Math.max(1,Math.round(nw*s2));nH=Math.max(1,Math.round(nh*s2));
+    /* drawImage apne try me: iska throw size ka sawal nahi hai */
+    let ox=null,rx=null;
     try{
       if(!retry){
         /* canvas ki width set karna (chahe wahi value ho) poora backing store phenk
@@ -1109,19 +1127,29 @@ const drawPhoto=(im,nw,nh)=>{
            jata. */
         const crs=origc.width!==nW||origc.height!==nH;
         if(crs){origc.width=nW;origc.height=nH}
-        const ox=origc.getContext('2d');
+        ox=origc.getContext('2d');
         if(!crs){ox.setTransform(1,0,0,1,0,0);ox.globalAlpha=1;ox.clearRect(0,0,nW,nH)}
-        ox.drawImage(im,0,0,nW,nH);
-        fg=ox.getImageData(0,0,nW,nH)
+        ox.drawImage(im,0,0,nW,nH)
       }else{
         /* retry ek alag surface par, taaki origc purani photo hi rakhe */
         const rc=mk();rc.width=nW;rc.height=nH;
-        const rx=rc.getContext('2d');
-        rx.drawImage(im,0,0,nW,nH);
-        fg=rx.getImageData(0,0,nW,nH)
+        rx=rc.getContext('2d');
+        rx.drawImage(im,0,0,nW,nH)
       }
-      break
-    }catch(_){
+    }catch(_){fg=null;break}
+    /* 1.1.145: readback fail hone par pehle wahi size dobara try hota hai.
+       kam RAM wali WebView par ye galti aksar ek hi baar aati hai (renderer usi
+       kshan busy hota hai), aur pehle wo turant ladder chala deti thi - yaani ek
+       hi transient galti par 1400x1050 ki jagah 700x525 (4x kam pixel) hamesha ke
+       liye, bina kisi message ke. dobara try karne me kuch nahi jata (jo surface
+       pehle ban chuka hai wahi dobara likha jata hai) aur asli "bahut bada" case
+       me sirf ek extra failed attempt lagta hai. naapa (headless Chrome, 1400x1050,
+       getImageData ko ek hi baar throw karaya): base par canvas 700x525, ab
+       1400x1050; do baar throw karane par dono par 700x525 (ladder pehle jaisa),
+       aur bina fault canvas/hash dono par bilkul wahi. */
+    try{fg=(rx||ox).getImageData(0,0,nW,nH);break}
+    catch(_){
+      if(!retry&&!again){again=true;continue}
       if(cap<=16){fg=null;break}
       cap=cap>>1;retry=true
     }
@@ -3942,7 +3970,7 @@ const stroke=(a,b,c,d,k)=>{const r=Math.max(2,brush*k/2),keep=mode==='keep',v=ke
     ceil(sqrt/step) me 0 farak; 20 lakh call par hypot 226.5 ms -> sqrt 79.3 ms. */
  dx=c-a,dy=d-b,step=Math.max(1,r/3),
  n=Math.max(1,Math.ceil(Math.sqrt(dx*dx+dy*dy)/step));let ch=0;
- for(let i=0;i<=n;i++){const px=i===0?a:i===n?c:a+(c-a)*i/n,py=i===0?b:i===n?d:b+(d-b)*i/n;
+ for(let i=0;i<=n;i++){const px=i===0?a:i===n?c:a+dx*i/n,py=i===0?b:i===n?d:b+dy*i/n;
   if(px===stX&&py===stY&&r===stR)continue;
   stX=px;stY=py;stR=r;
   /* keepMask pehli Keep stamp par banti hai (aur tabhi, jab sach me kuch paint ho) -
@@ -4892,8 +4920,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.141: sync rakha gaya - bina bridge GlassCut.version -> "1.1.141".
    1.1.142: sync rakha gaya - bina bridge GlassCut.version -> "1.1.142".
    1.1.143: sync rakha gaya - bina bridge GlassCut.version -> "1.1.143".
-   1.1.144: sync rakha gaya - bina bridge GlassCut.version -> "1.1.144". */
- return v||'1.1.144'}catch(_){return '1.1.144'}})(),
+   1.1.144: sync rakha gaya - bina bridge GlassCut.version -> "1.1.144".
+   1.1.145: sync rakha gaya - bina bridge GlassCut.version -> "1.1.145". */
+ return v||'1.1.145'}catch(_){return '1.1.145'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
