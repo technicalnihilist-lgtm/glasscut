@@ -580,9 +580,21 @@ const langTable=()=>{
  while(n=w.nextNode()){const base=n.nodeValue,core=base.trim();if(!EN[core])continue;
   out.push({n:n,hi:base,en:base.replace(core,EN[core])})}
  return LANGT=out};
+/* 1.1.150: yahan har language toggle par #langs ke .sg buttons dobara query hote
+   the aur $$ ka ek naya array banta tha, halanki wo markup static hai (do buttons,
+   kabhi badalte nahi) - wahi cheez jo 1.1.149 me #tools .sg, .sw aur #toast par
+   theek hui thi; ye call site us waqt chhoot gayi. ab list ek hi baar banti hai
+   (pehle applyLang par) aur wahi for-loop kram me wahi teen write karta hai
+   (classList.toggle('on'), aur on hone par --i) - DOM par ek byte ka farak nahi.
+   naapa (headless Chrome, patched Element.querySelectorAll counter, en->hi->en
+   do toggle): .sg queries 2 -> 0, array allocations 2 -> 0; --i aur 'on' class
+   dono par wahi (en par --i=0, hi par --i=1). */
+let LANGB=null;
 const applyLang=(l,init)=>{lang=l;const t=langTable(),en=l==='en';
  for(let i=0;i<t.length;i++){const e=t[i];e.n.nodeValue=en?e.en:e.hi}
- document.documentElement.lang=en?'en':'hi';const el=$('#langs');$$('#langs .sg').forEach((b,i)=>{const on=b.dataset.v===l;b.classList.toggle('on',on);if(on)el.style.setProperty('--i',i)});
+ document.documentElement.lang=en?'en':'hi';const el=$('#langs');
+ const bs=LANGB||(LANGB=$$('#langs .sg'));
+ for(let i=0;i<bs.length;i++){const b=bs[i],on=b.dataset.v===l;b.classList.toggle('on',on);if(on)el.style.setProperty('--i',i)}
  /* localStorage write synchronous disk kaam hai (WebView me LevelDB) - jab language
     pehle se wahi ho to likhne ki zaroorat nahi */
  if(!init&&savedLang!==l){savedLang=l;try{localStorage.setItem('gc-lang',l)}catch(_){}}
@@ -1290,7 +1302,7 @@ const drawPhoto=(im,nw,nh)=>{
      hota hai (theek us waqt jab 5.88 MB ka naya ImageData bhi banta hai). nayi
      photo par dono views chhod diye jate hain; agla undo/redo apne aap naye
      bana leta hai (diffBox ka buffer guard), is liye nateeja par koi asar nahi. */
-  DVA=null;DVB=null;
+  DV.length=0;
   /* island stats (ISL), JPEG flatten canvas (jcv) aur cutout ka run table (RUN)
      bhi upar wale niyam se chalta hai: sabka apna size guard hai. keepMask ka
      guard yahin hai: size badla to use chhod do (nayi photo ke liye purani
@@ -1305,7 +1317,7 @@ const drawPhoto=(im,nw,nh)=>{
      photo par kul ~8 MB pade reh jate the. size same ho (ek hi camera ki doosri
      photo - aam haalat) to sab pehle jaisa reuse hota hai. nateeja (mask, screen,
      save) par koi asar nahi - agla kaam buffer khud bana leta hai. */
-  if(NP!==oldNP){MBUF=null;FL=null;BLS=null;CC=null;BD=null;SD=null;XM=null;SEEDS=null;XR=null;RR=null}
+  if(NP!==oldNP){MBUF=null;FL=null;BLS=null;CC=null;BD=null;SD=null;SU=null;XM=null;SEEDS=null;XR=null;RR=null}
   /* JPEG ka safed flatten canvas (CW x CH ka poora surface - 1400x1050 par 5.88 MB)
      sirf ek haalat me kaam aata hai: save() use `fmt==='jpeg'` par hi chhuta hai.
      fmt PNG/WEBP ho to wo agle JPEG save tak bekaar pada rehta tha, aur nayi photo
@@ -1806,6 +1818,14 @@ const mbAdd=(x0,y0,x1,y1)=>{if(x0<MB[0])MB[0]=x0;if(y0<MB[1])MB[1]=y0;if(x1>MB[2
    Uint32Array view constructions 12 -> 2, aur har mask op ka nateeja byte-identical
    (canvas hash teeno op ke baad base jaisa hi). */
 let MU=null;
+/* SD (cutout ka downscaled grid) ka 32-bit view - wahi ek-entry cache, key buffer +
+   length, bilkul MU jaisa (dekho cutout me 1.1.150 ki tippani). SD badalne par
+   buffer badal jata hai, is liye purana view kabhi galat array par nahi tikta;
+   jahan SD chhoda jata hai (dropScratch, size badlav) wahan SU bhi saaf hota hai
+   taaki wo purane buffer ko zinda na pakde. */
+let SU=null;
+const sd32=(a,n)=>{if(SU&&SU.buffer===a.buffer&&SU.length===n)return SU;
+ return SU=new Uint32Array(a.buffer,0,n)};
 /* keepMask ka 32-bit view (enforce) - wahi ek-entry cache, key buffer + length */
 let KV=null;
 const mu32=()=>{if(!mask||mask.byteOffset!==0||mask.length<4)return null;
@@ -3009,7 +3029,23 @@ const recycleMask=old=>{if(!old||old===mask||old===mask0||old.length!==W*H||POOL
    do naye Uint32Array view objects bante (aur wo per-frame allocation wahi cheez hai
    jo 1.1.8 me render loop se hatayi gayi thi). arrays 4-byte aligned na hon to poora
    byte loop chal jata hai - nateeja bilkul wahi. */
-let DVA=null,DVB=null;
+/* 1.1.150: DVA/DVB ek-ek entry ka cache the. undo/redo me dono arrays baari-baari
+   badalte hain (mask aur snapshot, pool ke do buffer), is liye har press par dono
+   views dobara bante the - ek undo/redo press me 2 naye Uint32Array view objects,
+   hamesha. ab ek chhota (4 entry tak seemit) cache hai jo buffer+byteOffset+length
+   par match karta hai, is liye wahi do buffer dobara aane par view reuse hota hai.
+   zinda memory ka dhyan: ye cache utne hi buffers pakde rakhta hai jitne entries
+   hain (4), aur jahan pehle DVA/DVB null hote the (drawPhoto, dropScratch) wahan
+   cache poora khali hota hai - wahi jagah, wahi release. view ka content wahi
+   array hai (koi copy nahi), is liye compare byte-identical rehta hai.
+   naapa (headless Chrome, 1400x1050, Uint32Array constructor par counter, 3 undo
+   + 3 redo): view constructions 12 -> 2 (sirf pehle do, cache bharne par). */
+let DV=[];
+const dvOf=(a,m)=>{for(let i=0;i<DV.length;i++){const e=DV[i];
+  if(e.b===a.buffer&&e.o===a.byteOffset&&e.l===m)return e.v}
+ const v=new Uint32Array(a.buffer,a.byteOffset,m);
+ if(DV.length>=4)DV.shift();
+ DV.push({b:a.buffer,o:a.byteOffset,l:m,v:v});return v};
 /* bx (optional): sirf isi box ke andar compare karo. dono arrays ke liye "box ke
    bahar har byte pakka 0 hai" wala invariant pehle se load-bearing hai (morph,
    Smooth, cutout ka MB, hist ka fallback box - sab usi par khade hain), is liye
@@ -3025,9 +3061,7 @@ const diffBox=(a,b,bx)=>{
   if(qx1>W-1)qx1=W-1;if(qy1>H-1)qy1=H-1}
  if((a.byteOffset&3)===0&&(b.byteOffset&3)===0){
   m=n>>>2;
-  if(!DVA||DVA.buffer!==a.buffer||DVA.byteOffset!==a.byteOffset||DVA.length!==m)DVA=new Uint32Array(a.buffer,a.byteOffset,m);
-  if(!DVB||DVB.buffer!==b.buffer||DVB.byteOffset!==b.byteOffset||DVB.length!==m)DVB=new Uint32Array(b.buffer,b.byteOffset,m);
-  const ua=DVA,ub=DVB;
+  const ua=dvOf(a,m),ub=dvOf(b,m);
   /* row ke andar hi words: ek word row ke aakhri pixel se aage nikal sakta hai
      (W chaar ka gunak nahi hota), par uske aage wale byte box ke bahar hain aur
      wahan dono arrays barabar hain - is liye wo word tab hi badalta hai jab uske
@@ -3611,10 +3645,24 @@ const cutout=()=>{const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.ro
     hi refs (R0/G0/B0 Float64Array) loop ke bahar scalars me rakhe jate hain,
     warna har check par teen array load hote the. wahi value, wahi kram, wahi
     compare - nateeja byte-identical. */
- const SD32=(LE32&&sd.byteOffset===0&&sd.byteLength===N*4)?new Uint32Array(sd.buffer,0,N):null;
+ /* 1.1.150: yahan har Auto press par do chhote object bante the - SD ka ek naya
+    32-bit view (Uint32Array(sd.buffer,0,N)) aur ek `px` closure. SD khud PTOK par
+    cache hota hai (upar), is liye aam haalat me (dobara Auto, tolerance badalna,
+    Grow/erase/wand ke baad phir Auto) buffer bilkul wahi rehta hai - par view
+    phir bhi naya banta tha. ab view bhi buffer+length key par cache hota hai,
+    bilkul MU (mu32) aur DVA/DVB (diffBox) jaisa. SD badalne par (nayi photo,
+    SD=null) buffer hi badal jata hai, is liye purana view kabhi galat array par
+    nahi tikta; SU ko dropScratch aur size-badlav par saaf bhi kiya jata hai
+    taaki wo purane buffer ko zinda na pakde.
+    `px` ka ek hi caller tha (neeche MATCH scan ka byte raasta, jab SD 4-byte
+    aligned na ho), is liye ab wahi expression wahan seedha likha hai - closure
+    hi nahi banta. dono badlav value/loop/kram nahi badalte, is liye mask
+    byte-identical rehta hai. naapa (headless Chrome, 1400x1050, Uint32Array
+    constructor + Function.prototype par counter, 3 Auto press): view
+    constructions 3 -> 1 (sirf pehla, SD banne par), closure 3 -> 0. */
+ const SD32=(LE32&&sd.byteOffset===0&&sd.byteLength===N*4)?sd32(sd,N):null;
  const A0=R0[0],B0_=G0[0],C0=B0[0],A1=R0[1],B1_=G0[1],C1=B0[1],
        A2=R0[2],B2_=G0[2],C2=B0[2],A3=R0[3],B3_=G0[3],C3=B0[3];
- const px=i=>SD32?SD32[i]:(sd[i*4]|sd[i*4+1]<<8|sd[i*4+2]<<16);
  /* refs loop poora hata diya: rn <= 4 hai, is liye chaar test seedhe likhe hain.
     wahi sub, wahi multiply, wahi compare - nateeja byte-identical. */
  /* dono pass ka rang-test ab ek hi linear pass me: pass 1 (strict, t2) aur pass 2
@@ -3637,7 +3685,7 @@ const cutout=()=>{const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.ro
     m=1 jab koi ref t2 ke andar, warna m=2 jab mn t2b ke andar, warna 0. */
  const MATCH=C.match;
  if(SD32)matchScan(SD32,MATCH,N,REF.r,REF.g,REF.b,rn,t2,t2b);
- else for(let i=0;i<N;i++){const v=px(i),r0=v&255,g0=(v>>>8)&255,b0=(v>>>16)&255;
+ else for(let i=0;i<N;i++){const v=sd[i*4]|sd[i*4+1]<<8|sd[i*4+2]<<16,r0=v&255,g0=(v>>>8)&255,b0=(v>>>16)&255;
   let a=r0-A0,b2=g0-B0_,c2=b0-C0,m=0,mn=a*a+b2*b2+c2*c2;
   if(mn<=t2)m=1;
   if(!m&&rn>1){a=r0-A1;b2=g0-B1_;c2=b0-C1;const d=a*a+b2*b2+c2*c2;if(d<mn)mn=d;if(d<=t2)m=1}
@@ -3811,8 +3859,16 @@ if(i<N-nw){j=i+nw;if(!bg[j]&&MATCH[j]){bg[j]=1;st2[gp++]=(x<<20)|j}}}
     "kitne byte sach me 255 se 0 hue" hai, is liye ginti bilkul wahi rehti hai
     aur mask byte-identical (dekho naap). view har cutout par ek hi baar banta
     hai; array 4-byte aligned na ho to purana byte loop chalta hai. */
- const MWC=(mask&&mask.byteOffset===0&&mask.length>=4)
-  ?new Uint32Array(mask.buffer,0,mask.length>>>2):null;
+ /* 1.1.150: yahi view har Auto press par naya banta tha (mask ka Uint32Array),
+    halanki mu32() wahi view pehle se cache karta hai (buffer + length key par,
+    byteOffset 0 aur length>=4 ki bilkul wahi shartein) aur usi cache ko
+    maskAll255 / maskUniform / Invert pehle se use karte hain - wahi ek galti jo
+    1.1.127 me flood ke mask-clear loop par theek hui thi; ye call site us waqt
+    chhoot gayi. mask badalne par (undo/redo, Reset, nayi photo) buffer badal
+    jata hai, is liye cache kabhi purane array par nahi tikta, aur yahan likhne
+    wala raasta bhi wahi buffer hai (MU view sirf ek alias hai). nateeja
+    byte-identical: mask, cnt aur MWC wala word/byte loop bilkul wahi. */
+ const MWC=mu32();
  /* MB yahin nikalta hai: bg cell ka har pixel pakka 0 ho jata hai (inner seedha
     clear hota hai, baaki poora BFS se), is liye bacha hua non-zero sirf non-bg
     cells me ho sakta hai - unka full-res failaav hi naya MB hai. ye hisaab usi
@@ -4977,9 +5033,9 @@ const resumeRender=()=>{if(!owedRender)return;owedRender=false;fullRender()};
    flatten canvas, island buffers) chhod diya jata hai aur fgc/outc/bgb/sm
    1x1 ho jate hain - agla render sab kuch wapas bana leta hai, is liye screen
    par kuch nahi badalta. photo khud (origc/fgi/mask) chhui bhi nahi jati. */
-const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;XM=null;SEEDS=null;XR=null;RUN=null;KCC=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;jcv=null;jcvx=null;STK=null;POOL.length=0;PSHIFT=null;
+const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;SU=null;XM=null;SEEDS=null;XR=null;RUN=null;KCC=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;jcv=null;jcvx=null;STK=null;POOL.length=0;PSHIFT=null;
  /* diff compare ke 32-bit views (diffBox) bhi apne mask buffer ko pin karte hain */
- DVA=null;DVB=null;
+ DV.length=0;
  /* enforce ka keepMask view bhi wahi - trim par wahi buffer chhod do */
  KV=null;
  /* opacity probe canvas bhi ek cache hai (CW x CH surface) - trim par chhod do,
@@ -5065,8 +5121,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.146: sync rakha gaya - bina bridge GlassCut.version -> "1.1.146".
    1.1.147: sync rakha gaya - bina bridge GlassCut.version -> "1.1.147".
    1.1.148: sync rakha gaya - bina bridge GlassCut.version -> "1.1.148".
-   1.1.149: sync rakha gaya - bina bridge GlassCut.version -> "1.1.149". */
- return v||'1.1.149'}catch(_){return '1.1.149'}})(),
+   1.1.149: sync rakha gaya - bina bridge GlassCut.version -> "1.1.149".
+   1.1.150: sync rakha gaya - bina bridge GlassCut.version -> "1.1.150". */
+ return v||'1.1.150'}catch(_){return '1.1.150'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
