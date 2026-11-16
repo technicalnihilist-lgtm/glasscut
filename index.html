@@ -3458,20 +3458,34 @@ const coarseBFS=(bg,MATCH,st,sp,seeds,ns,nw,N)=>{
  if(i>=nw){const j=i-nw;if(!bg[j]&&(MATCH[j]&1)){bg[j]=1;st[sp++]=(x<<20)|j}}
  if(i<N-nw){const j=i+nw;if(!bg[j]&&(MATCH[j]&1)){bg[j]=1;st[sp++]=(x<<20)|j}}}
  return sp};
-const snapBFS=(od,u32,seen,lev,q,mask,hd,sp2,gen,K,W,M,s2)=>{
- let cnt=0;
- while(hd<sp2){const e=q[hd++],i=e&0x1FFFFF,l=lev[i];if(mask[i]){mask[i]=0;cnt++}
-  if(l>=K)continue;
+/* 1.1.147: yahan ek poora M-byte `lev` array sirf har pixel ki BFS gehrai (0..K)
+   yaad rakhne ke liye pada tha - 1400x1050 par 1.47 MB, jo har photo load par
+   allocate + zero-fill hota tha (naapa: load ke bade allocations 15 / 18.22 MB
+   -> 14 / 16.75 MB). par ye queue FIFO hai (hd aage badhta hai, sp2 aage badhta
+   hai), is liye BFS khud hi level-order hai: gehrai d ke saare node gehrai d+1 ke
+   kisi bhi node se PEHLE nikalte hain. yaani har node ki lev wahi hai jo us waqt
+   queue ka "abhi ka level" hai - wo ek counter se milti hai, per-pixel array se
+   nahi. levEnd us level ke aakhri entry ka index hai; hd usse aage nikalte hi
+   agla level shuru (lev++, levEnd=sp2, kyunki tab tak us level ke saare bachche
+   enqueue ho chuke hain). na seed band par lev.fill chalta hai, na har pop par ek
+   byte load. nateeja byte-identical: lev[i] ki value bilkul wahi nikalti hai, is
+   liye `lev>=K` ka faisla, visited set, cnt aur queue ka kram sab wahi rehta hai. */
+const snapBFS=(od,u32,seen,q,mask,hd,sp2,gen,K,W,M,s2)=>{
+ let cnt=0,lev=0,levEnd=sp2;
+ while(hd<sp2){
+  if(hd>=levEnd){lev++;levEnd=sp2}
+  const e=q[hd++],i=e&0x1FFFFF;if(mask[i]){mask[i]=0;cnt++}
+  if(lev>=K)continue;
   const vi=u32?u32[i]:(od[i*4]|od[i*4+1]<<8|od[i*4+2]<<16),
-   r0=vi&255,g0=(vi>>>8)&255,b0=(vi>>>16)&255,x=e>>>21,l1=l+1;
+   r0=vi&255,g0=(vi>>>8)&255,b0=(vi>>>16)&255,x=e>>>21;
   if(x>0){const j=i-1;if(seen[j]!==gen){const v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-   const a=r0-(v&255),b2=g0-((v>>>8)&255),c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=((x-1)<<21)|j}}}
+   const a=r0-(v&255),b2=g0-((v>>>8)&255),c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;q[sp2++]=((x-1)<<21)|j}}}
   if(x<W-1){const j=i+1;if(seen[j]!==gen){const v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-   const a=r0-(v&255),b2=g0-((v>>>8)&255),c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=((x+1)<<21)|j}}}
+   const a=r0-(v&255),b2=g0-((v>>>8)&255),c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;q[sp2++]=((x+1)<<21)|j}}}
   if(i>=W){const j=i-W;if(seen[j]!==gen){const v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-   const a=r0-(v&255),b2=g0-((v>>>8)&255),c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=(x<<21)|j}}}
+   const a=r0-(v&255),b2=g0-((v>>>8)&255),c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;q[sp2++]=(x<<21)|j}}}
   if(i<M-W){const j=i+W;if(seen[j]!==gen){const v=u32?u32[j]:(od[j*4]|od[j*4+1]<<8|od[j*4+2]<<16);
-   const a=r0-(v&255),b2=g0-((v>>>8)&255),c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;lev[j]=l1;q[sp2++]=(x<<21)|j}}}}
+   const a=r0-(v&255),b2=g0-((v>>>8)&255),c=b0-((v>>>16)&255);if(a*a+b2*b2+c*c<=s2){seen[j]=gen;q[sp2++]=(x<<21)|j}}}}
  return cnt};
 const matchScan=(U,MATCH,N,R,G,B,rn,t2,t2b)=>{
  const A0=R[0],B0=G[0],C0=B[0],A1=R[1],B1=G[1],C1=B[1],
@@ -3545,7 +3559,7 @@ const cutout=()=>{const f=2,nw=Math.max(4,Math.round(W/f)),nh=Math.max(4,Math.ro
   match:new Uint8Array(N),
   bg:new Uint8Array(N),
   inner:new Uint8Array(N),
-  seen:new Uint8Array(M),lev:new Uint8Array(M),g:0}}
+  seen:new Uint8Array(M),g:0}}
  const C=CC;
  /* 8-bit generation 255 par wrap hota hai - tab teeno buffer saaf aur g 1 se dobara.
     stamp sirf "is run me dekha gaya" batata hai, is liye reset se nateeja nahi badalta. */
@@ -3722,7 +3736,7 @@ if(i<N-nw){j=i+nw;if(!bg[j]&&MATCH[j]){bg[j]=1;st2[gp++]=(x<<20)|j}}}
     if(id>=0&&drop[id]){for(let x=RX0[k];x<=RX1[k];x++)bg[row+x]=1}}}}
  if(!KCC||KCC.buf.length!==N)KCC={tok:0,tol:-1,ko:-1,buf:new Uint8Array(N)};
  KCC.tok=PTOK;KCC.tol=tol;KCC.ko=ko;KCC.buf.set(bg)}
- const seen=C.seen,q=st,lev=C.lev;
+ const seen=C.seen,q=st;
  const step=Math.max(4,Math.round(4+tol*0.15)),s2=step*step,K=3;
  /* coarse column ka pixel range: pehle har full-res pixel par xmap[x] load hota
     tha aur phir bg[c] aur inner[c] dobara padhe jate the - teen load per pixel,
@@ -3793,8 +3807,8 @@ if(i<N-nw){j=i+nw;if(!bg[j]&&MATCH[j]){bg[j]=1;st2[gp++]=(x<<20)|j}}}
     seen.fill() (memset) se likha jata hai aur mask sirf usi contiguous range par
     saaf hota hai. kram bilkul wahi rehta hai - y chadhte hue, phir x chadhte hue -
     is liye q me pixel usi tarteeb me jate hain aur mask byte-identical rehta hai.
-    lev sirf queue me jane wale pixel ke liye likha jata hai (inner pixel BFS me
-    aata hi nahi, uska lev kabhi padha nahi jata). */
+    1.1.147: lev array hi nahi raha - gehrai queue ke level-boundary se aati hai
+    (dekho snapBFS), is liye yahan sirf seen ka memset bachta hai. */
  if(!RUN||RUN.length<nw*3)RUN=new Int32Array(nw*3);
  const run=RUN;let rcy=-1,rn3=0;
  for(let y=0;y<H;y++){const cy=Math.min(nh-1,y*nh/H|0),row=cy*nw,base=y*W;
@@ -3820,7 +3834,7 @@ if(i<N-nw){j=i+nw;if(!bg[j]&&MATCH[j]){bg[j]=1;st2[gp++]=(x<<20)|j}}}
        shuru hota hai, is liye wahi do value ek-ek memset se likhi jaati hain aur
        per-pixel loop me sirf queue entry bachti hai. queue ka kram (x chadhta
        hua) aur uske entries bilkul wahi, is liye mask/BFS byte-identical. */
-    seen.fill(gen,base+x0,base+x1);lev.fill(0,base+x0,base+x1);
+    seen.fill(gen,base+x0,base+x1);
     for(let x=x0;x<x1;x++){const i=base+x;q[sp2++]=(x<<21)|i}}
    else{if(x0<mbx0)mbx0=x0;if(x1-1>mbx1)mbx1=x1-1;if(y<mby0)mby0=y;mby1=y}}}
  /* per-pixel closure allocation hata di: har pixel par ek naya function banta tha */
@@ -3831,7 +3845,7 @@ if(i<N-nw){j=i+nw;if(!bg[j]&&MATCH[j]){bg[j]=1;st2[gp++]=(x<<20)|j}}}
     - 1.68 M pixel par 4 neighbour check ke saath. BE par u32 null hai aur wahi
     purana byte raasta chalta hai; dono par value bilkul wahi. */
  const u32=OD32;
- cnt+=snapBFS(od,u32,seen,lev,q,mask,hd,sp2,gen,K,W,M,s2); const kc=enforce();
+ cnt+=snapBFS(od,u32,seen,q,mask,hd,sp2,gen,K,W,M,s2); const kc=enforce();
  /* keepMask me paint kiya hua hissa cutout ke box se bahar ho sakta hai (enforce
     wahan 255 likhta hai) - us haalat me poora box hi surakshit hai */
  if(keepDirty)mbAll();else if(mbx1<0){MB[0]=0;MB[1]=0;MB[2]=-1;MB[3]=-1}else{MB[0]=mbx0;MB[1]=mby0;MB[2]=mbx1;MB[3]=mby1}
@@ -4956,8 +4970,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.143: sync rakha gaya - bina bridge GlassCut.version -> "1.1.143".
    1.1.144: sync rakha gaya - bina bridge GlassCut.version -> "1.1.144".
    1.1.145: sync rakha gaya - bina bridge GlassCut.version -> "1.1.145".
-   1.1.146: sync rakha gaya - bina bridge GlassCut.version -> "1.1.146". */
- return v||'1.1.146'}catch(_){return '1.1.146'}})(),
+   1.1.146: sync rakha gaya - bina bridge GlassCut.version -> "1.1.146".
+   1.1.147: sync rakha gaya - bina bridge GlassCut.version -> "1.1.147". */
+ return v||'1.1.147'}catch(_){return '1.1.147'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
