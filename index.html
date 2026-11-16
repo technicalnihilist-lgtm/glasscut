@@ -2564,11 +2564,33 @@ const bgEdge=(c,px,py,pox,poy)=>{c.save();c.translate(-pox,-poy);
    calls par throw karaya, 1400x1050): base par 2 (putImageData) / 4 (drawImage)
    pageerror; ab dono par 0, app jawab deta rehta hai, aur fault hataane ke baad
    agla operation bilkul wahi canvas hash deta hai jo bina fault wale run me aata hai. */
+/* 1.1.144: renderBody ki galti ab ek baar dobara chalti hai (RTRIED guard, is liye
+   recursion nahi). wajah: is app ke bade render buffers (feather ka softM/BLS.t
+   1400x1050 par 1.47 MB each, fgc/outc/tmp) allocation se aate hain, aur WebView
+   par wahi allocation tab fail hoti hai jab memory tang ho - theek us waqt jab
+   Android ne GlassCut.trim() bulaya ho (onTrimMemory) aur cache khaali ho chuke
+   hon. aisi fail *transient* hoti hai: jo allocation abhi RangeError di, wo agle hi
+   kshan safal ho jati hai (GC ne bekaar buffers chhod diye / trim ke baad jagah
+   hai). pehle wo exception yahin catch me khatam ho jati thi - koi pageerror nahi,
+   par canvas purane frame par hi atka reh jata tha aur koi message bhi nahi aata
+   tha: Edge Softness ka slider 2 se 6 par khisakta, photo bilkul waisi hi dikhti,
+   aur agli baar slider hilane tak kuch nahi hota. ab upar wale resets (jo poora
+   rebuild maangte hain) ke baad wahi renderBody ek baar phir chalta hai; safal ho
+   to screen turant sahi ho jata hai, aur dono baar fail ho to pehle jaisa hi
+   chup-chaap chhod diya jata hai (koi pageerror nahi, koi atka hua flag nahi).
+   naapa (headless Chrome, 1400x1050, GlassCut.trim() ke baad Uint8Array(>5e5) ko
+   sirf pehli baar throw karaya, phir feather 2 -> 6): base par canvas hash badla
+   hi nahi (8b5f0428 hi raha), 0 pageerror, toast khaali; ab canvas turant naya
+   frame (feather 6) deta hai, 0 pageerror. sehatmand raaste par ye catch chalta hi
+   nahi, is liye aam flow ka canvas hash byte-identical rehta hai. */
+let RTRIED=false;
 function render(fast){
  try{renderBody(fast)}
  catch(_){
   RFULL=false;THas=false;SOK=false;PART=null;PRVcw=-1;PRVbgN=-1;
-  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;SUBX=false;NORESTR=false}}
+  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;SUBX=false;NORESTR=false
+  if(!RTRIED){RTRIED=true;
+   try{renderBody(fast)}catch(__){}finally{RTRIED=false}}}}
 function renderBody(fast){if(!od)return;RFULL=!fast;const fresh=cvFresh;cvFresh=false;cx.setTransform(1,0,0,1,0,0);cx.globalAlpha=1;
  /* "Hold: Original" (compare) me background, uska clearRect aur depth ka gradient
     sab bekaar the: pehle yahan poora background banta tha aur neeche wala showOrig
@@ -4869,8 +4891,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.138: sync rakha gaya - bina bridge GlassCut.version -> "1.1.138".
    1.1.141: sync rakha gaya - bina bridge GlassCut.version -> "1.1.141".
    1.1.142: sync rakha gaya - bina bridge GlassCut.version -> "1.1.142".
-   1.1.143: sync rakha gaya - bina bridge GlassCut.version -> "1.1.143". */
- return v||'1.1.143'}catch(_){return '1.1.143'}})(),
+   1.1.143: sync rakha gaya - bina bridge GlassCut.version -> "1.1.143".
+   1.1.144: sync rakha gaya - bina bridge GlassCut.version -> "1.1.144". */
+ return v||'1.1.144'}catch(_){return '1.1.144'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
