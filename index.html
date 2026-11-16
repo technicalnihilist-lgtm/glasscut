@@ -275,7 +275,18 @@ const GRADS=[['#ff9a9e','#fad0c4'],['#a18cd1','#fbc2eb'],['#43e97b','#38f9d7'],[
 let lang='hi';
 const EN={'Photo choose karo':'Choose a photo','Background hatao ya naya background lagao. Sab kuch aapke phone me hi hota hai.':'Remove a background or add a new one. Everything happens on your device.','Photo chuno':'Pick photo','Apni photo':'My photo','Photo ko long-press karke save karo':'Long-press the photo to save it','Band karo':'Close','Bacha hua background Wand se hatao, kinare Erase aur Restore se theek karo. Kinare kharab dikhein to Shrink ya Smooth try karo. Objects bachao ON rehne se background ke andar pade objects bhi bache rehte hain.':'Remove leftover background with Wand, then clean the edges with Erase and Restore. If edges look rough, try Shrink or Smooth.','Pehle photo choose karo':'Choose a photo first','Auto dabao ya Wand / Erase use karo':'Tap Auto, or use Wand / Erase','Auto nahi chala. Wand ya Erase use karo':'Auto did not run. Use Wand or Erase','Photo par tap karo, same color hat jayega':'Tap the photo to remove similar color','Ungli se mitao':'Erase with your finger','Ungli se wapas lao':'Restore with your finger','Background lag gaya':'Background applied','Photo load nahi hui':'Could not load the photo','Background clear nahi hai, Wand try karo':'Background is not clear, try Wand','Kuch nahi hata. Tolerance badhao ya Wand use karo':'Nothing removed. Increase tolerance or use Wand','Ho gaya! Erase / Restore se saaf karo':'Done! Clean up with Erase / Restore','Reset ho gaya':'Reset done','Undo ke liye kuch nahi':'Nothing to undo','Redo ke liye kuch nahi':'Nothing to redo','Save nahi hua':'Save failed','Save ho gaya':'Saved','Objects bachao':'Keep objects','Blur lag gaya':'Blur applied','Blue blur lag gaya - sirf insaan dikhega':'Blue blur applied - only the person shows','Object par ungli phero, wo kabhi nahi hatega':'Paint over the object, it will never be removed','Objects bachaye jayenge':'Objects will be kept','Sirf main object rahega':'Main object only'};
 const tr=s=>lang==='en'&&EN[s]?EN[s]:s;
-const toast=m=>{const t=$('#toast');t.textContent=tr(m);t.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('show'),2300)};
+/* 1.1.146: toast() har call par textContent aur class dobara likhta tha, chahe
+   bilkul wahi message pehle se screen par ho (tool dobara chunna, "Blur lag gaya",
+   "Objects bachaye jayenge" - har no-op tap). ek hi message par ye dono writes
+   kuch nahi badalte (wahi string, wahi class jo pehle se hai), par har write ek
+   DOM mutation + text layout invalidation hai. ab sirf tab likha jata hai jab
+   sach me badla ho; timer phir bhi har call par restart hota hai, is liye toast
+   ka dikhne ka waqt aur message bilkul pehle jaisa rehta hai.
+   naapa (headless Chrome, #toast par MutationObserver, wahi tool 20 baar):
+   mutations 40 -> 0, aur 2.4 s baad 'show' class dono par hat jati hai. */
+const toast=m=>{const t=$('#toast'),s=tr(m);if(t.textContent!==s)t.textContent=s;
+ if(!t.classList.contains('show'))t.classList.add('show');
+ clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('show'),2300)};
 const need=f=>(...a)=>{if(!od){toast('Pehle photo choose karo');return}f(...a)};
 const AB=()=>window.GlassCutAndroid||window.AndroidBridge||null;
 /* Android shell safe-area insets. pehle ye sirf onPageFinished par push hote the,
@@ -417,7 +428,18 @@ $$('.grab').forEach(g=>{const sh=g.parentElement;let y0=0,dy=0,on=false,gp=null;
    #sBl par programmatic value (Blue blur 48) par bhi kuch nahi tootta: last sirf
    tab badalta hai jab fn chala ho, aur fn hi P.bl likhta hai - yaani last===v ka
    matlab hamesha P.bl===v. */
-const slider=(id,fn)=>{const r=$('#'+id),v=$('#'+id+'v'),upd=()=>{r.style.setProperty('--p',(r.value-r.min)/(r.max-r.min)*100+'%');if(v)v.textContent=r.value};
+/* 1.1.146: ungli ek hi integer step ke andar rehne par bhi browser har move par
+   `input` bhejta hai (touch 120-240 Hz) - aur upd() har event par --p (ek style
+   write, yaani us slider ka style recalc) aur value label ka textContent dobara
+   likhta tha, chahe value bilkul wahi ho. ab wahi value dobara aane par dono
+   writes chhoot jate hain (value hi --p aur label tay karti hai, is liye nateeja
+   bilkul wahi); fn wala no-op guard pehle se hi tha.
+   naapa (headless Chrome, #sF par 30 synthetic same-value input event, 8 ms apart):
+   RecalcStyleCount 30 -> 0, aur --p/label dono par bilkul wahi ("30%" / "2"),
+   asli value badalne par (feather 2 -> 6) dono par wahi writes pehle jaise. */
+const slider=(id,fn)=>{const r=$('#'+id),v=$('#'+id+'v');let shown=null;
+ const upd=()=>{const s=r.value;if(s===shown)return;shown=s;
+  r.style.setProperty('--p',(r.value-r.min)/(r.max-r.min)*100+'%');if(v)v.textContent=s};
  let last=+r.value;upd();
  r.addEventListener('input',()=>{upd();const nv=+r.value;if(nv===last)return;last=nv;fn(nv)})};
 const seg=(id,fn)=>{const el=$('#'+id);el.addEventListener('click',e=>{const b=e.target.closest('.sg');if(!b)return;const bs=$$('#'+id+' .sg');bs.forEach(x=>x.classList.toggle('on',x===b));el.style.setProperty('--i',bs.indexOf(b));fn(b.dataset.v)})};
@@ -4348,7 +4370,19 @@ const cmp=$('#bCmp');
    (cmpOff apni showOrig shart par chalta hai, is liye wo chhua nahi gaya).
    preventDefault() pehle hi line par hai, is liye button ka default behaviour
    (focus / context menu) dono haalat me wahi rehta hai. */
-const cmpOn=e=>{if(!od)return;if(e&&e.cancelable)e.preventDefault();if(showOrig)return;showOrig=true;fullRender()};
+/* 1.1.146: "Hold: Original" par right-click / middle-click bhi poora canvas
+   original photo par badal deta tha, halanki canvas ka stroke (pointerdown ka
+   `e.button>0` guard) aur sheet ka grab dono non-primary button chhod dete hain.
+   us haalat me screen par bina cut ki hui photo khadi rehti thi jab tak ungli uth kar
+   pointerup na aaye - aur right-click ke saath aane wale pointerup par bharosa
+   karna galat hai (context menu / OS gesture use kha sakta hai). ab wahi ek guard
+   yahan bhi hai; primary (touch/mouse-left/stylus tip) raasta bilkul pehle jaisa.
+   naapa (headless Chrome, 1400x1050, auto cut ke baad #bCmp par button=2
+   pointerdown dabaye rakha): base par canvas hash 3165941549 (bina cut ki hui
+   original photo) ho jata tha, ab 872162990 (edit wala frame hi rehta hai) -
+   button=0 par dono build par 3165941549 (Hold: Original jaisa hona chahiye),
+   aur release par dono par 872162990 wapas. */
+const cmpOn=e=>{if(!od)return;if(e&&e.button>0)return;if(e&&e.cancelable)e.preventDefault();if(showOrig)return;showOrig=true;fullRender()};
 const cmpOff=()=>{if(showOrig){showOrig=false;fullRender()}};
 cmp.addEventListener('pointerdown',cmpOn);
 ['pointerup','pointerleave','pointercancel'].forEach(ev=>cmp.addEventListener(ev,cmpOff));
@@ -4921,8 +4955,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.142: sync rakha gaya - bina bridge GlassCut.version -> "1.1.142".
    1.1.143: sync rakha gaya - bina bridge GlassCut.version -> "1.1.143".
    1.1.144: sync rakha gaya - bina bridge GlassCut.version -> "1.1.144".
-   1.1.145: sync rakha gaya - bina bridge GlassCut.version -> "1.1.145". */
- return v||'1.1.145'}catch(_){return '1.1.145'}})(),
+   1.1.145: sync rakha gaya - bina bridge GlassCut.version -> "1.1.145".
+   1.1.146: sync rakha gaya - bina bridge GlassCut.version -> "1.1.146". */
+ return v||'1.1.146'}catch(_){return '1.1.146'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
