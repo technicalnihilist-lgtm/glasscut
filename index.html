@@ -284,7 +284,8 @@ const tr=s=>lang==='en'&&EN[s]?EN[s]:s;
    ka dikhne ka waqt aur message bilkul pehle jaisa rehta hai.
    naapa (headless Chrome, #toast par MutationObserver, wahi tool 20 baar):
    mutations 40 -> 0, aur 2.4 s baad 'show' class dono par hat jati hai. */
-const toast=m=>{const t=$('#toast'),s=tr(m);if(t.textContent!==s)t.textContent=s;
+const TTL=$('#toast');
+const toast=m=>{const t=TTL,s=tr(m);if(t.textContent!==s)t.textContent=s;
  if(!t.classList.contains('show'))t.classList.add('show');
  clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('show'),2300)};
 const need=f=>(...a)=>{if(!od){toast('Pehle photo choose karo');return}f(...a)};
@@ -393,8 +394,14 @@ $$('.grab').forEach(g=>{const sh=g.parentElement;let y0=0,dy=0,on=false,gp=null;
     aur drag ke ant me transform dono par bilkul wahi (translateY(60px)); drag se
     band karne (dy>90) par --dy aur hideSheet dono pehle jaisa. */
  let draf=0;const dpaint=()=>{draf=0;sh.style.transform='translateY('+dy+'px)'};
+ /* 1.1.149: is file ka aakhri rAF jispar wahi guard nahi tha jo sched aur
+    ringPaint par 1.1.143 me laga. rAF throw kare (throttled / edge WebView) to
+    exception har pointermove se bahar jati thi - ek drag me har move par ek
+    pageerror - aur sheet ungli ke saath chalti hi nahi thi (transform khali reh
+    jata tha, transition 'none' atka rehta tha). ab dpaint synchronously chalta
+    hai (draf=0 pehle, bilkul frame jaisa), is liye drag ka nateeja wahi. */
  g.onpointermove=e=>{if(!on||(gp!=null&&e.pointerId!==gp))return;dy=Math.max(0,e.clientY-y0);
-  if(!draf)draf=requestAnimationFrame(dpaint)};
+  if(!draf){try{draf=requestAnimationFrame(dpaint)}catch(_){draf=0;dpaint()}}};
  g.onpointerup=stop;g.onpointercancel=stop;
  g.addEventListener('lostpointercapture',stop);
  window.addEventListener('pointerup',stop);window.addEventListener('pointercancel',stop);
@@ -442,7 +449,19 @@ const slider=(id,fn)=>{const r=$('#'+id),v=$('#'+id+'v');let shown=null;
   r.style.setProperty('--p',(r.value-r.min)/(r.max-r.min)*100+'%');if(v)v.textContent=s};
  let last=+r.value;upd();
  r.addEventListener('input',()=>{upd();const nv=+r.value;if(nv===last)return;last=nv;fn(nv)})};
-const seg=(id,fn)=>{const el=$('#'+id);el.addEventListener('click',e=>{const b=e.target.closest('.sg');if(!b)return;const bs=$$('#'+id+' .sg');bs.forEach(x=>x.classList.toggle('on',x===b));el.style.setProperty('--i',bs.indexOf(b));fn(b.dataset.v)})};
+/* 1.1.149: tap ke raaste par teen jagah har tap par wahi DOM query dobara chalti
+   thi aur ($$ par) ek naya array bhi banta tha, halanki teeno ki list static hai -
+   segments ka markup kabhi badalta nahi, swatches ek hi baar script ke shuru me
+   bante hain, aur #toast markup me pehle se hai. ab teeno list ek hi baar banti
+   hai. naapa (headless Chrome, patched querySelectorAll/Element.querySelectorAll
+   counter): 4 tool tap par `#tools .sg` 4 -> 1, 6 background swatch tap par `.sw`
+   6 -> 1, aur har toast par `#toast` 1 -> 0 (10 toast par 10 -> 0). toggle,
+   --i, textContent aur class bilkul wahi (dekho naap: canvas hash aur save file
+   byte-identical). */
+const seg=(id,fn)=>{const el=$('#'+id);let bs=null;
+ el.addEventListener('click',e=>{const b=e.target.closest('.sg');if(!b)return;
+  if(!bs)bs=$$('#'+id+' .sg');
+  bs.forEach(x=>x.classList.toggle('on',x===b));el.style.setProperty('--i',bs.indexOf(b));fn(b.dataset.v)})};
 const sw=(id,fn)=>{const b=$('#'+id);b.onclick=()=>{const v=b.getAttribute('aria-checked')!=='true';b.setAttribute('aria-checked',v);fn(v)}};
 slider('sT',v=>tol=v);
 slider('sF',v=>{feather=v;sched(false)});
@@ -581,7 +600,8 @@ sw('tFlip',v=>{P.f=v?-1:1;sched(false)});sw('tSh',v=>{P.sh=v?1:0;sched(false)});
 sw('tKeep',v=>{keepObj=v?1:0;toast(v?'Objects bachaye jayenge':'Sirf main object rahega')});
 
 /* background swatches */
-const noSw=()=>$$('.sw').forEach(s=>s.classList.remove('on'));
+let SWL=null;
+const noSw=()=>{(SWL||(SWL=$$('.sw'))).forEach(s=>s.classList.remove('on'))};
 (()=>{let h='<button class="sw" data-t="none" aria-label="Transparent" style="background:conic-gradient(#ccc 25%,#fff 0 50%,#ccc 0 75%,#fff 0) 0 0/12px 12px"></button><label class="sw" style="background:conic-gradient(#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)"><input type="color" id="cCol" value="#ff6a88"></label>';
  COLORS.forEach(c=>h+=`<button class="sw" data-t="color" data-v="${c}" style="background:${c}"></button>`);$('#cols').innerHTML=h;
  $('#grads').innerHTML=GRADS.map((g,i)=>`<button class="sw" data-t="grad" data-v="${i}" style="background:linear-gradient(135deg,${g[0]},${g[1]})"></button>`).join('')})();
@@ -5044,8 +5064,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.145: sync rakha gaya - bina bridge GlassCut.version -> "1.1.145".
    1.1.146: sync rakha gaya - bina bridge GlassCut.version -> "1.1.146".
    1.1.147: sync rakha gaya - bina bridge GlassCut.version -> "1.1.147".
-   1.1.148: sync rakha gaya - bina bridge GlassCut.version -> "1.1.148". */
- return v||'1.1.148'}catch(_){return '1.1.148'}})(),
+   1.1.148: sync rakha gaya - bina bridge GlassCut.version -> "1.1.148".
+   1.1.149: sync rakha gaya - bina bridge GlassCut.version -> "1.1.149". */
+ return v||'1.1.149'}catch(_){return '1.1.149'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
