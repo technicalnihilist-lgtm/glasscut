@@ -1866,7 +1866,21 @@ const maskUniform=()=>{const m=mask;if(!m||!m.length)return -1;
   return v}
  const v=m[0];if(v!==0&&v!==255)return -1;
  for(let i=1,n=m.length;i<n;i++)if(m[i]!==v)return -1;return v};
-const layer=fast=>{const soft=!fast&&feather>0,sv=soft?feather:-1;
+/* 1.1.152: fast frame par soft raasta tabhi chhoda jata hai jab mask sach me
+   badla ho. pehle shart sirf `!fast` thi, is liye feather>0 par har fast frame
+   fgc ko HARD mask se dobara banata tha (poora CW*CH alpha upload) aur 160 ms
+   baad wala poora render use phir SOFT mask se dobara - yaani Outline / Scale /
+   Position slider ke ek drag me har frame par do poore upload, halanki un
+   sliders me mask badalta hi nahi (mver wahi rehta hai). ab fast frame bhi soft
+   raasta leta hai jab mver===fgVer (mask wahi hai), is liye layer() ka pehla
+   cache check hit ho jata hai aur frame me ek bhi upload nahi chalta; screen par
+   wahi soft edge dikhta hai jo file me jata hai. stroke par mver har stamp par
+   badalta hai, is liye wahan fast frame pehle jaisa hard preview hi rehta hai -
+   ungli ke dauraan blur dobara banane ka koi naya kharcha nahi.
+   naapa (headless Chrome, 1400x1050, feather 6, Outline slider ke 6 step ek-ek
+   rAF par): putImageData 12 call / 1,76,40,000 px -> 0 call / 0 px; settled
+   canvas hash aur saved PNG base jaisa hi. */
+const layer=fast=>{const soft=feather>0&&(!fast||mver===fgVer),sv=soft?feather:-1;
  if(mver===fgVer&&sv===fgSoft)return;
  /* feather 0 par softM use hi nahi hota, par mask badal chuka hota hai: yahan
     softKey khali kar dena zaroori hai. warna feather wapas 2 karne par layer()
@@ -5146,8 +5160,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.148: sync rakha gaya - bina bridge GlassCut.version -> "1.1.148".
    1.1.149: sync rakha gaya - bina bridge GlassCut.version -> "1.1.149".
    1.1.150: sync rakha gaya - bina bridge GlassCut.version -> "1.1.150".
-   1.1.151: sync rakha gaya - bina bridge GlassCut.version -> "1.1.151". */
- return v||'1.1.151'}catch(_){return '1.1.151'}})(),
+   1.1.151: sync rakha gaya - bina bridge GlassCut.version -> "1.1.151".
+   1.1.152: sync rakha gaya - bina bridge GlassCut.version -> "1.1.152". */
+ return v||'1.1.152'}catch(_){return '1.1.152'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
