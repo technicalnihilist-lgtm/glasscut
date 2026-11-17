@@ -1280,6 +1280,11 @@ const drawPhoto=(im,nw,nh)=>{
   if(keepMask&&keepMask.length!==NP)keepMask=null;
   else if(keepDirty&&keepMask)keepMask.fill(0);
   keepDirty=false;mbAll();
+  /* 1.1.153: nayi photo par keepMask ka content badal gaya (ya buffer chala gaya),
+     is liye snapshot ka frozen reference ab purana hai - kVer badhao aur share
+     ka raasta band karo. purane undo/redo stacks isi photo-load me khaali hote
+     hain, is liye unke share kiye hue arrays yahan kisi kaam ke nahi. */
+  kVer++;lastKSnap=null;kFrozen=false;
   kbNone();
   /* scratch buffers: har ek ka apna size guard hai (FL.n!==M, CC.n/N CC.m/M,
      BLS.n, SD.length, SEEDS.length, XR.W, RUN.length, MBUF.length, BD.w/h/nw/nh,
@@ -2973,6 +2978,24 @@ const fullRender=()=>{if(raf){cancelAnimationFrame(raf);raf=0}fastReq=false;clea
    keepDirty sirf jhootha-true ho sakta hai (erase keepMask saaf karta hai),
    jo memory thodi zyada leta hai par kabhi galat mask nahi banata. */
 let keepDirty=false;
+/* 1.1.153: keepMask ka snapshot. pehle yahan har push par `keepMask.slice()` tha,
+   yaani Keep tool ek baar use hone ke baad (keepDirty uske baad hamesha true
+   rehta hai) har undo entry ke liye poora W*H copy - 1400x1050 par 1.47 MB, aur
+   history me 10 undo + 10 redo tak, yaani 29 MB tak zinda copies. par keepMask
+   ka content sirf tab badalta hai jab Keep tool sach me kuch paint kare (stamp2
+   usme sirf 255 likhta hai), is liye do lagataar push ke beech wo aam taur par
+   bilkul wahi hota hai - aur tab nayi copy bekaar hai.
+   ab ek hi array ("frozen" snapshot) sabhi push share karte hain: kVer har us
+   jagah badhta hai jahan keepMask ka content badalta hai (keep stamp, nayi photo,
+   restore), aur jab tak kVer wahi hai snap wahi lastKSnap deta hai - na copy, na
+   allocation. content badla ho to ek nayi copy banti hai (aur wahi agla
+   lastKSnap ban jata hai), is liye content kabhi purana nahi padta.
+   kFrozen = "live keepMask kisi snapshot me bhi hai" - us haalat me Keep stroke
+   shuru hone par pehle copy-on-write hota hai (stroke ke shuru me ek baar, har
+   stamp par nahi), warna stroke usi array me likh kar purane snapshot ka content
+   badal deta. COW content ko nahi badalta, is liye KMB aur nateeja wahi rehte
+   hain. */
+let kVer=0,kSnapVer=-1,lastKSnap=null,kFrozen=false;
 const snap=()=>{const a=bufOf();a.set(mask);
  /* mask ke saath uska box bhi yaad rakha jata hai: undo/redo ke baad box poora
     canvas maan lena (mbAll) Grow/Shrink/Smooth ke scan aur feather ke blur ko
@@ -2980,12 +3003,20 @@ const snap=()=>{const a=bufOf();a.set(mask);
     mask ke liye pehle se hi conservative hai (har 255 likhne wali jagah usse
     chauda karti hai), is liye wapas lauta dena bhi utna hi safe hai. keepMask
     me paint ho to poora canvas hi rakha jata hai (wo box ke bahar 255 likhta hai). */
- return[a,keepDirty&&keepMask?keepMask.slice():null,keepDirty?null:[MB[0],MB[1],MB[2],MB[3]]]};
+ if(keepDirty&&keepMask){
+  if(kSnapVer===kVer&&lastKSnap&&lastKSnap.length===keepMask.length){
+   /* content wahi hai jo pichhle snapshot ne rakha tha - wahi array share karo */
+   kFrozen=true;return[a,lastKSnap,keepDirty?null:[MB[0],MB[1],MB[2],MB[3]]]}
+  const k=keepMask.slice();lastKSnap=k;kSnapVer=kVer;
+  return[a,k,keepDirty?null:[MB[0],MB[1],MB[2],MB[3]]]}
+ return[a,null,keepDirty?null:[MB[0],MB[1],MB[2],MB[3]]]};
 /* snapshot me keepMask tabhi hota hai jab keep tool se kuch paint hua ho. jab nahi
    hota (aam haal) to snapshot me sirf null jata hai - na naya 1.68 MB khaali array,
    na shared khaali buffer, is liye undo/redo ke is raaste par ek bhi allocation
-   nahi. snapshots hamesha copy rakhte hain, is liye buffer share hone se koi purana
-   snapshot kharab nahi hota. */
+   nahi. (1.1.153 se jab keepMask ka content pichhle snapshot se badla nahi hai to
+   nayi copy bhi nahi banti - wahi ek frozen array sabhi push share karte hain, aur
+   usme likhne se pehle stroke copy-on-write karta hai. is liye "snapshot hamesha
+   apni copy" ka purana niyam ab content par hai, array par nahi.) */
 const restore=s=>{mask=s[0];keepDirty=!!s[1];
  const sb=s[2];
  if(sb){MB[0]=sb[0];MB[1]=sb[1];MB[2]=sb[2];MB[3]=sb[3]}else mbAll();
@@ -2997,8 +3028,14 @@ const restore=s=>{mask=s[0];keepDirty=!!s[1];
     padhne wala nahi tha (keepDirty false hai, is liye enforce/cutout/stamp2 sab
     use chhod dete hain). null aur poora-khaali array ka matlab yahan bilkul wahi
     hai, is liye canvas par ek pixel nahi badalta. */
- if(s[1]){keepMask=s[1];kbAll()}
- else{keepMask=null;kbNone()}};
+ if(s[1]){keepMask=s[1];kbAll();
+  /* 1.1.153: ye array stack par pade kisi bhi snapshot ka ho sakta hai (share
+     hua frozen snapshot), is liye live keepMask ab "frozen" hai - agla Keep
+     stroke pehle copy-on-write karega. content wahi hai jo snapshot ne rakha
+     tha, is liye kVer badhta hai aur lastKSnap/kSnapVer use saath le chalte hain
+     (agla push bina copy isi array ko share kar sakta hai). */
+  kVer++;kSnapVer=kVer;lastKSnap=s[1];kFrozen=true}
+ else{keepMask=null;kbNone();lastKSnap=null;kFrozen=false}};
 /* snapshot ka mask buffer ab recycle hota hai. pehle har stroke ek naya 1.68 MB
    Uint8Array banata tha (1400x1200) aur stack se girne wala purana array garbage
    ban jata tha - yaani har ungli uthane par 1.68 MB GC kaam. ab stack se nikla
@@ -3491,6 +3528,9 @@ const boxDown=(src,w,h,nw,nh,out)=>{out=out||new Uint8ClampedArray(nw*nh*4);
  return out};
 /* scratch buffers for the coarse-to-fine pass: per-photo-size reuse, generation stamped */
 let CC=null;
+/* 1.1.153: inner ke 3x3 AND ka row-triple ring (3 coarse rows, 1400x1050 par
+   2100 byte) - nw par size guard, is liye nayi photo par khud naya ban jata hai. */
+let HR=null;
 /* border seed colour buckets (512 quantised keys x [count,r,g,b]) aur unse bane
    refs ke teen scalar buffer - sab size se azaad hain, is liye ek hi baar bante hain */
 const BK=new Int32Array(2048),CND=new Int32Array(512),CNDC=new Int32Array(512);
@@ -3845,25 +3885,34 @@ if(i<N-nw){j=i+nw;if(!bg[j]&&MATCH[j]){bg[j]=1;st2[gp++]=(x<<20)|j}}}
     AND do hisson me toota hua tha. AND ka kram matter nahi karta, is liye ab
     wahi 3x3 AND ek hi pass me seedha likha jata hai aur hb array ki zaroorat
     hi nahi rehti - nateeja byte-identical (wahi 9 cell, wahi kinare ke niyam). */
- /* grid ke andar wale cell ke aath ke aath padosi grid ke andar hi hote hain, is
-    liye unke liye wahi 3x3 AND bina ek bhi bounds check (x===0 / y===nh-1 wale
-    aath compare) chalta hai; kinare wale cell (pehli/aakhri row, pehla/aakhra
-    column) purana expression hi chalate hain. wahi 9 cell, wahi "bahar = koi
-    rukavat nahi" ka niyam - nateeja byte-identical. 1400x1200 par 420k cell me
-    se ~418k andar hote hain, yaani per Auto press ~3.3 M compare kam. */
+ /* 1.1.153: yahan har cell ka 3x3 AND seedha bg se padha jata tha - 9 byte load
+    (aur bg[i] par short-circuit, yaani non-bg cell par 1). par 3x3 AND ko teen
+    "row-triple" me toda ja sakta hai: h[y][x] = bg[y][x-1] & bg[y][x] & bg[y][x+1]
+    (kinare par bahar wala padosi "koi rukavat nahi" = 1), aur tab
+    inner[y][x] = h[y-1][x] & h[y][x] & h[y+1][x] - bilkul wahi 9 value, wahi
+    kinare ka niyam, sirf AND ka grouping badla hua (AND sahayak hai, is liye
+    nateeja byte-identical). h ki sirf teen rows chahiye (rolling ring, 3*nw byte
+    = 1400x1050 par 2100 byte), aur h ki ek row ek hi load per cell se banti hai
+    (pichhle cell ka bg[i+1] hi agle cell ka bg[i] hai) - yaani per cell 9 ki
+    jagah ~1 bg load + 3 chhoti (L1 me rehne wali) h load. wahi ring pehli aur
+    aakhri row par bahar wali h row ko 1 maan leti hai, is liye kinare wale cell
+    ke liye alag expression ki zaroorat nahi rehti (wo expression bhi yahi kehta
+    tha: "bahar = koi rukavat nahi"). */
+ if(!HR||HR.length<nw*3)HR=new Uint8Array(nw*3);
+ const hr=HR;
+ /* ek coarse row ka row-triple, offset o par. nw==1 par dono padosi bahar hain. */
+ const rowH=(yy,o)=>{const base=yy*nw;let l=1,c=nw>0?bg[base]:0;
+  for(let x=0;x<nw;x++){const r=x===nw-1?1:bg[base+x+1];hr[o+x]=(l&&c&&r)?1:0;l=c;c=r}};
+ /* ring: pa = row y-1, pc = row y, pn = row y+1 (offset hr me) */
+ let pa=0,pc=nw,pn=nw*2;
+ rowH(0,pc);if(nh>1)rowH(1,pn);else hr.fill(1,pn,pn+nw);
  for(let y=0;y<nh;y++){const row=y*nw;
-  if(y>0&&y<nh-1&&nw>2){
-   for(let x=1;x<nw-1;x++){const i=row+x;
-    inner[i]=(bg[i]&&bg[i-1]&&bg[i+1]&&bg[i-nw]&&bg[i-nw-1]&&bg[i-nw+1]
-     &&bg[i+nw]&&bg[i+nw-1]&&bg[i+nw+1])?1:0}
-   inner[row]=(bg[row]&&bg[row+1]&&bg[row-nw]&&bg[row-nw+1]&&bg[row+nw]&&bg[row+nw+1])?1:0;
-   const lc=row+nw-1;
-   inner[lc]=(bg[lc]&&bg[lc-1]&&bg[lc-nw]&&bg[lc-nw-1]&&bg[lc+nw]&&bg[lc+nw-1])?1:0;
-  }else
-  for(let x=0;x<nw;x++){const i=row+x;
-   inner[i]=(bg[i]&&(x===0||bg[i-1])&&(x===nw-1||bg[i+1])
-    &&(y===0||(bg[i-nw]&&(x===0||bg[i-nw-1])&&(x===nw-1||bg[i-nw+1])))
-    &&(y===nh-1||(bg[i+nw]&&(x===0||bg[i+nw-1])&&(x===nw-1||bg[i+nw+1]))))?1:0}}
+  const up=y>0?pa:-1,dn=y<nh-1?pn:-1;
+  for(let x=0;x<nw;x++){
+   inner[row+x]=(hr[pc+x]&&(up<0||hr[up+x])&&(dn<0||hr[dn+x]))?1:0}
+  /* agla row: ring ghumao aur nayi "y+2" row purane pa slot me bharo */
+  const t=pa;pa=pc;pc=pn;pn=t;
+  if(y+2<nh)rowH(y+2,pn)}
  let hd=0,sp2=0,cnt=0;
  /* 1.1.108: inner run ka mask-clear 32-bit word par. Background ka poora hissa
     inner runs me aata hai, is liye ek Auto press par ~11 lakh mask byte ek-ek
@@ -4102,8 +4151,15 @@ const stroke=(a,b,c,d,k)=>{const r=Math.max(2,brush*k/2),keep=mode==='keep',v=ke
   /* keepMask pehli Keep stamp par banti hai (aur tabhi, jab sach me kuch paint ho) -
     ek khaali W*H array aur null ka matlab stamp2 me bilkul wahi hai (255 kahin
     nahi), is liye buffer ka na hona nateeja nahi badalta. */
- if(keep){if(!keepMask||keepMask.length!==W*H){keepMask=new Uint8Array(W*H);kbNone()}
-  ch+=stamp2(keepMask,255,mask,255,px,py,r);if(ch)keepDirty=true}
+ if(keep){if(!keepMask||keepMask.length!==W*H){keepMask=new Uint8Array(W*H);kbNone();kFrozen=false}
+  /* 1.1.153: live keepMask kisi snapshot me bhi hai to pehle apni copy banao -
+     warna ye stroke usi array me 255 likh kar purane snapshot ka content badal
+     deta (undo/redo galat state par lautta). COW stroke ke shuru me ek hi baar
+     hota hai (har stamp par nahi), content bilkul wahi rehta hai is liye KMB
+     aur nateeja nahi badalte, aur lastKSnap abhi bhi wahi content rakhta hai -
+     is liye usse chheda nahi jata. */
+  if(kFrozen){keepMask=keepMask.slice();kFrozen=false}
+  ch+=stamp2(keepMask,255,mask,255,px,py,r);if(ch){keepDirty=true;kVer++}}
   else if(v===0)ch+=stamp2(mask,0,keepDirty?keepMask:null,0,px,py,r);
   else ch+=stamp2(mask,255,null,0,px,py,r)}
  /* stroke ne ek bhi pixel nahi badla (ungli pehle se mite hue hisse par ghoom
@@ -5161,8 +5217,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.149: sync rakha gaya - bina bridge GlassCut.version -> "1.1.149".
    1.1.150: sync rakha gaya - bina bridge GlassCut.version -> "1.1.150".
    1.1.151: sync rakha gaya - bina bridge GlassCut.version -> "1.1.151".
-   1.1.152: sync rakha gaya - bina bridge GlassCut.version -> "1.1.152". */
- return v||'1.1.152'}catch(_){return '1.1.152'}})(),
+   1.1.152: sync rakha gaya - bina bridge GlassCut.version -> "1.1.152".
+   1.1.153: sync rakha gaya - bina bridge GlassCut.version -> "1.1.153". */
+ return v||'1.1.153'}catch(_){return '1.1.153'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
