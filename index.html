@@ -1384,7 +1384,33 @@ const drawPhoto=(im,nw,nh)=>{
   for(let i=0;i<undo.length;i++){const s=undo[i];if(s&&s[0]!==mask&&s[0]!==mask0)recycle(s)}
   for(let i=0;i<redo.length;i++){const s=redo[i];if(s&&s[0]!==mask&&s[0]!==mask0)recycle(s)}
   undo=[];redo=[];fgVer=-1;fgSoft=-1;outV=-1;outS=-1;softKey='';mver++;
-  $('#empty').style.display='none';cv.style.display='block';setSize();fullRender();
+  /* 1.1.154: JPEG ka safed flatten canvas (jcv) nayi photo par size nahi badalta
+     tha. drawPhoto use sirf tab chhodta tha jab format JPEG na ho, aur naya size
+     aane par use sirf agla JPEG save theek karta tha (save ka `jcv.width!==CW`
+     guard) - yaani 1400x1050 wali photo par ek JPEG save ke baad 300x200 wali
+     photo kholne par wahi 5.88 MB ki surface (aur uska context) poore session ke
+     liye zinda reh jati thi, jabki baaki har surface (cv, fgc, origc, bgb, tmp,
+     outc, sm) nayi photo ke size par chala jata hai. ab size badalne par use
+     yahin chhod diya jata hai (width=1 backing store turant free karta hai) aur
+     agla JPEG+transparent save use waise hi dobara bana leta hai (save ka
+     `if(!jcv||!jcvx)` raasta), is liye file ke byte bilkul wahi rehte hain.
+     naapa (instrumented build, 1400x1050 JPEG save -> 300x200 photo -> 1200x900
+     photo): jcv zinda 1400x1050 (5,88,00,000 backing byte) -> null, aur JPEG
+     save ka file byte-identical. */
+  $('#empty').style.display='none';cv.style.display='block';
+  setSize();
+  if(jcv&&(jcv.width!==CW||jcv.height!==CH)){jcv.width=jcv.height=1;jcvx=null;jcv=null}
+  /* 1.1.154: save ka duplicate guard (mime|size, 1.2 s) photo ke saath bandha nahi
+     tha - wo poore session ka ek hi window tha. doosri photo chun kar 1.2 s ke
+     andar Save dabane par, agar us photo ka encode pehli photo ke bilkul barabar
+     (wahi mime, wahi byte length) nikla, to file likhi hi nahi jati thi par page
+     "Save ho gaya" bol deta tha - yaani image kahin nahi pahunchti. ab nayi photo
+     par ye window khud reset ho jati hai, is liye dedupe sirf usi photo ke apne
+     double-tap ko rokti hai (jiske liye wo banayi gayi thi). naapa (headless
+     Chrome, toBlob ko har encode par wahi 4096-byte blob dene par majboor karke):
+     photo A save + photo B load + save -> base par 1 file, ab 2. */
+  lastDlKey='';lastDlT=0;
+  fullRender();
   /* yeh 30 ms ka timer photo ke token ke saath bandha hai. pehle timer bas chalta
      tha: do photo jaldi-jaldi chunne par (ya dheemi decode par) pehli photo ka
      auto doosri photo par poora cutout chala deta tha - 1400x1050 par ~250 ms ka
@@ -5218,8 +5244,8 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.150: sync rakha gaya - bina bridge GlassCut.version -> "1.1.150".
    1.1.151: sync rakha gaya - bina bridge GlassCut.version -> "1.1.151".
    1.1.152: sync rakha gaya - bina bridge GlassCut.version -> "1.1.152".
-   1.1.153: sync rakha gaya - bina bridge GlassCut.version -> "1.1.153". */
- return v||'1.1.153'}catch(_){return '1.1.153'}})(),
+   1.1.154: sync rakha gaya - bina bridge GlassCut.version -> "1.1.154". */
+ return v||'1.1.154'}catch(_){return '1.1.154'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
