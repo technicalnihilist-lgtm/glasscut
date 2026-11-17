@@ -3082,15 +3082,46 @@ const snap=()=>{const a=bufOf();a.set(mask);
     canvas maan lena (mbAll) Grow/Shrink/Smooth ke scan aur feather ke blur ko
     bekaar poore 1.68 M pixel par chalata tha. snapshot ka box us snapshot ke
     mask ke liye pehle se hi conservative hai (har 255 likhne wali jagah usse
-    chauda karti hai), is liye wapas lauta dena bhi utna hi safe hai. keepMask
-    me paint ho to poora canvas hi rakha jata hai (wo box ke bahar 255 likhta hai). */
+    chauda karti hai), is liye wapas lauta dena bhi utna hi safe hai.
+    1.1.157: keep-mode me pehle yahan null jata tha (yaani restore par poora
+    canvas). wajah sirf itni thi ki keepMask me paint kiya hua 255 mask ke MB se
+    bahar ho sakta hai - par wo 255 hamesha KMB ke andar hote hain (kbAdd har
+    keep stamp par chalta hai, kbNone sirf photo load par jab stack khud khaali
+    hota hai), aur enforce() bhi mask me 255 sirf KMB ke andar hi likhta hai.
+    is liye MB aur KMB ka union us snapshot ke mask ka pakka upper bound hai -
+    poora canvas ki zaroorat nahi. naapa (headless Chrome, 1400x1050, auto cut +
+    keep paint + erase + undo, phir Grow): morph ka scan 14,70,000 -> 6,93,000
+    pixel, canvas hash aur save dono byte-identical. */
+ let bx;
+ if(keepDirty&&keepMask){
+  if(MB[2]>=MB[0]&&KMB[2]>=KMB[0])
+   bx=[Math.min(MB[0],KMB[0]),Math.min(MB[1],KMB[1]),Math.max(MB[2],KMB[2]),Math.max(MB[3],KMB[3])];
+  else if(MB[2]>=MB[0])bx=[MB[0],MB[1],MB[2],MB[3]];
+  else if(KMB[2]>=KMB[0])bx=[KMB[0],KMB[1],KMB[2],KMB[3]];
+  else bx=null;
+ }else bx=[MB[0],MB[1],MB[2],MB[3]];
  if(keepDirty&&keepMask){
   if(kSnapVer===kVer&&lastKSnap&&lastKSnap.length===keepMask.length){
-   /* content wahi hai jo pichhle snapshot ne rakha tha - wahi array share karo */
-   kFrozen=true;return[a,lastKSnap,keepDirty?null:[MB[0],MB[1],MB[2],MB[3]]]}
-  const k=keepMask.slice();lastKSnap=k;kSnapVer=kVer;
-  return[a,k,keepDirty?null:[MB[0],MB[1],MB[2],MB[3]]]}
- return[a,null,keepDirty?null:[MB[0],MB[1],MB[2],MB[3]]]};
+   /* content wahi hai jo pichhle snapshot ne rakha tha - wahi array share karo.
+      1.1.157: kFrozen ka matlab "live keepMask kisi snapshot me bhi hai", aur wo
+      sirf tab sach hota hai jab share kiya gaya array khud live array ho. pehle
+      yahan bina shart kFrozen=true hota tha, is liye ek aam keep stroke (jiska
+      live array kisi snapshot me nahi tha) bekaar me 1.47 MB ka copy-on-write
+      karta tha - theek us waqt jab snapshot apni copy bana raha hota. naapa
+      (headless Chrome, 1400x1050, Uint8Array.slice counter, keep paint ke baad
+      keep stroke): slice 2 -> 1. */
+   if(lastKSnap===keepMask)kFrozen=true;
+   return[a,lastKSnap,bx]}
+  /* 1.1.157: content badla hai to copy (1.47 MB slice) ke bajaye live array hi
+     snapshot me share karo; kFrozen=true yaad rakhta hai ki ab usme seedha
+     likhna mana hai, is liye agla Keep stamp pehle ek hi baar copy-on-write
+     karta hai. snapshot ka content kabhi badalta nahi (COW), aur non-keep
+     operations par ab ek bhi copy nahi banti - pehle har keep-paint ke baad
+     aane wala pehla push poora 1.47 MB copy karta tha. naapa (headless Chrome,
+     1400x1050, slice counter, keep paint + 4 erase stroke): slice 4 -> 0. */
+  lastKSnap=keepMask;kSnapVer=kVer;kFrozen=true;
+  return[a,keepMask,bx]}
+ return[a,null,bx]};
 /* snapshot me keepMask tabhi hota hai jab keep tool se kuch paint hua ho. jab nahi
    hota (aam haal) to snapshot me sirf null jata hai - na naya 1.68 MB khaali array,
    na shared khaali buffer, is liye undo/redo ke is raaste par ek bhi allocation
@@ -3109,7 +3140,16 @@ const restore=s=>{mask=s[0];keepDirty=!!s[1];
     padhne wala nahi tha (keepDirty false hai, is liye enforce/cutout/stamp2 sab
     use chhod dete hain). null aur poora-khaali array ka matlab yahan bilkul wahi
     hai, is liye canvas par ek pixel nahi badalta. */
- if(s[1]){keepMask=s[1];kbAll();
+ if(s[1]){keepMask=s[1];
+  /* 1.1.157: yahan pehle kbAll() chalta tha, yaani undo/redo ke baad KMB poora
+     canvas - aur uske baad har Grow / Shrink / Smooth / Invert / Reset / Auto ka
+     enforce() poore canvas par word-test karta tha, halanki keep ka asli box
+     chhota hota hai. KMB sirf bada hota hai (kbAdd) aur kbNone sirf photo load
+     par hota hai (jahan undo/redo stack khud khaali ho jata hai), is liye koi
+     bhi snapshot ka keepMask usi KMB ke andar hi hai - wapas lauta hua array
+     current KMB se chhota nahi ho sakta. khaali KMB par purana raasta (kbAll)
+     hi chalta hai, taaki koi bhi anjaani haalat me keep-protection na chhoote. */
+  if(KMB[2]<KMB[0]||KMB[3]<KMB[1])kbAll();
   /* 1.1.153: ye array stack par pade kisi bhi snapshot ka ho sakta hai (share
      hua frozen snapshot), is liye live keepMask ab "frozen" hai - agla Keep
      stroke pehle copy-on-write karega. content wahi hai jo snapshot ne rakha
@@ -5318,8 +5358,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.152: sync rakha gaya - bina bridge GlassCut.version -> "1.1.152".
    1.1.154: sync rakha gaya - bina bridge GlassCut.version -> "1.1.154".
    1.1.155: sync rakha gaya - bina bridge GlassCut.version -> "1.1.155".
-   1.1.156: sync rakha gaya - bina bridge GlassCut.version -> "1.1.156". */
- return v||'1.1.156'}catch(_){return '1.1.156'}})(),
+   1.1.156: sync rakha gaya - bina bridge GlassCut.version -> "1.1.156".
+   1.1.157: sync rakha gaya - bina bridge GlassCut.version -> "1.1.157". */
+ return v||'1.1.157'}catch(_){return '1.1.157'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
