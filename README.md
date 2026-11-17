@@ -113,6 +113,19 @@ Undo/redo is 15 steps deep, and `Ctrl/⌘ + Z`, `Ctrl/⌘ + Y`, `Esc` work on de
 
 ## What was broken, and what changed
 
+### Two full alpha uploads per drag frame, because a fast frame was not allowed to be soft
+
+- **`layer()` rebuilt the foreground mask twice on every drag frame when Edge Softness was on.** The soft path was gated on `!fast`, so a fast preview frame always rebuilt `fgc` from the *hard* mask — a full `CW × CH` alpha upload and `putImageData` — and then the settled full render, 160 ms later, rebuilt the same canvas from the *soft* mask. Outline, Scale and Position do not change the mask at all (only the transform or the ring width), so `mver` is unchanged across the whole drag and both rebuilds were producing a picture the cache could have served.
+  The gate is now `feather > 0 && (!fast || mver === fgVer)`: a fast frame takes the soft path when the mask has not changed since the last build, which means `layer()`'s own first cache check (`mver === fgVer && sv === fgSoft`) hits and the frame uploads nothing. The preview now shows the soft edge that is actually saved, instead of a hard-edge flash. A stroke is unaffected: `mver` changes on every stamp, so the fast frame keeps its cheap hard preview and no blur is rebuilt under the finger.
+- Verified for 1.1.152 (base 1.1.151 vs 1.1.152, headless Chrome, 1400×1050 photo):
+  - **Outline slider, 6 steps, one per `requestAnimationFrame`, Edge Softness 6**, counting `putImageData`: **6 calls / 8,820,000 px → 0 calls / 0 px**.
+  - **Erase stroke with Edge Softness 6** (the mask changes on every stamp, so this is the path that must not regress): **7 calls / 10,290,000 px on both builds**.
+  - Settled canvas hash `96365878`, stroke hash `6b403c0`, Undo `61b542a0`, Redo `6b403c0` — **identical on both builds**.
+  - Whole flow on both builds (load + auto, wand tap, 10-move erase stroke, Undo, Redo, Grow, Shrink, Smooth, Reset, colour background, PNG save, language en, language hi, window close/open): **10/10 checkpoint canvas hashes identical** (`add3c18`, `417b1e10`, `58502fc0`, `417b1e10`, `58502fc0`, `4cb5cc80`, `14c74af0`, `d91ebe88`, `66071ac1` ×2), saved PNG **293,127 B on both** (sha1 `e6bcfc9680`); the same flow on a 1200×900 photo: all checkpoints identical and saved PNG **24,668 B on both** (sha1 `fceded2b99`); 0 page errors, 0 console errors.
+  - 120 random actions (tools, strokes, sliders, sheets, language, save, window close/open) on the new build: **0 page errors, 0 console errors**.
+  - 7 fault-injection sweeps (`getImageData`, `clearRect`, `setTransform`, `fillRect`, `URL.createObjectURL`, `getBoundingClientRect`, `toBlob` throwing at random): **0 page errors, the app stays responsive** on both builds.
+- **`GlassCut.version`'s fallback literal is in sync** — without the shell bridge the page reports **`1.1.152`**.
+
 ### 648 throwaway typed-array views per Grow/Shrink press, and five canvases re-freed on every trim
 
 - **`morph()`'s scratch copy built one `subarray` view per row.** Grow and Shrink copy the mask into `MBUF` before the 4-neighbour scan, because the scan writes `mask` while reading the previous values. The copy had two branches: a full-width box was one contiguous `set` (one view, one `memcpy`), but any narrower box took a per-row loop — `o.set(mask.subarray(row+cx0, row+cx1+1), row+cx0)` — and every `subarray` allocates a new `TypedArray` view. On an ordinary subject box (1400×1050 photo, 648 rows) that was **648 view objects per press**, all dead on the next line, on a path that already runs a mask scan and a feather blur.
