@@ -1867,6 +1867,25 @@ const maskAll255=()=>{const m=mask,u=mu32();
  if(u){const n=u.length;for(let k=0;k<n;k++)if(u[k]!==0xFFFFFFFF)return false;
   for(let i=n*4,e=m.length;i<e;i++)if(m[i]!==255)return false;return true}
  for(let i=0,n=m.length;i<n;i++)if(m[i]!==255)return false;return true};
+/* 1.1.156: maskAll255 ka jodidaar - "mask poora 0 hai" (kuch bhi nahi bacha).
+   MB sirf *bada* hota hai, chhota sirf un raaston par jata hai jinme exact bbox
+   scan hota hai (Shrink, Smooth, Invert) - is liye stroke/wand se poora subject
+   mitane ke baad MB us bade box par pada rehta hai jabki mask me ek bhi 255 nahi
+   bachta. us haalat me maskUniform ka MB shortcut -1 lauta deta tha (MB chhota
+   hai), aur sab kuch "aam mask" jaisa chalta tha: Grow/Shrink/Smooth ek poora
+   W*H scan + 1.68 MB copy + feather ka poora blur + poora render karte the aur
+   undo history me ek khaali step jodte the, halanki 0 ka max/min/blur 0 hi
+   rehta hai - mask ek byte nahi badalta. wahi mask layer() ke soft raaste me
+   poore box ka do-pass blur bhi karwata tha (1400x1050 par ~970k pixel), jiska
+   nateeja har jagah 0 hota hai.
+   ye check 32-bit word par chalta hai aur aam (kisi bhi non-zero) mask par pehle
+   hi word par laut jata hai - yaani normal flow ka ek bhi operation mehnga nahi
+   hota. naapa: dono build par poore 26-checkpoint flow ke canvas hash aur saved
+   file byte-identical (dekho CHANGELOG). */
+const maskAll0=()=>{const m=mask,u=mu32();
+ if(u){const n=u.length;for(let k=0;k<n;k++)if(u[k])return false;
+  for(let i=n*4,e=m.length;i<e;i++)if(m[i])return false;return true}
+ for(let i=0,n=m.length;i<n;i++)if(m[i])return false;return true};
 /* mask ke saare byte ek jaise hain? 255 = kuch nahi hata (photo load hote hi, ya
    Reset ke baad), 0 = sab hata. in dono haalat me Grow / Shrink / Smooth ka nateeja
    bilkul wahi mask hota hai (255 ka max/min/blur 255 hi rehta hai, 0 ka 0 - blur ke
@@ -1887,7 +1906,16 @@ const maskUniform=()=>{const m=mask;if(!m||!m.length)return -1;
     u[0] se shuru hokar poora 4,20,000 word scan hota tha (u[0] aam taur par 0 hota
     hai - photo ka kona background - is liye early-exit kabhi lagta hi nahi tha). */
  if(MB[2]<MB[0])return 0;
- if(MB[0]>0||MB[1]>0||MB[2]<W-1||MB[3]<H-1)return -1;
+ /* 1.1.156: MB chhota hone ka matlab "andar kam se kam ek non-zero aur bahar ek 0"
+    tabhi hai jab andar sach me kuch bacha ho. stroke/wand se poora subject mitane
+    ke baad MB bada pada rehta hai (wo sirf bada hota hai) aur mask poora 0 ho jata
+    hai - us haalat me ye shortcut -1 lauta deta tha, aur Grow / Shrink / Smooth
+    "aam mask" wala poora kaam karte the (W*H scan + copy + blur + render + ek
+    khaali undo step) halanki 0 ka max/min/blur 0 hi hota hai. ab pehle sasta
+    maskAll0 chalta hai (kisi bhi non-zero mask par pehle word par laut jata hai,
+    is liye aam flow par lagbhag zero kharcha) aur usi haalat me 0 laut jata hai -
+    bilkul wahi nateeja jo MB khaali hone par pehle se milta tha. */
+ if(MB[0]>0||MB[1]>0||MB[2]<W-1||MB[3]<H-1){if(maskAll0())return 0;return -1}
  const u=mu32();
  if(u){const n=u.length;let w=u[0];
   if(w!==0&&w!==0xFFFFFFFF)return -1;
@@ -1932,6 +1960,11 @@ const layer=fast=>{const soft=feather>0&&(!fast||mver===fgVer),sv=soft?feather:-
       jaye. MB poora canvas ho to yahi purana poora blur ban jata hai. */
    const nx0=Math.max(0,MB[0]-feather),ny0=Math.max(0,MB[1]-feather),
          nx1=Math.min(W-1,MB[2]+feather),ny1=Math.min(H-1,MB[3]+feather);
+   /* 1.1.156: poora 0 wala mask - us mask ka do-pass box blur har jagah 0 deta
+      hai, is liye blur ka koi raasta (poora ya box wala) chalta hi nahi. ye check
+      ek hi baar hota hai aur kisi bhi non-zero mask par pehle word par laut jata
+      hai (dekho maskAll0). */
+   const z0=maskAll0();
    /* box canvas ke bade hisse ko dhak raha ho to poora blur hi sasta hai (doosra
       raasta wahi kaam karta hai, sirf box ke bahar ka memset bachta hai) */
    if(!softM||softM.length!==W*H||!SBOX||MB[2]<MB[0]||nx1<nx0||ny1<ny0
@@ -1946,6 +1979,18 @@ const layer=fast=>{const soft=feather>0&&(!fast||mver===fgVer),sv=soft?feather:-
    if(maskAll255()){
     if(!softM||softM.length!==W*H)softM=new Uint8Array(W*H);
     softM.fill(255);SBOX=[0,0,W-1,H-1]}
+   /* 1.1.156: poora 0 wala mask (subject sab mita diya, ya jis photo me Auto ne
+      poora content hi hata diya) - us mask ka do-pass box blur har jagah 0 deta
+      hai, phir bhi 1400x1050 par ~970k pixel ka blur chalta tha (yeh raasta
+      softKill ke baad har poore render par aata hai). ab seedha memset, aur SBOX
+      wahi box (MB +/- feather) - jo alpha pehle se non-zero ho sakta tha use
+      poora dhak leta hai, is liye upload aur strip-clear bilkul pehle jaise, aur
+      fgc ka nateeja byte-identical. maskAll0 kisi bhi non-zero mask par pehle
+      word par laut jata hai. */
+   else if(z0){
+    if(!softM||softM.length!==W*H)softM=new Uint8Array(W*H);
+    else softM.fill(0);
+    SBOX=[nx0,ny0,nx1,ny1]}
    else{
     /* 1.1.89: pehle yahan blur(mask,feather) chalta tha (apna poora W*H scratch
        BLS.o) aur softM usi BLS.o par chala jata tha - is liye agla box-wala
@@ -1982,6 +2027,16 @@ const layer=fast=>{const soft=feather>0&&(!fast||mver===fgVer),sv=soft?feather:-
         (1400x1050), jabki asli content ~1.1 M par. ab wahi chhota box - nateeja
         byte-identical (SBOX sirf ek upper bound hai, isliye chhota karna safe). */
      SBOX=[nx0,ny0,nx1,ny1]}}}
+   else if(z0){
+    /* 1.1.156: ye raasta aam haalat hai jab box canvas ke 70% se chhota ho - aur
+       all-0 mask par yahan bhi poora box blur (1400x1050 par ~985k pixel, do pass)
+       bekaar chalta tha kyunki har window ka jod 0 hi hota hai. ab seedha memset
+       (poora array - box ke bahar ka hissa bhi 0 hi chahiye) aur wahi box jo blur
+       ke baad banta, is liye SBOX ka matlab aur aage ka upload/strip-clear bilkul
+       pehle jaisa rehta hai. */
+    if(!softM||softM.length!==W*H)softM=new Uint8Array(W*H);
+    else softM.fill(0);
+    SBOX=[nx0,ny0,nx1,ny1]}
    else{
     /* purane box ka wo hissa jo naye box se bahar hai saaf 0 (memset) */
     const o=SBOX;
@@ -5262,8 +5317,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.151: sync rakha gaya - bina bridge GlassCut.version -> "1.1.151".
    1.1.152: sync rakha gaya - bina bridge GlassCut.version -> "1.1.152".
    1.1.154: sync rakha gaya - bina bridge GlassCut.version -> "1.1.154".
-   1.1.155: sync rakha gaya - bina bridge GlassCut.version -> "1.1.155". */
- return v||'1.1.155'}catch(_){return '1.1.155'}})(),
+   1.1.155: sync rakha gaya - bina bridge GlassCut.version -> "1.1.155".
+   1.1.156: sync rakha gaya - bina bridge GlassCut.version -> "1.1.156". */
+ return v||'1.1.156'}catch(_){return '1.1.156'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
