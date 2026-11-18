@@ -1422,6 +1422,22 @@ const drawPhoto=(im,nw,nh)=>{
    try{auto(true)}catch(_){toast('Auto dabao ya Wand / Erase use karo')}},30)};
 const pickPhoto=f=>{
  const tok=++MAINTOK;MAINLOAD.t++;
+ /* 1.1.158: nayi photo ka decode abhi is purani photo ke saare cache ke saath
+    chalta tha. dropScratch() (wahi jo trim/pause par chalta hai) sirf cache
+    chhodta hai - photo, mask, keepMask, undo/redo stack chhue nahi jate - par
+    wo decode ke BAAD, drawPhoto ke andar chalta tha. yaani decode ke sabse
+    mehnge lamhe par offscreen surfaces (fgc/outc/tmp/bgb/origc = 5 x 5.88 MB)
+    aur typed-array scratch (softM 1.47 MB, SD/SU/XM/SEEDS/CC/BD/ISL/MBUF ~6 MB)
+    - sab zinda the, theek us waqt jab naya bitmap bhi ban raha hota hai.
+    ab ye cache decode se PEHLE chhode jate hain, is liye decode ka peak kam
+    padta hai. kuch bhi khoya nahi jata: ye sab pure cache hain aur agla render
+    inhe bilkul wahi dobara bana leta hai (wahi tark jo trim/pause par pehle se
+    hai) - photo load fail ho jaye to purani photo ka agla render bhi wahi
+    pixels deta hai, kyunki render deterministic hai.
+    savePending par nahi: us waqt lastSaveBlob hi user ki image ki ekmatra copy hai.
+    koi fast frame ya slider ka render pending ho to bhi nahi - wo aadhe chhode
+    cache par chalta aur (bina kisi zaroorat) bekaar frame likhta. */
+ if(!savePending&&!raf&&!rt)dropScratch();
  let used=false;
  /* im ka token: decode ke dauraan doosri photo chuni ja sakti hai, aur us
     haalat me purana (bhaari) decode poora hone par nayi photo ko dhak deta tha -
@@ -5359,8 +5375,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.154: sync rakha gaya - bina bridge GlassCut.version -> "1.1.154".
    1.1.155: sync rakha gaya - bina bridge GlassCut.version -> "1.1.155".
    1.1.156: sync rakha gaya - bina bridge GlassCut.version -> "1.1.156".
-   1.1.157: sync rakha gaya - bina bridge GlassCut.version -> "1.1.157". */
- return v||'1.1.157'}catch(_){return '1.1.157'}})(),
+   1.1.157: sync rakha gaya - bina bridge GlassCut.version -> "1.1.157".
+   1.1.158: sync rakha gaya - bina bridge GlassCut.version -> "1.1.158". */
+ return v||'1.1.158'}catch(_){return '1.1.158'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par

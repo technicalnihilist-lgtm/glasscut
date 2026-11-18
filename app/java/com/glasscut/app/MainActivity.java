@@ -115,6 +115,26 @@ public class MainActivity extends Activity {
         s.setDatabaseEnabled(true);
         s.setAllowFileAccess(true);
         s.setAllowContentAccess(true);
+        /* 1.1.158: page poori tarah offline hai (assets + user ki chuni hui photo),
+           par shell us guarantee ko enforce nahi karta tha. Manifest me INTERNET
+           permission nahi hai, is liye aaj koi bhi galti se daala gaya door ka URL
+           chup-chaap fail hota hai - par WebView pehle uske liye DNS/socket ki
+           koshish karta hai (background me latency, aur "sab kuch phone me hi hota
+           hai" ka wada sirf manifest par tika hua). setBlockNetworkLoads(true) use
+           WebView ke star par rok deta hai: http/https load turant fail hota hai,
+           koi socket khulta hi nahi. Ye setting INTERNET permission ke bina
+           default bhi true hai, par explicit rakhne se wo kisi bhi manifest badlav
+           par chup-chaap nahi badalti. file:// asset load par koi asar nahi.
+           Naapa (headless Chrome, request interception, poora load+auto+save flow):
+           page kul 1 request karta hai - wahi file:// wali HTML - aur 0 non-file
+           request, 0 pageerror; yaani ye rok kisi bhi asli kaam ko nahi rokti. */
+        s.setBlockNetworkLoads(true);
+        /* file:// page se doosri file:// URL padhna/likhna kabhi chahiye hi nahi -
+           photo aur background createObjectURL/FileReader se aate hain, XHR se nahi.
+           default bhi false hai, par yahan explicit hai taaki koi bhi naya WebView
+           default ise khol na de. */
+        s.setAllowFileAccessFromFileURLs(false);
+        s.setAllowUniversalAccessFromFileURLs(false);
         s.setLoadWithOverviewMode(true);
         s.setUseWideViewPort(true);
         s.setSupportZoom(false);
