@@ -210,6 +210,20 @@ input[type=range]::-moz-range-thumb{width:26px;height:26px;border:0;border-radiu
 <script>
 (()=>{
 'use strict';
+/* Har platform call ki tarah setTimeout bhi guard ke andar. Baaki 25 inject kiye
+   gaye platform API (putImageData/drawImage/getImageData/toBlob/createObjectURL/
+   localStorage/requestAnimationFrame/getContext/Uint8Array/... - sab) pehle se
+   guard hain, par setTimeout 15 jagah bina guard ke tha. Wo throw kare to:
+   (a) exception handler se bahar nikal kar pageerror banti hai, (b) toast() ke
+   andar se aane par uske BAAD wala caller ka recovery code kabhi nahi chalta -
+   jaise save ke fail raaste par `toast('Save nahi hua');fallback(b)` me overlay
+   hi nahi khulta, aur user ke paas image bachane ka koi raasta nahi bachta,
+   (c) loadImg ka watchdog throw kare to promise reject ho kar unhandled
+   rejection banti hai. T() wahi value lauta deta hai jo setTimeout lauta tha
+   (timer id), is liye har clearTimeout/`if(wd)` guard bilkul pehle jaisa chalta
+   hai; throw par 0 - jo falsy hai, is liye "timer nahi mila" wala purana
+   vyavhar milta hai, bas bina exception. */
+const T=(f,ms)=>{try{return window.setTimeout(f,ms)}catch(_){return 0}};
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],mk=()=>document.createElement('canvas');
 const cv=$('#cv'),cx=cv.getContext('2d'),stage=$('#stage'),win=$('#win'),root=document.documentElement.style;
 const fgc=mk(),fgx=fgc.getContext('2d'),origc=mk(),sm=mk(),tmp=mk(),outc=mk(),bgb=mk();
@@ -287,7 +301,7 @@ const tr=s=>lang==='en'&&EN[s]?EN[s]:s;
 const TTL=$('#toast');
 const toast=m=>{const t=TTL,s=tr(m);if(t.textContent!==s)t.textContent=s;
  if(!t.classList.contains('show'))t.classList.add('show');
- clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('show'),2300)};
+ clearTimeout(tt);tt=T(()=>t.classList.remove('show'),2300)};
 const need=f=>(...a)=>{if(!od){toast('Pehle photo choose karo');return}f(...a)};
 const AB=()=>window.GlassCutAndroid||window.AndroidBridge||null;
 /* Android shell safe-area insets. pehle ye sirf onPageFinished par push hote the,
@@ -358,7 +372,7 @@ const showSheet=el=>{if(openSh&&openSh!==el)hideSheet(openSh);
  if(openSh===el&&el.classList.contains('show')&&!el.classList.contains('out'))return;
  el.classList.remove('out');el.style.removeProperty('--dy');void el.offsetWidth;el.classList.add('show');$('#scrim').classList.add('show');openSh=el};
 const hideSheet=el=>{if(!el||!el.classList.contains('show')||el.classList.contains('out'))return;el.classList.add('out');$('#scrim').classList.remove('show');if(openSh===el)openSh=null;
- setTimeout(()=>{if(el.classList.contains('out'))el.classList.remove('show','out')},520)};
+ T(()=>{if(el.classList.contains('out'))el.classList.remove('show','out')},520)};
 const closeAll=()=>hideSheet(openSh);
 $('#scrim').onclick=closeAll;
 $('#bOpt').onclick=()=>openSh===$('#shOpt')?closeAll():showSheet($('#shOpt'));
@@ -499,8 +513,8 @@ const motionTick=()=>{mraf=0;if(idle)return;
  if(gyro){mx=Math.max(-1,Math.min(1,gx));my=Math.max(-1,Math.min(1,gy))}
  else{const t=Date.now()/1000;mx=Math.sin(t*0.9);my=Math.cos(t*1.35)*0.65}
  if(!mDrawn||mx!==mLX||my!==mLY){mLX=mx;mLY=my;mDrawn=true;sched(false)}
- mraf=setTimeout(motionTick,60)};
-const startMotion=()=>{if(!mraf&&!idle)mraf=setTimeout(motionTick,30)};
+ mraf=T(motionTick,60)};
+const startMotion=()=>{if(!mraf&&!idle)mraf=T(motionTick,30)};
 const setIdle=v=>{if(idle===v)return;idle=v;
  if(v){if(mraf){clearTimeout(mraf);mraf=0}}
  else if(P.motion)startMotion();
@@ -713,7 +727,7 @@ const setImgOpaque=im=>{imgOpaqueFor=im;imgOpaqueW=CW;imgOpaqueH=CH;imgOpaque=im
    ho (check 1400x1200 par ~60 ms leta hai). */
 let imgOTok=0;
 const imgOpaqueLater=im=>{const tok=++imgOTok;
- setTimeout(()=>{if(tok!==imgOTok||bgImg!==im||bg.t!=='img')return;setImgOpaque(im)},0)};
+ T(()=>{if(tok!==imgOTok||bgImg!==im||bg.t!=='img')return;setImgOpaque(im)},0)};
 /* probe canvas ek hi baar banta hai. pehle har check par naya CW x CH canvas
    (1400x1050 par 6.7 MB surface) banta tha aur usme getImageData chalta tha -
    GPU-backed canvas par readback sabse mehnga hissa hai. ab wahi ek canvas
@@ -900,7 +914,7 @@ const loadImg=(f,cb,box)=>{const tok=box?++box.t:0;
   if(u){try{URL.revokeObjectURL(u)}catch(_){}}
   if(box&&tok!==box.t)return;
   if(ok)cb(im);else toast('Photo load nahi hui')};
- wd=setTimeout(()=>fin(false),20000);
+ wd=T(()=>fin(false),20000);
  im.onload=()=>fin(true);im.onerror=()=>fin(false);
  if(u){try{im.src=u}catch(_){fin(false)}}
  else{
@@ -952,7 +966,7 @@ const exifOrient=(b,t,n)=>{
    GC ka intezaar. nateeja wahi: resolve pehle aaye to wahi bitmap, timeout pehle
    aaye to wahi null raasta. */
 const raceBitmap=(f,bo,ms)=>new Promise((res,rej)=>{
- let t=setTimeout(()=>{t=0;rej(new Error('timeout'))},ms);
+ let t=T(()=>{t=0;rej(new Error('timeout'))},ms);
  createImageBitmap(f,bo).then(b=>{if(t){clearTimeout(t);t=0;res(b)}
   else{try{b.close()}catch(_){}}},
   e=>{if(t){clearTimeout(t);t=0}rej(e)})});
@@ -1158,7 +1172,7 @@ const imgDimsRaw=async f=>{
    timer resolve/reject par clear hota hai, is liye File (aur uska slice) kisi
    zinda timer me pinned nahi rehta. */
 const imgDims=f=>new Promise(res=>{
- let t=setTimeout(()=>{t=0;res(null)},3000);
+ let t=T(()=>{t=0;res(null)},3000);
  imgDimsRaw(f).then(d=>{if(t){clearTimeout(t);t=0;res(d)}},
   ()=>{if(t){clearTimeout(t);t=0;res(null)}})});
 let MAINTOK=0;
@@ -1458,7 +1472,7 @@ const drawPhoto=(im,nw,nh)=>{
      (uska Undo bhi usi par khisak jata tha). ab token badal jane par timer chup
      chhap laut jata hai; nayi photo apna auto khud schedule karti hai. */
   const at=MAINLOAD.t;
-  setTimeout(()=>{if(MAINLOAD.t!==at)return;
+  T(()=>{if(MAINLOAD.t!==at)return;
    try{auto(true)}catch(_){toast('Auto dabao ya Wand / Erase use karo')}},30)};
 const pickPhoto=f=>{
  const tok=++MAINTOK;MAINLOAD.t++;
@@ -3078,7 +3092,7 @@ const sched=fast=>{if(fast)fastReq=true;if(!raf){
    RFULL ko jaan-boojh kar false hi chhoda jata hai: save() aur wand ka skip
    guard apna poora render tab hi chhodte hain jab RFULL sach me true ho, is
    liye ek extra render to hota hai par galat frame kabhi save nahi hota. */
-const qr=()=>{sched(true);clearTimeout(rt);rt=setTimeout(()=>{rt=0;
+const qr=()=>{sched(true);clearTimeout(rt);rt=T(()=>{rt=0;
  /* 1.1.137: blur background par fast preview frame ab low-quality upscale se
     banta hai, is liye wo poore render se byte-identical nahi hai - deferred
     poora render yahan ruk nahi sakta, warna screen par low preview hi reh
@@ -4761,9 +4775,15 @@ $('#bInv').onclick=need(()=>{if(!push())return;
      naya mask canvas ke chaaron kinaron tak pahunchta hai aur bbox poora canvas hi
      hota hai - us haalat me neeche ka poora scan bekaar hai. chaar kinare padhne
      par ye 2W+2H = 5200 byte me pata chal jata hai. */
+  /* 1.1.163: dono loops poore chalte the (2W+2H = 5,200 byte read) chahe chaar
+     kinare pehle hi mil chuke hon - aur Invert ka aam nateeja yahi hai (background
+     255 ho jata hai, is liye pehla hi pixel chaaron taraf ka jawab de deta hai).
+     ab har kadam par edge===15 ka check hai, is liye aam raaste par 4 read me kaam
+     khatam. jo mask kisi kinare ko nahi chhoota uske liye loop pehle jaisa poora
+     chalta hai aur wahi bbox scan hota hai - nateeja byte-identical. */
   let edge=0;
-  for(let x=0;x<W;x++){if(m[x])edge|=1;if(m[(H-1)*W+x])edge|=2}
-  for(let y=0;y<H;y++){if(m[y*W])edge|=4;if(m[y*W+W-1])edge|=8}
+  for(let x=0;x<W;x++){if(m[x])edge|=1;if(m[(H-1)*W+x])edge|=2;if(edge===15)break}
+  for(let y=0;y<H&&edge!==15;y++){if(m[y*W])edge|=4;if(m[y*W+W-1])edge|=8}
   if(edge===15)mbAll();
   else{
    let bx0=W,by0=H,bx1=-1,by1=-1;
@@ -5057,7 +5077,7 @@ const toBlob=(c,m)=>new Promise(res=>{
     jata tha: promise kabhi settle nahi hoti thi, saveBusy true reh jata tha aur us
     session me Save dobara kabhi kaam nahi karta tha. ab 4 s baad wahi canvas
     toDataURL se likha jata hai (wahi type, wahi naam ka logic aage). */
- if(!done)wd=setTimeout(()=>{wd=0;viaUrl()},4000)});
+ if(!done)wd=T(()=>{wd=0;viaUrl()},4000)});
 let jcv=null,jcvx=null,saveBusy=false;
 /* saveBusy ek saath do save rokta hai, par wo guard sirf utni der tak bandha
    rehta hai jitni der me blob ban kar disk par jata hai. browser/download raaste
@@ -5226,7 +5246,7 @@ const save=async()=>{
       bridge, 1400x1200): native err par toast khali -> "Save nahi hua", overlay
       dono par wahi; native ok par toast "Save ho gaya" pehle jaisa. */
    if(!ok){toast('Save nahi hua');fallback(b)}else savedOk()};
-  wd=setTimeout(()=>bfin(false),6000);
+  wd=T(()=>bfin(false),6000);
   /* savePending yahin se true: blob yahan se native write ke jawab tak hi user ki
      image hai. pehle ye sirf "ok:pending" ke baad true hota tha, is liye FileReader
      ke chalu rehne wale daur me aayi trim()/closeOv() usi blob ko chhod deti thi. */
@@ -5252,7 +5272,7 @@ const save=async()=>{
        message + overlay jo har doosre fail raaste par aata hai, aur blob chhod
        diya jata hai. */
     const ptok=saveTok;
-    wd=setTimeout(()=>{if(saveTok!==ptok)return;saveTok=-1;savePending=false;
+    wd=T(()=>{if(saveTok!==ptok)return;saveTok=-1;savePending=false;
      lastSaveBlob=null;toast('Save nahi hua');fallback(b)},45000);
     return}
    if(!r||r.indexOf('err')===0)bfin(false);else bfin(true)};
@@ -5281,7 +5301,7 @@ const save=async()=>{
  try{if(navigator.canShare&&/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)){
   const f=new File([b],name,{type:mime});
   if(navigator.canShare({files:[f]})){
-   shw=setTimeout(relShare,20000);
+   shw=T(relShare,20000);
    try{await navigator.share({files:[f],title:'GlassCut'});
     if(!shareDone){shareDone=true;clearTimeout(shw);saveBusy=false;savedOk()}
     return}
@@ -5325,7 +5345,7 @@ const save=async()=>{
      disk par dono par wahi (2,47,431 byte, sha1 wahi) aur double-tap par dono par
      ek hi file. */
   document.body.appendChild(a);a.click();a.remove();dlA=null;
-  setTimeout(()=>{try{URL.revokeObjectURL(u)}catch(_){}},1000);
+  T(()=>{try{URL.revokeObjectURL(u)}catch(_){}},1000);
   lastDlKey=dlKey;lastDlT=Date.now();
   savedOk();return}catch(_){if(dlA){try{dlA.remove()}catch(__){}}
   if(dlU){try{URL.revokeObjectURL(dlU)}catch(__){}}}
