@@ -5288,7 +5288,25 @@ const save=async()=>{
    catch(err){relShare();
     if(err&&err.name==='AbortError')return}}}
  }catch(err){if(err&&err.name==='AbortError')return}
- const dlKey=mime+'|'+b.size;
+ /* 1.1.162: double-tap de-dup ki pehchan sirf mime + encoded size thi, aur uska
+    matlab tha "wahi image dobara". par do alag images ka encoded size barabar ho
+    sakta hai - ek hi photo par sirf background ka rang badalne se PNG ka size
+    bilkul wahi reh sakta hai (same dimensions, same filter, same compression),
+    aur chhote canvas par to ye aam haalat hai. us haalat me 1.2 s ke andar
+    dobara Save dabane par file dobara nahi likhi jati thi, page "Save ho gaya"
+    bol deta tha, aur disk par pichhli image hi padi rehti thi - user ka naya
+    edit gayab. ab key me wo saara state hai jo file ka content tay karta hai
+    (photo ka token, mask version, background version, format, canvas size,
+    feather aur subject ke transform), is liye jo save kuch bhi alag likhta hai
+    wo kabhi skip nahi hota. bilkul wahi state (asli double-tap: beech me kuch
+    nahi badla) pehle jaisa hi ek hi file deta hai.
+    naapa (headless Chrome, toBlob ko har save par 4096-byte blob dene par majboor
+    karke, content har call par alag, 1400x1050): rang badal kar 1.2 s ke andar
+    dobara Save -> base par 1 file aur "Save ho gaya", ab 2 file; bina kuch
+    badle do tap 60 ms apart -> dono par 1 file. */
+ const dlKey=mime+'|'+b.size+'|'+MAINTOK+'|'+mver+'|'+bgVer+'|'+bg.t+'='+bg.v+'|'+P.bl
+  +'|'+fmt+'|'+CW+'x'+CH+'|'+feather+'|'+P.s+'|'+P.x+'|'+P.y+'|'+P.f+'|'+P.sh
+  +'|'+P.op+'|'+P.line+'|'+P.depth+'|'+P.tilt+'|'+P.motion;
  if(dlKey===lastDlKey&&Date.now()-lastDlT<1200){savedOk();return}
  let dlU=null,dlA=null;
  try{const u=URL.createObjectURL(b);dlU=u;
@@ -5485,8 +5503,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.158: sync rakha gaya - bina bridge GlassCut.version -> "1.1.158".
    1.1.159: sync rakha gaya - bina bridge GlassCut.version -> "1.1.159".
    1.1.160: sync rakha gaya - bina bridge GlassCut.version -> "1.1.160".
-   1.1.161: sync rakha gaya - bina bridge GlassCut.version -> "1.1.161". */
- return v||'1.1.161'}catch(_){return '1.1.161'}})(),
+   1.1.161: sync rakha gaya - bina bridge GlassCut.version -> "1.1.161".
+   1.1.162: sync rakha gaya - bina bridge GlassCut.version -> "1.1.162". */
+ return v||'1.1.162'}catch(_){return '1.1.162'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
