@@ -1337,6 +1337,10 @@ const drawPhoto=(im,nw,nh)=>{
   photoOpaque=amin===255;
   const om=mask;
   if(om&&om!==mask0&&om.length===NP){mask=om;mask.set(mask0)}else mask=mask0.slice();
+  /* 1.1.165: abhi mask0 od ke alpha se hi bana hai aur mask usi ki copy hai, yaani
+     od ka alpha har pixel par mask ke barabar hai - pehla layer() ise bina kuch likhe
+     maan sakta hai (dekho layer me fgAlphaLive ke dono raaste). */
+  fgAlphaLive=true;
   /* keepMask (aur restore ka KEMPTY) ab sirf tab banti hai jab Keep tool se sach me
      kuch paint ho - dekho stroke ka keep branch aur restore(). jab tak user Keep
      ko chhoota hi nahi, ye W*H buffer banta hi nahi: 1400x1050 par 1.47 MB, aur
@@ -1883,6 +1887,13 @@ const softTouch=(x0,y0,x1,y1)=>{
    hai aur partial upload par sirf badhta hai (conservative, kabhi chhota nahi),
    is liye purana box kabhi kuch clip nahi karta. */
 let SUB=null,fgFull=false;
+/* 1.1.165: fgAlphaLive = "fgi (= od) ka alpha byte har pixel par mask ke barabar hai".
+   yahi sach drawPhoto ke aakhir me pakka ho jata hai: mask0 wahin od ke alpha se hi
+   banaya jata hai (mask0[i]=alpha) aur mask usi mask0 ki copy hai. is liye nayi photo
+   ka pehla layer() do cheezein muft me jaan leta hai - mask poora 255 hai ya nahi
+   (photoOpaque ke saath), aur poore canvas par alpha likhne ki zaroorat hi nahi.
+   flag sirf ek frame ke liye hai: layer() ise padh kar false kar deta hai. */
+let fgAlphaLive=false;
 /* 1.1.126: CBX = "fgc ke is box ke bahar har alpha byte pakka 0 hai". poore upload
    par fgc ka box (ux0..uy1) poora likha jata hai, aur uske bahar chaar patti se 0
    kiya jata tha - yaani har poore upload par poora complement clear hota tha
@@ -2299,6 +2310,21 @@ const layer=fast=>{const soft=feather>0&&(!fast||mver===fgVer),sv=soft?feather:-
   const bb=soft?SBOX:MB;
   let ux0=0,uy0=0,ux1=W-1,uy1=H-1;
   if(bb&&bb[2]>=bb[0]&&bb[3]>=bb[1]){ux0=bb[0];uy0=bb[1];ux1=bb[2];uy1=bb[3]}
+  /* 1.1.165: feather 0 (hard mask) par nayi photo ka pehla frame poore canvas par
+     alpha likhta tha - har pixel par wahi value jo wahan pehle se hai
+     (u[i]=(u[i]&0xffffff)|(v<<24), 1400x1050 par 14,70,000 read-modify-write), aur
+     poora 6 MB putImageData bhejta tha halanki mask ka content subject ke box me hi
+     hai. usi ek scan me mask ka asli box nikal liya jata hai (wahi bbox jo wo loop
+     nikalta) aur upload usi box par hota hai. photoOpaque par ye raasta chalta hi
+     nahi - wahan upar wala 1.1.116 drawImage raasta pehle se sasta hai. */
+  let subL=null;
+  if(fgAlphaLive&&!soft&&!photoOpaque){
+   let lx0=W,ly0=H,lx1=-1,ly1=-1;
+   for(let y=uy0;y<=uy1;y++){const b=y*W;let f=-1,l=-1;
+    for(let x=ux0;x<=ux1;x++){if(m[b+x]){if(f<0)f=x;l=x}}
+    if(f>=0){if(f<lx0)lx0=f;if(l>lx1)lx1=l;if(ly0===H)ly0=y;ly1=y}}
+   if(lx1>=lx0&&ly1>=ly0){ux0=lx0;uy0=ly0;ux1=lx1;uy1=ly1;subL=[lx0,ly0,lx1,ly1]}
+  }
   const uw=ux1-ux0+1,uh=uy1-uy0+1;
   if(uw<1||uh<1||uw*uh>=W*H*0.9){ux0=0;uy0=0;ux1=W-1;uy1=H-1}
   const part2=!(ux0===0&&uy0===0&&ux1===W-1&&uy1===H-1);
@@ -2315,13 +2341,18 @@ const layer=fast=>{const soft=feather>0&&(!fast||mver===fgVer),sv=soft?feather:-
      ka raasta chhua nahi gaya. mask poora 255 ho to MB poora canvas hai, is liye
      part2 khud false hota hai aur SUB poora canvas - wahi jo neeche ka loop
      nikaalta. */
-  if(!part2&&photoOpaque&&!origStale&&origc.width===W&&origc.height===H&&maskAll255()){
+  /* 1.1.165: nayi photo ke pehle frame par (fgAlphaLive) mask poora 255 hona pehle se
+     pakka hai - photoOpaque ka matlab hai od ke har pixel ka alpha 255, aur mask usi
+     alpha ki copy hai - is liye maskAll255() ka poora-canvas scan (1400x1050 par
+     3,67,500 word load) yahan bekaar tha. baaki har frame par shart bilkul wahi hai. */
+  if(!part2&&photoOpaque&&!origStale&&origc.width===W&&origc.height===H&&(fgAlphaLive||maskAll255())){
    fgx.setTransform(1,0,0,1,0,0);fgx.globalAlpha=1;fgx.drawImage(origc,0,0);
    CBX=[0,0,W-1,H-1];
    SUB=[0,0,W-1,H-1];SUBX=false;
   }else{
   let bx0=W,by0=H,bx1=-1,by1=-1;
-  if(FG32){const u=FG32;
+  if(subL){bx0=subL[0];by0=subL[1];bx1=subL[2];by1=subL[3]}
+  else if(FG32){const u=FG32;
    for(let y=uy0;y<=uy1;y++){const b=y*W;let f=-1,l=-1;
     for(let x=ux0;x<=ux1;x++){const i=b+x,v=m[i];u[i]=(u[i]&0xffffff)|(v<<24);
      if(v){if(f<0)f=x;l=x}}
@@ -2357,7 +2388,7 @@ const layer=fast=>{const soft=feather>0&&(!fast||mver===fgVer),sv=soft?feather:-
   if(!FGR)FGR=[x0,y0,x1,y1];
   else{if(x0<FGR[0])FGR[0]=x0;if(y0<FGR[1])FGR[1]=y0;if(x1>FGR[2])FGR[2]=x1;if(y1>FGR[3])FGR[3]=y1}
  }else FGR=null;
- fgFull=false;DIRT=null;fgVer=mver;fgSoft=sv};
+ fgFull=false;DIRT=null;fgVer=mver;fgSoft=sv;fgAlphaLive=false};
 /* xf() ko har frame aur har pointermove par bulaya jata hai - ek hi array reuse hota
    hai taaki per-frame garbage na bane (values turant padh li jati hain) */
 const XF=[0,0,0];
