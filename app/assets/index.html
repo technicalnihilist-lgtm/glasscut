@@ -1305,7 +1305,20 @@ const drawPhoto=(im,nw,nh)=>{
      ab photo load par ise chhua hi nahi jata; outline on hote hi drawSubj ise
      poora bana deta hai (fgVer load par -1 hota hai, is liye pehla outline frame
      hamesha full rebuild hai). nateeja: canvas par ek pixel nahi badalta. */
-  bgb.width=bgb.height=1;sm.width=sm.height=1;bgVer++;bgBlue=-1;
+  /* 1.1.164: ye do drops guard ke bina the, jabki inke bilkul wahi jode 1.1.151
+     me do jagah guard ho chuke hain (dropScratch aur renderBody). canvas.width
+     ya .height likhna - chahe value bilkul wahi ho - poora backing store phenk
+     kar naya banata hai; nayi photo load par bgl/sm aam taur par pehle se 1x1
+     hote hain (unhe sirf blur/bluetint background chhoota hai), is liye yahan
+     har photo load par chaar bekaar platform writes + chaar chhote reallocation
+     chalte the. value pehle se 1x1 ho to ab kuch nahi likha jata - 1x1 canvas
+     ka content waise bhi khaali hai, is liye screen/save par ek pixel ka asar
+     nahi (bgVer++ aur bgBlue=-1 dono raaste par chalta hai).
+     naapa (headless Chrome, 1400x1050, canvas width/height setter counter, ek
+     photo load): bgb+sm writes 4 -> 0, canvas hash aur saved PNG base jaisa
+     byte-identical. */
+  if(bgb.width!==1||bgb.height!==1)bgb.width=bgb.height=1;
+  if(sm.width!==1||sm.height!==1)sm.width=sm.height=1;bgVer++;bgBlue=-1;
   /* nayi photo par teen W*H buffer (mask0, mask ki copy, keepMask) hamesha naye
      bante the - 1400x1050 par teen 1.47 MB allocation + zero-fill, chahe photo
      ka size bilkul wahi ho (aam haal: ek hi camera se li gayi doosri photo).
@@ -5411,14 +5424,28 @@ const resumeRender=()=>{if(!owedRender)return;owedRender=false;fullRender()};
    flatten canvas, island buffers) chhod diya jata hai aur fgc/outc/bgb/sm
    1x1 ho jate hain - agla render sab kuch wapas bana leta hai, is liye screen
    par kuch nahi badalta. photo khud (origc/fgi/mask) chhui bhi nahi jati. */
-const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;SU=null;XM=null;SEEDS=null;XR=null;RUN=null;KCC=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;jcv=null;jcvx=null;STK=null;POOL.length=0;PSHIFT=null;
+const dropScratch=()=>{softM=null;softKey='';SDIRT=null;DIRT=null;SD=null;SU=null;XM=null;SEEDS=null;XR=null;RUN=null;KCC=null;FL=null;CC=null;BD=null;ISL=null;BLS=null;MBUF=null;if(jcv&&(jcv.width!==1||jcv.height!==1)){try{jcv.width=jcv.height=1}catch(_){}}jcv=null;jcvx=null;STK=null;POOL.length=0;PSHIFT=null;
  /* diff compare ke 32-bit views (diffBox) bhi apne mask buffer ko pin karte hain */
  DV.length=0;
  /* enforce ka keepMask view bhi wahi - trim par wahi buffer chhod do */
  KV=null;
  /* opacity probe canvas bhi ek cache hai (CW x CH surface) - trim par chhod do,
     agla check ise dobara bana leta hai */
- opc=null;opx=null;if(!savePending)lastSaveBlob=null;
+ /* 1.1.164: opc (opacity probe, CW x CH) aur jcv (JPEG flatten, CW x CH) yahan
+ sirf reference chhod kar null kiye jate the. par is file ki apni tippani (1.1.159)
+ kehti hai ki "width=1 backing store turant free karta hai" - yaani null karne par
+ surface GC ke agle cycle tak zinda rehti hai. trim/pause/#bClose ka poora maqsad
+ yahi hai ki memory usi call par chhoote (Android background me app ko isi liye
+ maarta hai), is liye ab dono ko pehle 1x1 kiya jata hai - bilkul wahi tareeka jo
+ isi function me fgc/outc/bgb/sm/tmp/origc par pehle se chalta hai. dono pure
+ cache hain (opc agla opacity check khud dobara banata hai, jcv agla JPEG save),
+ is liye screen aur save par ek pixel nahi badalta.
+ naapa (headless Chrome, 1400x1050 photo + background photo, canvas tracker):
+ trim ke turant baad zinda full-size (CW x CH) surface 3 -> 1; 1400x2489 (9:16)
+ par 14.0 MB, 1400x1050 par 5.88 MB turant free; canvas hash aur saved PNG dono
+ par base jaisa byte-identical. */
+if(opc&&(opc.width!==1||opc.height!==1)){try{opc.width=opc.height=1}catch(_){}}
+opc=null;opx=null;if(!savePending)lastSaveBlob=null;
  fgVer=-1;fgSoft=-1;outV=-1;outS=-1;bgVer++;bgBlue=-1;SUB=null;fgFull=true;
  /* 1.1.151: Android onTrimMemory ek hi backgrounding me kai baar aata hai
     (RUNNING_LOW, phir BACKGROUND, phir MODERATE) aur GlassCut.trim/pause/#bClose
@@ -5525,7 +5552,10 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.160: sync rakha gaya - bina bridge GlassCut.version -> "1.1.160".
    1.1.161: sync rakha gaya - bina bridge GlassCut.version -> "1.1.161".
    1.1.162: sync rakha gaya - bina bridge GlassCut.version -> "1.1.162". */
- return v||'1.1.162'}catch(_){return '1.1.162'}})(),
+ /* 1.1.164: phir drift (manifest 1.1.163 par, ye literal 1.1.162) - bina bridge
+    (browser/preview) page apni version ek build peeche bata raha tha. ab sync
+    hai; bina bridge GlassCut.version -> "1.1.164" (base par "1.1.162"). */
+ return v||'1.1.164'}catch(_){return '1.1.164'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
