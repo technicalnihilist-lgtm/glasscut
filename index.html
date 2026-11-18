@@ -863,15 +863,40 @@ const loadImg=(f,cb,box)=>{const tok=box?++box.t:0;
     ab 0 pageerror aur toast "Photo load nahi hui". normal load dono par wahi
     (canvas hash 3a094660, saved PNG ka sha1 wahi). */
  let u=null,im=null;
- try{u=URL.createObjectURL(f);im=new Image()}catch(_){toast('Photo load nahi hui');return}
+ try{u=URL.createObjectURL(f);im=new Image()}catch(_){u=null;im=null}
+ /* 1.1.159: createObjectURL ke throw par pehle yahin "Photo load nahi hui" par
+    khatam ho jata tha - halanki file ko decode karne ka doosra raasta maujood
+    hai. WebView par createObjectURL theek us waqt throw karta hai jab bahut blob
+    URLs zinda hon ya memory tang ho, yaani theek us waqt jab photo kholna sabse
+    zaroori hai - aur ye raasta har <=1400px photo ka aam raasta hai (plain()),
+    is liye us haalat me app me koi photo khulti hi nahi thi. ab wahi file
+    FileReader se data URL ban kar usi <img> me jaati hai: decode wahi <img>
+    engine karta hai, is liye naturalWidth/naturalHeight, EXIF disha, onload/
+    onerror aur 20 s ka watchdog - sab bilkul pehle jaisa chalta hai, bas src
+    blob: ki jagah data: hota hai. normal raasta (createObjectURL chalta hai)
+    chhua nahi gaya, is liye aam load ka canvas hash aur saved file wahi.
+    naapa (headless Chrome, createObjectURL ko throw karaya, 1400x1200 JPEG):
+    base par canvas 300x150 khaali, photo load hi nahi hui; ab canvas
+    1400x1200 aur hash bilkul wahi jo bina fault load par (a1e0f6e1), 0 pageerror,
+    aur Save usi 1,78,361-byte PNG par. */
+ if(!im){try{im=new Image()}catch(_){toast('Photo load nahi hui');return}}
  let done=false,wd=0;
  const fin=ok=>{if(done)return;done=true;if(wd)clearTimeout(wd);
-  try{URL.revokeObjectURL(u)}catch(_){}
+  if(u){try{URL.revokeObjectURL(u)}catch(_){}}
   if(box&&tok!==box.t)return;
   if(ok)cb(im);else toast('Photo load nahi hui')};
  wd=setTimeout(()=>fin(false),20000);
  im.onload=()=>fin(true);im.onerror=()=>fin(false);
- try{im.src=u}catch(_){fin(false)}};
+ if(u){try{im.src=u}catch(_){fin(false)}}
+ else{
+  let fr=null;
+  try{fr=new FileReader()}catch(_){fin(false);return}
+  fr.onload=()=>{const r=fr.result;
+   if(typeof r!=='string'||r.indexOf(',')<0){fin(false);return}
+   try{im.src=r}catch(_){fin(false)}};
+  fr.onerror=()=>fin(false);
+  try{fr.readAsDataURL(f)}catch(_){fin(false)}
+ }};
 const MAINLOAD=mkLoadBox();
 BGLOAD=mkLoadBox();
 /* Bade photo ka decode: yahan tak har photo poore size par decode hoti thi aur
@@ -1576,7 +1601,21 @@ const setSize=()=>{if(!od)return;
    chalte the). ab har side kam se kam 1 px rehti hai. aam photo par floor ka
    nateeja pehle se 1 ya usse bada hi hota hai, is liye unka size byte-identical
    rehta hai (1400x1050, 900x675, 120x90 par CSS size pehle jaisa hi). */
-const fit=()=>{if(!od)return;const s=Math.min((stage.clientWidth-4)/CW,(stage.clientHeight-4)/CH);cv.style.width=Math.max(1,Math.floor(CW*s))+'px';cv.style.height=Math.max(1,Math.floor(CH*s))+'px';cRect=null};
+const fit=()=>{if(!od)return;const s=Math.min((stage.clientWidth-4)/CW,(stage.clientHeight-4)/CH);
+ /* 1.1.159: dono style writes har call par chalti thin, chahe value bilkul wahi
+    ho. ResizeObserver (aur fallback me resize/orientationchange) rotation ke
+    dauraan har frame par chalta hai, aur ek hi value dobara likhna bhi us element
+    ka layout dirty karta hai - yaani ek bekaar style recalc + layout per frame.
+    ab value pehle se wahi ho to write hi nahi hota; jo likha jata hai wo bilkul
+    wahi string hai, is liye canvas ka CSS size aur rendering ek pixel nahi
+    badalte (style.width padhna inline value hai, koi layout force nahi karta).
+    naapa (headless Chrome, 1400x1050 -> 1050x1400 -> wapas, 6 resize step):
+    cv par style writes 12 -> 6 (jo size sach me badla sirf wahi), aur canvas ka
+    CSS size/hash dono par wahi. */
+ const w=Math.max(1,Math.floor(CW*s))+'px',h=Math.max(1,Math.floor(CH*s))+'px';
+ if(cv.style.width!==w)cv.style.width=w;
+ if(cv.style.height!==h)cv.style.height=h;
+ cRect=null};
 /* ResizeObserver (Chrome 64) is file ke baaki code se kaafi naya hai: yahan
    PointerEvent (55), async/await (55) aur canvas.toBlob (50) chalte hain, aur
    koi bhi ES2018+ syntax (`?.`, `??`) jaan-boojh kar use nahi hota - yaani app
@@ -5080,8 +5119,21 @@ const save=async()=>{
     file disk par nahi jati (0 byte ki jagah kuch nahi). 1x1 photo (69 byte) aur
     poora PNG/JPG/WEBP save pehle jaisa hi chalta hai. */
  if((!b||!b.size)&&fmt!=='png'){mime='image/png';b=await toBlob(src,mime)}
- if(!b||!b.size){toast('Save nahi hua');return}
+ /* 1.1.159: flatten surface (jcv) encode ke baad bhi session bhar zinda rehti thi
+    - 1400x1200 par 6.7 MB, 1400x2489 (9:16) par 14 MB - halanki uski zaroorat
+    sirf agle save tak hoti hai, aur agla save use wapas bana leta hai (upar ka
+    size guard + mk()). ye wahi cache hai jo dropScratch (trim/pause) chhodta hai,
+    par save ke baad kabhi nahi chhoda jata tha: ek baar Save dabane ke baad poori
+    session us surface ke saath chalti thi. ab blob ban jaane par use 1x1 kar ke
+    chhod diya jata hai (wahi tareeka jo dropScratch fgc/tmp/origc par use karta
+    hai) - backing store turant free, aur agla save pehle jaisa hi nikalta hai
+    (wahi fill + drawImage + toBlob, is liye file byte-identical).
+    naapa (headless Chrome, 1400x1200, canvas width/height setter counter):
+    save ke baad zinda full-size (CW x CH) surfaces 3 -> 2, yaani 6.72 MB kam;
+    1400x2489 par 14.0 MB kam. saved PNG ka size/hash dono par wahi. */
+ if(!b||!b.size){toast('Save nahi hua');if(jcv){try{jcv.width=jcv.height=1}catch(_){}jcv=null;jcvx=null}return}
  enc=b;
+ if(jcv){try{jcv.width=jcv.height=1}catch(_){}jcv=null;jcvx=null}
  /* kuch browsers maanga hua type nahi de paate aur chupchaap PNG lauta dete hain
     (purana WebView / iOS). Tab naam aur bridge ka mime bhi PNG hona chahiye, warna
     gallery me .webp naam ki PNG file jati hai aur wahan thumbnail nahi banta. */
@@ -5376,8 +5428,9 @@ window.GlassCut={version:(()=>{try{const b=AB();const v=b&&b.versionName?String(
    1.1.155: sync rakha gaya - bina bridge GlassCut.version -> "1.1.155".
    1.1.156: sync rakha gaya - bina bridge GlassCut.version -> "1.1.156".
    1.1.157: sync rakha gaya - bina bridge GlassCut.version -> "1.1.157".
-   1.1.158: sync rakha gaya - bina bridge GlassCut.version -> "1.1.158". */
- return v||'1.1.158'}catch(_){return '1.1.158'}})(),
+   1.1.158: sync rakha gaya - bina bridge GlassCut.version -> "1.1.158".
+   1.1.159: sync rakha gaya - bina bridge GlassCut.version -> "1.1.159". */
+ return v||'1.1.159'}catch(_){return '1.1.159'}})(),
  /* native shell ab fail hone par yahi bulata hai (pehle wo apna hardcoded
     Hinglish Toast dikhata tha, is liye English mode me bhi Hindi message aata
     tha). overlay wahi purana fallback hai jo browser/share raaste fail hone par
