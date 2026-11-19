@@ -1,10 +1,10 @@
 <div align="center">
 
+<img src="assets/icon.png" width="96" height="96" alt="GlassCut icon">
+
+<img src="assets/banner.svg" alt="GlassCut — liquid-glass background remover for Android">
+
 <a href="https://github.com/technicalnihilist-lgtm/glasscut/stargazers"><img src="https://img.shields.io/badge/stars-0-5A31F4?style=for-the-badge&logo=github&logoColor=white" alt="stars: 0"></a>&nbsp;<a href="https://github.com/technicalnihilist-lgtm/glasscut/network/members"><img src="https://img.shields.io/badge/forks-0-3FB950?style=for-the-badge" alt="forks: 0"></a>
-
-<h3>GlassCut — liquid-glass background remover for Android</h3>
-
-<img src="https://img.shields.io/badge/HTML-5865F2?style=flat-square" alt="HTML"> <img src="https://img.shields.io/badge/Android-3B3F4A?style=flat-square" alt="Android"> <img src="https://img.shields.io/badge/APK-3FB950?style=flat-square" alt="APK"> <img src="https://img.shields.io/badge/Background%20Removal-EC4899?style=flat-square" alt="Background Removal">
 
 <a href="https://github.com/technicalnihilist-lgtm/glasscut/releases/latest"><img src="https://img.shields.io/badge/DOWNLOAD-APK-6D5AE6?style=for-the-badge&logo=android&logoColor=white" alt="Download APK"></a>
 
@@ -16,13 +16,7 @@
 
 <a href="https://github.com/technicalnihilist-lgtm/glasscut/releases/latest"><img src="https://img.shields.io/badge/VERSION-v1.1-6D5AE6?style=for-the-badge" alt="VERSION: v1.1"></a> <img src="https://img.shields.io/badge/DOWNLOADS-24-3FB950?style=for-the-badge" alt="DOWNLOADS: 24"> <a href="https://github.com/technicalnihilist-lgtm/glasscut/releases"><img src="https://img.shields.io/badge/RELEASES-GITHUB-EC4899?style=for-the-badge&logo=github&logoColor=white" alt="RELEASES: GITHUB"></a>
 
-<h4>Get it from</h4>
-
-<a href="https://github.com/technicalnihilist-lgtm/glasscut/releases"><img src="https://img.shields.io/badge/GitHub-Releases-181717?style=for-the-badge&logo=github&logoColor=white" alt="GitHub Releases"></a> <a href="https://github.com/technicalnihilist-lgtm/glasscut/archive/refs/heads/main.zip"><img src="https://img.shields.io/badge/Source-ZIP-0EA5E9?style=for-the-badge&logo=github&logoColor=white" alt="Source ZIP"></a>
-
 </div>
-
----
 
 ---
 
